@@ -7,42 +7,41 @@ start:
     call load_gdt
     jmp 0x08:protected_mode_entry
 
-section .rodata
 align 8                 ; Align to 8 byte segment descriptors
 gdt_start:
     ; 1. Null descriptor (8 bytes) - always first
-    dq 0x0000000000000000
+    ;dq 0x0000000000000000
 
     ; 2. Code segment descriptor (8 bytes)
     ; Base = 0x0, Limit = 0xFFFFF (4 GB), Code segment, Executable, Readable, Accessed
     ; Granularity = 4KB, 32-bit segment
-    dw 0xFFFF           ; Segment limit (low 16 bits)
-    dw 0x0000           ; Base (low 16 bits)
-    db 0x00             ; Base (middle 8 bits)
-    db 10011010b        ; Access byte: Present = 1, Ring = 00, Code = 1, Executable = 1, Readable = 1
-    db 11001111b        ; Granularity: 4KB, 32-bit, limit high 4 bits = 0xF
-    db 0x00             ; Base (high 8 bits)
+    ;dw 0xFFFF           ; Segment limit (low 16 bits)
+    ;dw 0x0000           ; Base (low 16 bits)
+    ;db 0x00             ; Base (middle 8 bits)
+    ;db 10011010b        ; Access byte: Present = 1, Ring = 00, Code = 1, Executable = 1, Readable = 1
+    ;db 11001111b        ; Granularity: 4KB, 32-bit, limit high 4 bits = 0xF
+    ;db 0x00             ; Base (high 8 bits)
     
     ; 3. Data segment descriptor (8 bytes)
     ; Base=0x0, Limit=0xFFFFF (4 GB), Data segment, Read/Write
-    dw 0xFFFF           ; Segment limit (low 16 bits)
-    dw 0x0000           ; Base (low 16 bits)
-    db 0x00             ; Base (middle 8 bits)
-    db 10010010b        ; Access byte: Present=1, Ring=00, Data=1, Writable=1
-    db 11001111b        ; Granularity: 4KB gran, 32-bit, limit high 4 bits = 0xF
-    db 0x00             ; Base (high 8 bits)
+    ;dw 0xFFFF           ; Segment limit (low 16 bits)
+    ;dw 0x0000           ; Base (low 16 bits)
+    ;db 0x00             ; Base (middle 8 bits)
+    ;db 10010010b        ; Access byte: Present=1, Ring=00, Data=1, Writable=1
+    ;db 11001111b        ; Granularity: 4KB gran, 32-bit, limit high 4 bits = 0xF
+    ;db 0x00             ; Base (high 8 bits)
 
+    dq 0x0000000000000000                        ; Null descriptor
+    dq 0x00CF9A000000FFFF                        ; Code segment
+    dq 0x00CF92000000FFFF                        ; Data segment
 gdt_end:
     ; GDTR Structure
     ; 6 bytes: 2 bytes limit, 4 bytes base address
 
-align 8
 gdt_descriptor:
     dw gdt_end - gdt_start - 1      ; Limit = size of GDT - 1
     dd gdt_start                    ; Base address to GDT-table
 
-
-section .text
 ; Load GDT and switch to protected mode
 load_gdt:
     lgdt [gdt_descriptor]           ; Load GDTR with the address to GDT
@@ -69,12 +68,11 @@ protected_mode_entry:
 
     mov dword [0xB8000], 0x2F4B4B4B  ; "KKK" i grön text
 
+    ;call enable_long_mode   ; Setup paging and long mode
+
 .hang:
     hlt
     jmp .hang
-
-    call enable_long_mode   ; Setup paging and long mode
-
     ;jmp 0x08:_start         ; Far jump to 64-bit code
 
 ; Enable Long Mode
