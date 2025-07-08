@@ -8,11 +8,10 @@ start:
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x7c00      ; Simple stack (we're in real mode)
+    mov sp, 0x7C00
 
     ; Read 4 sectors from disk (pmode.bin) int 0x7E00
     mov bx, 0x7E00      ; Destination Address
-    mov es, ax      ; Destination segment (0x0000:0x7E00 = 0x7E00 physical)
     mov dh, 0           ; Head
     mov dl, [boot_drive]           ; Boot drive passed from BIOS
     mov ch, 0           ; Cylinder
@@ -44,8 +43,9 @@ disk_load:
 
 .error:
     dec si
-    jz .fail            ; If retries = 0, fail
-    jmp .read_retry
+    jnz .fail            ; If retries = 0, fail
+    hlt
+    jmp $
 
 .fail:
     popa

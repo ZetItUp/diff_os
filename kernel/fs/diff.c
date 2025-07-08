@@ -4,6 +4,9 @@
 
 int disk_read(uint64_t sector, uint64_t count, void *buffer)
 {
+    (void)sector;
+    (void)count;
+    (void)buffer;
     // FIXME: Add actual functuality
     return 0;
 }

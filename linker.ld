@@ -27,6 +27,11 @@ SECTIONS
         stack_end = .;
     }
 
+    .page_tables 0x9000 : 
+    {
+        *(.page_tables)
+    }
+
     /* BSS-section (zero-initialized variables) */
     .bss : {
         __bss_start = .;

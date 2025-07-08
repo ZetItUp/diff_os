@@ -1,6 +1,13 @@
-%include "start.asm"
-BITS 16
+[BITS 16]
+section .text
+global start
 
+start:
+    cli
+    call load_gdt
+    jmp 0x08:protected_mode_entry
+
+section .rodata
 align 8                 ; Align to 8 byte segment descriptors
 gdt_start:
     ; 1. Null descriptor (8 bytes) - always first
@@ -34,6 +41,8 @@ gdt_descriptor:
     dw gdt_end - gdt_start - 1      ; Limit = size of GDT - 1
     dd gdt_start                    ; Base address to GDT-table
 
+
+section .text
 ; Load GDT and switch to protected mode
 load_gdt:
     lgdt [gdt_descriptor]           ; Load GDTR with the address to GDT
@@ -45,7 +54,7 @@ load_gdt:
     ; We should be in protected mode, but still in 16-bit, lets fix that
     ; Do a "far jump" to flush the pipeline and switch CS-segment
     ; Assume that code segment selector is 0x08 (The first real segment descriptor)
-    jmp 0x08:protected_mode_entry
+    ret
 
 [BITS 32]
 protected_mode_entry:
@@ -58,3 +67,32 @@ protected_mode_entry:
     mov gs, ax
     mov ss, ax
 
+    mov dword [0xB8000], 0x2F4B4B4B  ; "KKK" i grön text
+
+.hang:
+    hlt
+    jmp .hang
+
+    call enable_long_mode   ; Setup paging and long mode
+
+    ;jmp 0x08:_start         ; Far jump to 64-bit code
+
+; Enable Long Mode
+enable_long_mode:
+    mov eax, cr4            ; CR4: Set PAE
+    or eax, 1 << 5
+    mov cr4, eax
+
+    mov ecx, 0xC0000080     ; EFER -> Set LME (Bit 8)
+    rdmsr
+    or eax, 1 << 8
+    wrmsr
+
+    mov eax, 0x9000         ; Hard coded page tables for now
+    mov cr3, eax
+
+    mov eax, cr0            ; CR0: Enable paging (Bit 31)
+    or eax, 1 << 31
+    mov cr0, eax
+
+    ret
