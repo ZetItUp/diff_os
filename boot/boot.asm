@@ -3,37 +3,124 @@ BITS 16
 ORG 0x7C00
 
 start:
-    mov [BOOT_DRIVE], dl        ; Store boot device (0x80 för HDD)
     cli
     xor ax, ax
     mov ds, ax
+    mov [BOOT_DRIVE], dl        ; Store boot device (0x80 för HDD)
     mov es, ax
     mov ss, ax
     
     mov bp, 0x9000
     mov sp, bp
 
+    sti
+    cld
+
     call enable_a20
 
     mov bx, 0x7C00
     mov cx, [bx + 0x1FC]
-    mov [0x8000], cx
+    mov [0xA000], cx
 
-    mov ax, 0x5000  
+    mov ax, 0x0600  
     mov es, ax
     xor di, di
     mov byte [es:di], 0x10           ; size
-    mov byte [es:di+1], 0         ; reserved
+    mov byte [es:di+1], 0x00         ; reserved
     mov word [es:di+2], cx           ; sector count (t.ex. [0x8000])
     mov word [es:di+4], 0x0000       ; offset
-    mov word [es:di+6], 0x1000       ; segment
-    mov dword [es:di+8], 2048        ; LBA low dword
-    mov dword [es:di+12], 0        ; LBA high dword
+    mov word [es:di+6], 0x8000       ; segment
+    mov dword [es:di+8],  0x800        ; LBA low dword
+    mov dword [es:di+12], 0x0 ; LBA high dword
 
     mov bx, 0x7C00          ; bootsektorn ligger här
     mov cx, [bx + 0x1FC]    ; CX = antal sektorer (skrivet av Makefile)
 
     ; Ladda Kernel‐Disk Address Packet (DAP) med CX
+
+    mov cx, [bx + 0x1FC]        ; cx = antal sektorer (eller sätt cx = 10 för test)
+    mov si, 0                   ; si = sectors lästa hittills
+
+.loop:
+    ; Skriv ut sektornumret (si)
+    push cx
+    mov ax, si
+    call print_hex16        ; <-- se funktion nedan
+    mov al, ' '
+    call print_char
+    pop cx
+
+    ; Bygg DAP för denna sektor
+    mov ax, 0x0600
+    mov es, ax
+    xor di, di
+
+    mov byte [es:di], 0x10         ; size
+    mov byte [es:di+1], 0x00       ; reserved
+    mov word [es:di+2], 1          ; sector count = 1
+    mov word [es:di+4], 0x0000     ; offset
+    mov word [es:di+6], 0x8000     ; segment (0x8000:0 = 0x80000)
+    mov ax, 0x800                 ; start LBA (2048)
+    add ax, si                    ; + sektor offset
+    mov [es:di+8], eax             ; lba low
+    mov dword [es:di+12], 0        ; lba high
+
+    ; Kör LBA read (INT 13h EXT)
+    mov ah, 0x42
+    mov dl, [BOOT_DRIVE]
+    mov si, di                     ; SI = offset till DAP i ES
+    int 0x13
+    jc .fail
+
+    inc si
+    loop .loop
+
+jmp $
+
+.fail:
+    mov si, fail_msg
+    call print_str
+    jmp $
+
+fail_msg db ' FAIL', 0
+
+; -----------------------------------------------
+; print_char: AH=0x0E, AL=tecken
+print_char:
+    mov ah, 0x0E
+    int 0x10
+    ret
+
+; print_str: SI = offset till noll-terminerad sträng
+print_str:
+    lodsb
+    test al, al
+    jz .done
+    call print_char
+    jmp print_str
+.done:
+    ret
+
+; print_hex16: AX = värde som ska printas (4 hex-siffror)
+print_hex16:
+    push ax
+    mov cx, 4
+.next_nybble:
+    shl ax, 4
+    mov bl, ah
+    shr bl, 4
+    cmp bl, 0x0A
+    jl .digit
+    add bl, 'A' - 0x0A
+    jmp .put
+.digit:
+    add bl, '0'
+.put:
+    mov al, bl
+    call print_char
+    loop .next_nybble
+    pop ax
+    ret
 
     ; ---- Läs pmode.bin (två sektorer) till 0x7E00 med CHS ----
     mov ax, 0x0000
@@ -49,21 +136,20 @@ start:
     jc save_error
 
     ; ---- Läs kernel.bin från sektor 2048 till 0x100000 med LBA (int 13h extensions) ----
-    mov ax, 0x1000
+    mov ax, 0x8000
     mov es, ax
     xor bx, bx
 
-    mov ax, 0x5000
+    mov ax, 0x0600
     mov si, 0
-    mov ah, 0x42                ; Funktion: LBA read
-    mov dl, [BOOT_DRIVE]
+    mov ah, 0x42
+    mov dl, [BOOT_DRIVE] 
     int 0x13
     jc save_error
 
-%include "kernel/arch/x86_64/cpu/pmode.asm"
     ; ---- Hoppa till protected mode loader ----
 
-    jmp pm_start 
+    jmp 0x0000:0x8000
 
 enable_a20:
     pusha
@@ -83,12 +169,15 @@ enable_a20:
     ret
 
 disk_error:
+    push ds
+    
+    mov ax, cs
+    mov ds, ax
     mov si, err_msg
 .print:
     lodsb
     or al, al
     jz .show_error
-
     mov ah, 0x0E
     int 0x10
     jmp .print
@@ -100,16 +189,21 @@ disk_error:
     int 0x10
     mov al, 'x'
     int 0x10
-
-    mov al, [cs:error_code]
-    call print_hex8         ; Se nedan!
-
+    mov al, [error_code]
+    call print_hex8
+    pop ds
     cli
     hlt
 
 save_error:
     mov [cs:error_code], ah
+    
+    mov ah, 0x0E
+    mov al, 'W'
+    int 10
+    
     jmp disk_error
+
 
 print_hex8:
     push ax
@@ -140,7 +234,7 @@ print_hex_digit:
 ;   mov [cs:error_code], ah
 
 error_code db 0
-err_msg db 'Disk error! AH=', 0
+err_msg db "Disk error! AH=", 0
 BOOT_DRIVE db 0
 
 ; ---- Padding & boot signature ----

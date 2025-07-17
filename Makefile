@@ -39,9 +39,12 @@ all: $(BUILD)/os-img.bin
 $(BUILD)/boot.bin: $(BOOT) $(BUILD)/kernel.bin
 	mkdir -p $(BUILD)
 	nasm -f bin $< -o $@
+
 	KERNEL_SIZE=$$(stat -c %s $(BUILD)/kernel.bin); \
-	SECTORS=$$(($(shell stat -c %s $(BUILD)/kernel.bin) + 511 >> 9)); \
-	printf "$$(printf '%04x' $$SECTORS)" | xxd -r -p | dd of=$@ bs=1 seek=508 conv=notrunc
+	KERNEL_SECTORS=$$(( ($$KERNEL_SIZE + 511) / 512 )); \
+	printf "%02x%02x" $$(( $$KERNEL_SECTORS & 0xFF )) $$(( ($$KERNEL_SECTORS >> 8) & 0xFF )) | \
+	xxd -r -p | dd of=$@ bs=1 seek=508 count=2 conv=notrunc
+
 # Bygg pmode (raw)
 $(BUILD)/pmode.bin: $(PMODE)
 	mkdir -p $(BUILD)
@@ -81,7 +84,7 @@ build/boot_size.bin: $(BUILD)/boot.bin build/kernel.size
 
 # Slå ihop allting till en bootbar image
 $(BUILD)/os-img.bin: $(BUILD)/boot_size.bin $(BUILD)/pmode.bin $(BUILD)/kernel.bin
-	dd if=/dev/zero of=$@ bs=512 count=2880
+	dd if=/dev/zero of=$@ bs=512 count=4096
 	dd if=$(BUILD)/boot.bin of=$@ conv=notrunc
 	dd if=$(BUILD)/pmode.bin of=$@ bs=512 seek=1 conv=notrunc
 	dd if=$(BUILD)/kernel.bin of=$@ bs=512 seek=2048 conv=notrunc

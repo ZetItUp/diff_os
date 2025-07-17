@@ -1,6 +1,6 @@
 /*OUTPUT_FORMAT(elf64-x86-64)*/
 OUTPUT_FORMAT(elf32-i386)
-ENTRY(protected_mode_entry)
+ENTRY(kmain)
 
 
 SECTIONS
