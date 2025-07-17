@@ -1,96 +1,95 @@
 [BITS 16]
-section .text
-global start
 
-start:
+global pm_start
+pm_start:
     cli
-    call load_gdt
-    jmp 0x08:protected_mode_entry
 
-align 8                 ; Align to 8 byte segment descriptors
-gdt_start:
-    ; 1. Null descriptor (8 bytes) - always first
-    ;dq 0x0000000000000000
+    lgdt [gdt_descriptor]
 
-    ; 2. Code segment descriptor (8 bytes)
-    ; Base = 0x0, Limit = 0xFFFFF (4 GB), Code segment, Executable, Readable, Accessed
-    ; Granularity = 4KB, 32-bit segment
-    ;dw 0xFFFF           ; Segment limit (low 16 bits)
-    ;dw 0x0000           ; Base (low 16 bits)
-    ;db 0x00             ; Base (middle 8 bits)
-    ;db 10011010b        ; Access byte: Present = 1, Ring = 00, Code = 1, Executable = 1, Readable = 1
-    ;db 11001111b        ; Granularity: 4KB, 32-bit, limit high 4 bits = 0xF
-    ;db 0x00             ; Base (high 8 bits)
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax            ;; Set PE-bit (Protected Mode)
     
-    ; 3. Data segment descriptor (8 bytes)
-    ; Base=0x0, Limit=0xFFFFF (4 GB), Data segment, Read/Write
-    ;dw 0xFFFF           ; Segment limit (low 16 bits)
-    ;dw 0x0000           ; Base (low 16 bits)
-    ;db 0x00             ; Base (middle 8 bits)
-    ;db 10010010b        ; Access byte: Present=1, Ring=00, Data=1, Writable=1
-    ;db 11001111b        ; Granularity: 4KB gran, 32-bit, limit high 4 bits = 0xF
-    ;db 0x00             ; Base (high 8 bits)
+    jmp CODE_SEG:protected_mode_entry
 
-    dq 0x0000000000000000                        ; Null descriptor
-    dq 0x00CF9A000000FFFF                        ; Code segment
-    dq 0x00CF92000000FFFF                        ; Data segment
-gdt_end:
-    ; GDTR Structure
-    ; 6 bytes: 2 bytes limit, 4 bytes base address
-
-gdt_descriptor:
-    dw gdt_end - gdt_start - 1      ; Limit = size of GDT - 1
-    dd gdt_start                    ; Base address to GDT-table
-
-; Load GDT and switch to protected mode
-load_gdt:
-    lgdt [gdt_descriptor]           ; Load GDTR with the address to GDT
-
-    mov eax, cr0        ; Read CR0 to EAX
-    or eax, 1           ; Set PE-bit (bit 0) in EAX
-    mov cr0, eax        ; Write EAX back to CR0
-
-    ; We should be in protected mode, but still in 16-bit, lets fix that
-    ; Do a "far jump" to flush the pipeline and switch CS-segment
-    ; Assume that code segment selector is 0x08 (The first real segment descriptor)
-    ret
-
+; Vi är nu i 32-bit protected mode
 [BITS 32]
+global protected_mode_entry
 protected_mode_entry:
-    ; We should be in 32-bit protected mode now
-    ; Initialize data segment registers (DS, ES, SS, etc)
-    mov ax, 0x10        ; Data segment selector (second segment in GDT, index 2x8=0x10)
+    mov ax, DATA_SEG
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
 
-    mov dword [0xB8000], 0x2F4B4B4B  ; "KKK" i grön text
+    mov esi, 0x10000            ; src (där kernel laddades i real mode)
+    mov edi, 0x100000           ; dest (dit vi vill flytta kernel)
+    
+    movzx eax, word [0x8000]    ; EAX = number of sectors
+    shl eax, 9                  ; Sectors * 512 = bytes
+    add eax, 3                  ; Round
+    shr eax, 2                  ; Divide by 4 = words
+    mov ecx, eax                ; ECX = dwords to copy                
+    rep movsd                   ; kopiera kernel
 
-    ;call enable_long_mode   ; Setup paging and long mode
+    ; Nolla .bss – exempel: 0x100000 + 1545 till 0x100000 + 0x1000
+    mov edi, 0x100000   ; börja efter din kernel (avrunda uppåt)
+    movzx eax, word [0x8000]
+    shl eax, 9
+    add edi, eax
+    add edi, 3
+    and edi, 0xFFFFFFFC        ; align 4
+    mov ecx, 0x1000 / 4        ; 4 KB reset
+    xor eax, eax
+
+    rep stosd
+    
+    mov ebp, 0x20000
+    mov esp, ebp
+
+    jmp CODE_SEG:0x100000    ; Jump to kernel main
+
 
 .hang:
     hlt
     jmp .hang
-    ;jmp 0x08:_start         ; Far jump to 64-bit code
 
-; Enable Long Mode
-enable_long_mode:
-    mov eax, cr4            ; CR4: Set PAE
-    or eax, 1 << 5
-    mov cr4, eax
+align 8
+global gdt_start
+gdt_start:
+    dq 0x0                                ; Null descriptor (mandatory)
 
-    mov ecx, 0xC0000080     ; EFER -> Set LME (Bit 8)
-    rdmsr
-    or eax, 1 << 8
-    wrmsr
+global gdt_code
+gdt_code:
+    ; Kernel Code Segment (base=0, limit=0xFFFFF, type=0x9A, flags=0xCF)
+    dw 0xFFFF                             ; Limit (low)
+    dw 0x0000                             ; Base (low)
+    db 0x00                               ; Base (middle)
+    db 0x9A                               ; Access byte: present, ring 0, executable, readable
+    db 0xCF                               ; Flags: granularity=4K, 32-bit
+    db 0x00                               ; Base (high)
 
-    mov eax, 0x9000         ; Hard coded page tables for now
-    mov cr3, eax
+global gdt_data
+gdt_data:
+    ; Kernel Data Segment (same as above, but type=0x92)
+    dw 0xFFFF
+    dw 0x0000
+    db 0x00
+    db 0x92                               ; Access byte: present, ring 0, data, writable
+    db 0xCF
+    db 0x00
 
-    mov eax, cr0            ; CR0: Enable paging (Bit 31)
-    or eax, 1 << 31
-    mov cr0, eax
+global gdt_end
+gdt_end:
 
-    ret
+global gdt_descriptor
+gdt_descriptor:
+    dw gdt_end - gdt_start - 1
+    dd gdt_start  ; Offset to absolute address in RAM
+
+global CODE_SEG
+CODE_SEG equ gdt_code - gdt_start
+global DATA_SEG
+DATA_SEG equ gdt_data - gdt_start
+

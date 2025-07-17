@@ -1,65 +1,157 @@
-; boot.asm - Minimal bootloader
-BITS 16         ; We are in 16-bit real mode (BIOS starts here)
-ORG 0x7C00      ; BIOS Bootloader starts at 0x7C00
+; boot.asm - Minimal bootloader med LBA-laddning av kernel.bin
+BITS 16
+ORG 0x7C00
 
 start:
-    cli         ; Disable interrupts
+    mov [BOOT_DRIVE], dl        ; Store boot device (0x80 för HDD)
+    cli
     xor ax, ax
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x7C00
+    
+    mov bp, 0x9000
+    mov sp, bp
 
-    ; Read 4 sectors from disk (pmode.bin) int 0x7E00
-    mov bx, 0x7E00      ; Destination Address
-    mov dh, 0           ; Head
-    mov dl, [boot_drive]           ; Boot drive passed from BIOS
-    mov ch, 0           ; Cylinder
-    mov cl, 2           ; Sector 2 (first sector after bootloader)
-    mov al, 4           ; Number of sectors to read
-   
-    call disk_load
+    call enable_a20
 
-    ; Jump to loaded protected mode code (start of pmode.bin)
-    jmp 0x0000:0x7E00
+    mov bx, 0x7C00
+    mov cx, [bx + 0x1FC]
+    mov [0x8000], cx
 
-; Disk load routine (INT 13h)
-; Inputs:
-;       AL = Number of Sectors
-;       CH = Cylinder
-;       CL = Sector
-;       DH = Head
-;       DL = Drive
-;       ES:BX = buffer
-disk_load:
-    pusha
-    mov si, 10          ; Retry counter (Max 10 tries)
-.read_retry:
-    mov ah, 0x02        ; Function 2: Read sectors
+    mov ax, 0x5000  
+    mov es, ax
+    xor di, di
+    mov byte [es:di], 0x10           ; size
+    mov byte [es:di+1], 0         ; reserved
+    mov word [es:di+2], cx           ; sector count (t.ex. [0x8000])
+    mov word [es:di+4], 0x0000       ; offset
+    mov word [es:di+6], 0x1000       ; segment
+    mov dword [es:di+8], 2048        ; LBA low dword
+    mov dword [es:di+12], 0        ; LBA high dword
+
+    mov bx, 0x7C00          ; bootsektorn ligger här
+    mov cx, [bx + 0x1FC]    ; CX = antal sektorer (skrivet av Makefile)
+
+    ; Ladda Kernel‐Disk Address Packet (DAP) med CX
+
+    ; ---- Läs pmode.bin (två sektorer) till 0x7E00 med CHS ----
+    mov ax, 0x0000
+    mov es, ax
+    mov bx, 0x7E00              ; Buffer
+    mov ah, 0x02                ; Funktion: Read sectors
+    mov al, 2                   ; 2 sektorer
+    mov ch, 0                   ; Cylinder 0
+    mov cl, 2                   ; Sector 2 (bootloader=1)
+    mov dh, 0                   ; Head 0
+    mov dl, [BOOT_DRIVE]
     int 0x13
-    jc  .error          ; If error, retry
+    jc save_error
+
+    ; ---- Läs kernel.bin från sektor 2048 till 0x100000 med LBA (int 13h extensions) ----
+    mov ax, 0x1000
+    mov es, ax
+    xor bx, bx
+
+    mov ax, 0x5000
+    mov si, 0
+    mov ah, 0x42                ; Funktion: LBA read
+    mov dl, [BOOT_DRIVE]
+    int 0x13
+    jc save_error
+
+%include "kernel/arch/x86_64/cpu/pmode.asm"
+    ; ---- Hoppa till protected mode loader ----
+
+    jmp pm_start 
+
+enable_a20:
+    pusha
+.wait_input:
+    in al, 0x64
+    test al, 0x02
+    jnz .wait_input
+    mov al, 0xD1
+    out 0x64, al
+.wait_input2:
+    in al, 0x64
+    test al, 0x02
+    jnz .wait_input2
+    mov al, 0xDF
+    out 0x60, al
     popa
     ret
 
-.error:
-    dec si
-    jnz .fail            ; If retries = 0, fail
-    hlt
-    jmp $
+disk_error:
+    mov si, err_msg
+.print:
+    lodsb
+    or al, al
+    jz .show_error
 
-.fail:
-    popa
-    ; Halt CPU on failure to avoid any damage
+    mov ah, 0x0E
+    int 0x10
+    jmp .print
+.show_error:
+    mov ah, 0x0E
+    mov al, ' '
+    int 0x10
+    mov al, 'H'
+    int 0x10
+    mov al, 'x'
+    int 0x10
+
+    mov al, [cs:error_code]
+    call print_hex8         ; Se nedan!
+
     cli
     hlt
-    jmp $
 
-boot_drive: db 0
+save_error:
+    mov [cs:error_code], ah
+    jmp disk_error
 
-; Fill remaining bytes with zeros up to 510 bytes total
-times 510 - ($ - $$) db 0
+print_hex8:
+    push ax
+    mov ah, al
+    shr al, 4
+    call print_hex_digit
+    mov al, ah
+    and al, 0x0F
+    call print_hex_digit
+    pop ax
+    ret
 
-; Boot sector signature (2 bytes) must be 0x55AA for BIOS to recognise
-; the boot sector.
+print_hex_digit:
+    cmp al, 10
+    jl .num
+    add al, 'A'-10
+    jmp .out
+.num:
+    add al, '0'
+.out:
+    mov ah, 0x0E
+    int 0x10
+    ret
+
+
+; Spara BIOS-felkod till minne före du går till disk_error:
+; Direkt efter "jc disk_error" på alla int 13h:
+;   mov [cs:error_code], ah
+
+error_code db 0
+err_msg db 'Disk error! AH=', 0
+BOOT_DRIVE db 0
+
+; ---- Padding & boot signature ----
+;dap:
+;    idb 0x10        ; Size of DAP (16 bytes)
+;    db 0x00        ; Reserved
+;    dw 0x0000           ; Number of sectors to read (ändra efter kernel.bin storlek i sektorer)
+;    dw 0x0000      ; Offset
+;    dw 0x1000      ; Segment (0x1000:0 = 0x100000)
+;    dq 2048        ; LBA-adress (startsektor för kernel.bin)
+
+times 510-($-$$) db 0
 dw 0xAA55
 

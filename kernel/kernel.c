@@ -1,15 +1,9 @@
 #include "string.h"
 #include "paging.h"
+#include "console.h"
 
-void kmain()
+void kmain(void)
 {
-    init_paging();
-
-    char* video = (char*)0xB8000;
-    video[0] = 'H';
-    video[1] = 0x3F; // vit text, svart bakgrund
-    video[2] = 'i';
-    video[3] = 0x0F;
-
-    while(1);
+    while(1)
+        __asm__ __volatile__("mov $0xCAFEBABE, %eax");
 }

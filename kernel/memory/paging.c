@@ -1,28 +1,30 @@
 #include <stdint.h>
 
-#define PAGE_PRESENT        0x1
-#define PAGE_RW             0x2
-#define PAGE_PS             0x80    // Page Size (1 == 2MB)
+#define PAGE_PRESENT    0x1
+#define PAGE_RW         0x2
+#define PAGE_SIZE_4MB   0x80
 
-// Place the physical address static for now
-__attribute__((section(".page_tables")))
+__attribute__((section(".lowmem")))
 __attribute__((aligned(4096)))
-uint64_t pml4[512];
-
-__attribute__((section(".page_tables")))
-__attribute__((aligned(4096)))
-static uint64_t pdpt[512];
-
-__attribute__((section(".page_tables")))
-__attribute__((aligned(4096)))
-static uint64_t pd[512];
+uint32_t page_directory[1024];
 
 void init_paging()
 {
-    // Link tables
-    pml4[0] = (uint64_t)pdpt | PAGE_PRESENT | PAGE_RW;
-    pdpt[0] = (uint64_t)pd | PAGE_PRESENT | PAGE_RW;
+    // Map 4MB (en stor page, enkel identity)
+    page_directory[0] = 0x00000000 | PAGE_PRESENT | PAGE_RW | PAGE_SIZE_4MB;
 
-    // Map 0x00000000–0x200000 to a 2 MB page (huge page)
-    pd[0] = 0x00000000 | PAGE_PRESENT | PAGE_RW | PAGE_PS;
+    // Ladda page directoryn
+    asm volatile(
+        "mov %0, %%cr3\n"           // Ladda CR3
+        "mov %%cr4, %%eax\n"
+        "or $0x10, %%eax\n"         // Sätt PSE (Page Size Extension)
+        "mov %%eax, %%cr4\n"
+        "mov %%cr0, %%eax\n"
+        "or $0x80000000, %%eax\n"   // Sätt PG-bit
+        "mov %%eax, %%cr0\n"
+        :
+        : "r"(page_directory)
+        : "eax"
+    );
 }
+

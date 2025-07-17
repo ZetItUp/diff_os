@@ -1,86 +1,100 @@
-# Filepaths
+# Outputdir
+BUILD = build
+
+LD = i386-elf-ld
+#LD = x86_64-elf-ld
+LDARGS = -n -T linker.ld -o 
+CC = i386-elf-gcc
+#CC = x86_64-elf-gcc
+CFLAGS = -ffreestanding -O2 -Wall -Wextra -std=gnu99 -g
+#OBJCPY = x86_64-elf-objcopy
+OBJCPY = i386-elf-objcopy
+OBJCPYARGS = -O binary 
+
+ASMFLAGS = -f elf32 -g -F dwarf
+
+# Source paths
 BOOT = boot/boot.asm
 PMODE = kernel/arch/x86_64/cpu/pmode.asm
-KERNEL_SRC = kernel
-MEMORY_SRC = $(KERNEL_SRC)/memory
-FS_SRC = $(KERNEL_SRC)/fs
-ARCH_SRC = $(KERNEL_SRC)/arch/x86_64
 
-# Binary outdata
-BUILD_DIR = build
-BOOT_BIN = $(BUILD_DIR)/boot.bin
-PMODE_BIN = $(BUILD_DIR)/pmode.bin
-PMODE_OBJ = $(BUILD_DIR)/pmode.o
-OS_IMG = $(BUILD_DIR)/os-img.bin
+INCLUDES = -I kernel/includes
 
-NASM = nasm
-NASM_BOOT_FLAGS = -f bin -I kernel/arch/x86_64/cpu
-NASM_PMODE_FLAGS = -f elf64 -I kernel/arch/x86_64/cpu
-MEMORY_OBJS = $(patsubst $(MEMORY_SRC)/%.c,$(BUILD_DIR)/memory/%.o,$(wildcard $(MEMORY_SRC)/*.c))
-LIBRARY_OBJS = $(BUILD_DIR)/library/string.o
-KERNEL_OBJS = $(BUILD_DIR)/start.o 			\
-				$(BUILD_DIR)/kernel.o 		\
-			  	$(BUILD_DIR)/diff_fs.o 		\
-			  	$(LIBRARY_OBJS)				\
-				$(MEMORY_OBJS)
-ALL_OBJS = $(PMODE_OBJ) $(KERNEL_OBJS)
+# Källfiler uppdelat per kategori
+KERNEL_SRC      = kernel/kernel.c \
+					kernel/console.c \
+					kernel/io.c
 
-CC = x86_64-elf-gcc
-CFLAGS = -ffreestanding -O2 -Wall -Wextra -std=gnu99 -Ikernel/includes
-LD = x86_64-elf-ld
-LD_FLAGS = -T linker.ld
+FS_SRC          = kernel/fs/diff.c
+LIBRARY_SRC     = kernel/library/string.c
+MEMORY_SRC      = kernel/memory/paging.c
 
-OBJCOPY = x86_64-elf-objcopy
-OBJCOPY_FLAGS = -O binary
+KERNEL_OBJ      = $(patsubst kernel/%.c, build/obj/%.o, $(KERNEL_SRC)) \
+                  $(patsubst kernel/fs/%.c, build/obj/fs_%.o, $(FS_SRC)) \
+                  $(patsubst kernel/library/%.c, build/obj/library_%.o, $(LIBRARY_SRC)) \
+                  $(patsubst kernel/memory/%.c, build/obj/memory_%.o, $(MEMORY_SRC))
 
-all: $(OS_IMG)
+all: $(BUILD)/os-img.bin
 
-# Build boot.bin
-$(BOOT_BIN): $(BOOT)
-	@mkdir -p $(BUILD_DIR)
-	$(NASM) $(NASM_BOOT_FLAGS) $< -o $@
+# Bygg bootloader (16-bit, raw)
+$(BUILD)/boot.bin: $(BOOT) $(BUILD)/kernel.bin
+	mkdir -p $(BUILD)
+	nasm -f bin $< -o $@
+	KERNEL_SIZE=$$(stat -c %s $(BUILD)/kernel.bin); \
+	SECTORS=$$(($(shell stat -c %s $(BUILD)/kernel.bin) + 511 >> 9)); \
+	printf "$$(printf '%04x' $$SECTORS)" | xxd -r -p | dd of=$@ bs=1 seek=508 conv=notrunc
+# Bygg pmode (raw)
+$(BUILD)/pmode.bin: $(PMODE)
+	mkdir -p $(BUILD)
+	nasm $(ASMFLAGS) $< -o $@
 
-$(BUILD_DIR)/start.o: $(ARCH_SRC)/cpu/start.asm
-	@mkdir -p $(dir $@)
-	$(NASM) $(NASM_PMODE_FLAGS) $< -o $@
+build/obj/%.o: kernel/%.c
+	mkdir -p $(BUILD)/obj
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-# Build pmode.bin
-$(PMODE_OBJ): $(PMODE)
-	@mkdir -p $(BUILD_DIR)
-	$(NASM) $(NASM_PMODE_FLAGS) $< -o $@
+build/obj/fs_%.o: kernel/fs/%.c
+	mkdir -p $(BUILD)/obj
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(PMODE_BIN): $(PMODE_OBJ)
-	$(OBJCOPY) $(OBJCOPY_FLAGS) $< $@
+build/obj/library_%.o: kernel/library/%.c
+	mkdir -p $(BUILD)/obj
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(BUILD_DIR)/%.o: $(KERNEL_SRC)/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+build/obj/memory_%.o: kernel/memory/%.c
+	mkdir -p $(BUILD)/obj
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(BUILD_DIR)/library/%.o: $(KERNEL_SRC)/library/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+# Länka ihop kernel.elf (med 64-bit entrypoint, egen linker-script)
+$(BUILD)/kernel.elf: $(KERNEL_OBJ)
+	$(LD) $(LDARGS) $@ $(KERNEL_OBJ)
 
-$(BUILD_DIR)/memory/%.o: $(MEMORY_SRC)/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+# Extrahera binär kernel
+$(BUILD)/kernel.bin: $(BUILD)/kernel.elf
+	$(OBJCPY) $(OBJCPYARGS) $< $@
 
-$(BUILD_DIR)/diff_fs.o: $(FS_SRC)/diff.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+build/kernel.size: $(BUILD)/kernel.bin
+	mkdir -p $(BUILD)
+	printf "%04x" $$(( ( $(shell stat -c %s $(BUILD)/kernel.bin ) + 511 ) / 512 )) | xxd -r -p > $@
 
-$(BUILD_DIR)/kernel.elf: $(KERNEL_OBJS)
-	$(LD) $(LDFLAGS) -o $@ $^
+build/boot_size.bin: $(BUILD)/boot.bin build/kernel.size
+	cp $(BUILD)/boot.bin $@
+	dd if=$(BUILD)/kernel.size of=$@ bs=1 seek=508 conv=notrunc
 
-$(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf $(LIBRARY_OBJS)
-	$(OBJCOPY) $(OBJCOPY_FLAGS) $< $@
+# Slå ihop allting till en bootbar image
+$(BUILD)/os-img.bin: $(BUILD)/boot_size.bin $(BUILD)/pmode.bin $(BUILD)/kernel.bin
+	dd if=/dev/zero of=$@ bs=512 count=2880
+	dd if=$(BUILD)/boot.bin of=$@ conv=notrunc
+	dd if=$(BUILD)/pmode.bin of=$@ bs=512 seek=1 conv=notrunc
+	dd if=$(BUILD)/kernel.bin of=$@ bs=512 seek=2048 conv=notrunc
 
-# Build image file
-$(OS_IMG): $(BOOT_BIN) $(PMODE_BIN) $(BUILD_DIR)/kernel.bin
-	cat $^ > $@
+# Kör i QEMU
+run: $(BUILD)/os-img.bin
+	qemu-system-i386 -monitor stdio -drive format=raw,file=$(BUILD)/os-img.bin
 
-# Run QEMU
-run: all
-	qemu-system-x86_64 -fda $(OS_IMG)
+debug: $(BUILD)/os-img.bin
+	qemu-system-i386 -monitor stdio -drive format=raw,file=$(BUILD)/os-img.bin -s -S &
+	gdb -x kernel.gdb
 
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD)
+
+.PHONY: all clean run

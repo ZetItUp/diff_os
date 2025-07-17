@@ -1,9 +1,11 @@
-OUTPUT_FORMAT(elf64-x86-64)
-ENTRY(kmain)
+/*OUTPUT_FORMAT(elf64-x86-64)*/
+OUTPUT_FORMAT(elf32-i386)
+ENTRY(protected_mode_entry)
+
 
 SECTIONS
 {
-    /* Place kernel at 1MB */
+    
     . = 0x100000;
 
     /* Textsekction (code) */
@@ -14,6 +16,7 @@ SECTIONS
     /* Read-only data */
     .rodata : {
         *(.rodata)
+        *(.rodata.*)
     }
 
     /* Datasection (initialized variables) */
@@ -21,23 +24,11 @@ SECTIONS
         *(.data)
     }
 
-    .stack (NOLOAD) : {
-        stack_start = .;
-        . = . + 0x4000; /* 16 KB stack */
-        stack_end = .;
-    }
-
-    .page_tables 0x9000 : 
-    {
-        *(.page_tables)
-    }
-
     /* BSS-section (zero-initialized variables) */
     .bss : {
         __bss_start = .;
         *(.bss)
-        *(COMMON)
         __bss_end = .;
     }
-
+    /DISCARD/ : { *(.comment .note .eh_frame) }
 }
