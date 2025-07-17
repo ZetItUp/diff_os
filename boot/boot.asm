@@ -43,12 +43,10 @@ start:
 
 .loop:
     ; Skriv ut sektornumret (si)
-    push cx
     mov ax, si
     call print_hex16        ; <-- se funktion nedan
     mov al, ' '
     call print_char
-    pop cx
 
     ; Bygg DAP för denna sektor
     mov ax, 0x0600
@@ -62,7 +60,8 @@ start:
     mov word [es:di+6], 0x8000     ; segment (0x8000:0 = 0x80000)
     mov ax, 0x800                 ; start LBA (2048)
     add ax, si                    ; + sektor offset
-    mov [es:di+8], eax             ; lba low
+    mov word [es:di+8], ax             ; lba low
+    mov word [es:di+10], 0
     mov dword [es:di+12], 0        ; lba high
 
     ; Kör LBA read (INT 13h EXT)
@@ -73,9 +72,10 @@ start:
     jc .fail
 
     inc si
-    loop .loop
+    cmp si, cx
+    jl .loop
 
-jmp $
+    jmp 0x0000:0x8000
 
 .fail:
     mov si, fail_msg
