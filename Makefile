@@ -6,7 +6,7 @@ LD = i386-elf-ld
 LDARGS = -n -T linker.ld -o 
 CC = i386-elf-gcc
 #CC = x86_64-elf-gcc
-CFLAGS = -m32 -ffreestanding -O2 -Wall -Wextra -std=gnu99 -g
+CFLAGS = -m32 -ffreestanding -nostdlib -O2 -Wall -Wextra -std=gnu99 -g
 #OBJCPY = x86_64-elf-objcopy
 OBJCPY = i386-elf-objcopy
 OBJCPYARGS = -O binary 

@@ -15,7 +15,6 @@ start:
 
     mov [boot_drive], dl
 
-
     call enable_a20
 
     ; -------------------------------
@@ -24,21 +23,15 @@ start:
     mov cx, 3                  ; max 3 försök
 pmode_try:
     ; Bygg DAP för pmode
-    mov ax, 0x0600
-    mov es, ax
-    xor di, di
-    mov byte [es:di],   0x10   ; DAP size
-    mov byte [es:di+1], 0x00
-    mov word [es:di+2], 1      ; <-- pmode.bin sektorer
-    mov word [es:di+4], 0x8000 ; offset
-    mov word [es:di+6], 0x0000 ; segment
-    mov dword [es:di+8], 1     ; LBA 1 (efter bootsektor)
-    mov dword [es:di+12], 0
+    lea si, [dap_pmode]
+    mov word [dap_pmode], 0x10         ; size
+    mov word [dap_pmode+2], 1          ; count
+    mov word [dap_pmode+4], 0x8000     ; offset
+    mov word [dap_pmode+6], 0x0000     ; segment
+    mov dword [dap_pmode+8], 1         ; LBA
+    mov dword [dap_pmode+12], 0
 
     mov dl, [boot_drive]
-    mov ax, 0x0600
-    mov ds, ax
-    mov si, di
     mov ah, 0x42
     int 0x13
     jnc pmode_ok
@@ -51,37 +44,25 @@ pmode_ok:
     ; -------------------------------
     mov cx, 3
 kernel_try:
-    mov ax, 0x0600
-    mov es, ax
-    xor di, di
-    mov byte [es:di],   0x10
-    mov byte [es:di+1], 0x00
-    mov word [es:di+2], 1      ; <-- kernel.bin sektorer
-    mov word [es:di+4], 0x0000  ; offset
-    mov word [es:di+6], 0x9000  ; segment
-    mov dword [es:di+8], 2048   ; LBA 2048
-    mov dword [es:di+12], 0
-
-    mov ah, 0x0E
-    mov al, 'K'
-    int 0x10
+    mov ax, [0x1FC]
+    lea si, [dap_kernel]
+    mov word [dap_kernel], 0x10        ; size
+    mov word [dap_kernel+2], 4 ; (eller 1 om du bara vill ha 1 sektor)
+    mov word [dap_kernel+4], 0x0000    ; offset
+    mov word [dap_kernel+6], 0x9000    ; segment
+    mov dword [dap_kernel+8], 2048     ; LBA
+    mov dword [dap_kernel+12], 0
 
     mov dl, [boot_drive]
-    mov ax, 0x0600
-    mov ds, ax
-    mov si, di
     mov ah, 0x42
     int 0x13
+
     jnc kernel_ok
     loop kernel_try
     mov al, ah
     jmp disk_fail
 kernel_ok:
-    
-    mov ah, 0x0E
-    mov al, 'O'
-    int 0x10
-
+    cli    
     jmp 0x0000:0x8000           ; Hoppa till pmode.bin
 
 disk_fail:
@@ -145,6 +126,9 @@ enable_a20:
 
 fail_msg: db 'FAIL (BIOS code):',0
 boot_drive: db 0
+
+dap_pmode:  times 16 db 0
+dap_kernel: times 16 db 0
 
 TIMES 510-($-$$) db 0
 DW 0xAA55

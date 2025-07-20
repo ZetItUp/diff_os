@@ -3,18 +3,12 @@ ORG 0x8000
 
 global pm_start
 pm_start:
-    cli
-
-    mov ah, 0x0E
-    mov al, 'P'
-    int 0x10
-
     lgdt [gdt_descriptor]
 
     mov eax, cr0
     or eax, 1
     mov cr0, eax            ;; Set PE-bit (Protected Mode)
-    
+
     jmp CODE_SEG:protected_mode_entry
 
 ; Vi är nu i 32-bit protected mode
