@@ -1,6 +1,6 @@
-#include "string.h"
-#include "paging.h"
-#include "console.h"
+//#include "string.h"
+//#include "paging.h"
+//#include "console.h"
 
 void kmain(void)
 {

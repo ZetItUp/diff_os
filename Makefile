@@ -6,7 +6,7 @@ LD = i386-elf-ld
 LDARGS = -n -T linker.ld -o 
 CC = i386-elf-gcc
 #CC = x86_64-elf-gcc
-CFLAGS = -ffreestanding -O2 -Wall -Wextra -std=gnu99 -g
+CFLAGS = -m32 -ffreestanding -O2 -Wall -Wextra -std=gnu99 -g
 #OBJCPY = x86_64-elf-objcopy
 OBJCPY = i386-elf-objcopy
 OBJCPYARGS = -O binary 
@@ -48,7 +48,7 @@ $(BUILD)/boot.bin: $(BOOT) $(BUILD)/kernel.bin
 # Bygg pmode (raw)
 $(BUILD)/pmode.bin: $(PMODE)
 	mkdir -p $(BUILD)
-	nasm $(ASMFLAGS) $< -o $@
+	nasm -f bin $< -o $@
 
 build/obj/%.o: kernel/%.c
 	mkdir -p $(BUILD)/obj
@@ -95,7 +95,7 @@ run: $(BUILD)/os-img.bin
 
 debug: $(BUILD)/os-img.bin
 	qemu-system-i386 -monitor stdio -drive format=raw,file=$(BUILD)/os-img.bin -s -S &
-	gdb -x kernel.gdb
+	gdb -x 1kernel.gdb
 
 clean:
 	rm -rf $(BUILD)

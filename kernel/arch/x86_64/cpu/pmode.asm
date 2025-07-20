@@ -1,8 +1,13 @@
 [BITS 16]
+ORG 0x8000
 
 global pm_start
 pm_start:
     cli
+
+    mov ah, 0x0E
+    mov al, 'P'
+    int 0x10
 
     lgdt [gdt_descriptor]
 

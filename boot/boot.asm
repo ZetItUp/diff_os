@@ -1,201 +1,151 @@
-;boot.asm - Minimal bootloader med LBA-laddning av kernel.bin
-BITS 16
-ORG 0x7C00
+[BITS 16]
+[ORG 0x7C00]
 
 start:
     cli
     xor ax, ax
     mov ds, ax
-    mov [BOOT_DRIVE], dl        ; Store boot device (0x80 för HDD)
     mov es, ax
+
+    mov ax, 0x7000          ; Säkert stackområde
     mov ss, ax
-    mov bp, 0x6000
-    mov sp, bp
+    mov sp, 0x0000
     sti
     cld
 
+    mov [boot_drive], dl
+
+
     call enable_a20
 
-    ; Läs antal sektorer (kernel) från offset 0x1FC i bootsektorn
-    mov bx, 0x7C00
-    mov cx, [bx + 0x1FC]    ; cx = kernel sectors
-    
-    mov ax, cx
-    call print_hex16
-    mov al, '-'
-    call print_char
-
-    mov cx, 2
-    mov bx, 0               ; si = sektorindex
-
-.loop:
-    ; Bygg DAP på 0x0600:0
+    ; -------------------------------
+    ; Load pmode.bin (LBA 1) to 0x8000
+    ; -------------------------------
+    mov cx, 3                  ; max 3 försök
+pmode_try:
+    ; Bygg DAP för pmode
     mov ax, 0x0600
     mov es, ax
     xor di, di
+    mov byte [es:di],   0x10   ; DAP size
+    mov byte [es:di+1], 0x00
+    mov word [es:di+2], 1      ; <-- pmode.bin sektorer
+    mov word [es:di+4], 0x8000 ; offset
+    mov word [es:di+6], 0x0000 ; segment
+    mov dword [es:di+8], 1     ; LBA 1 (efter bootsektor)
+    mov dword [es:di+12], 0
 
-    push ax
-    mov ax, bx
-    call print_hex16
-    pop ax
-
-    mov byte [es:di], 0x10         ; DAP size
-    mov byte [es:di+1], 0
-    mov word [es:di+2], 1          ; sector count = 1
-    mov ax, bx
-    shl ax, 9
-    mov word [es:di+4], ax     ; offset
-    mov word [es:di+6], 0x8000     ; segment (=> 0x80000)
-    mov ax, 0x800                  ; 2048 (kernel start LBA)
-    add ax, bx
-    mov word [es:di+8], ax         ; lba low word
-    mov word [es:di+10], 0         ; lba high word
-    mov word [es:di+12], 0        ; lba high dword
-    mov word [es:di+14], 0
-
+    mov dl, [boot_drive]
+    mov ax, 0x0600
+    mov ds, ax
+    mov si, di
+    mov ah, 0x42
+    int 0x13
+    jnc pmode_ok
+    loop pmode_try
+    mov al, ah
+    jmp disk_fail
+pmode_ok:
+    ; -------------------------------
+    ; Load kernel.bin (LBA 2048) to 0x10000
+    ; -------------------------------
+    mov cx, 3
+kernel_try:
     mov ax, 0x0600
     mov es, ax
-    xor si, si
+    xor di, di
+    mov byte [es:di],   0x10
+    mov byte [es:di+1], 0x00
+    mov word [es:di+2], 1      ; <-- kernel.bin sektorer
+    mov word [es:di+4], 0x0000  ; offset
+    mov word [es:di+6], 0x9000  ; segment
+    mov dword [es:di+8], 2048   ; LBA 2048
+    mov dword [es:di+12], 0
 
-    ; Kör LBA read (INT 13h EXT)
+    mov ah, 0x0E
+    mov al, 'K'
+    int 0x10
+
+    mov dl, [boot_drive]
+    mov ax, 0x0600
+    mov ds, ax
+    mov si, di
     mov ah, 0x42
-    mov dl, 0x80
-    mov si, di                     ; SI = offset till DAP i ES
     int 0x13
-    jc .fail
+    jnc kernel_ok
+    loop kernel_try
+    mov al, ah
+    jmp disk_fail
+kernel_ok:
+    
+    mov ah, 0x0E
+    mov al, 'O'
+    int 0x10
 
+    jmp 0x0000:0x8000           ; Hoppa till pmode.bin
+
+disk_fail:
+    mov ah, 0x0E
+    mov bx, fail_msg
+.printfail:
+    mov al, [bx]
+    cmp al, 0
+    je .printcode
+    int 0x10
     inc bx
-    cmp bx, cx
-    jl .loop
-
-    jmp $
-    ; Hoppa till loaded kernel (protected mode loader)
-    jmp 0x0000:0x8000
-
-.fail:
-    mov si, fail_msg
-    call print_str
-    jmp $
-
-fail_msg db ' FAIL', 0
-
-; -----------------------------------------------
-; print_char: AH=0x0E, AL=tecken
-print_char:
-    mov ah, 0x0E
+    jmp .printfail
+.printcode:
+    mov al, ' '
     int 0x10
-    ret
+    mov ah, 0x0E
+    mov al, '0'
+    int 0x10
+    mov al, 'x'
+    int 0x10
+    mov ah, 0x0E
+    mov al, [esp]    ; AH = BIOS error code
+    call print_hex8
+    jmp $
 
-; print_str: SI = offset till noll-terminerad sträng
-print_str:
-    lodsb
-    test al, al
-    jz .done
-    call print_char
-    jmp print_str
-.done:
-    ret
-
-; print_hex16: AX = värde som ska printas (4 hex-siffror)
-print_hex16:
+print_hex8:
     push ax
-    push bx
-    mov bx, ax
-    mov cx, 4
-.hex16_next:
-    shl bx, 4
-    mov al, bh
-    shr al, 4
-    cmp al, 0x0A
-    jl .digit
-    add al, 'A' - 0x0A
-    jmp .out
-.digit:
-    add al, '0'
-.out:
+    push cx
+    mov cx, 2
+.hexloop:
+    rol al, 4
     mov ah, 0x0E
+    mov bl, al
+    and bl, 0x0F
+    add bl, '0'
+    cmp bl, '9'
+    jbe .num
+    add bl, 7
+.num:
+    mov al, bl
     int 0x10
-    loop .hex16_next
-    pop bx
+    loop .hexloop
+    pop cx
     pop ax
     ret
 
 enable_a20:
-    pusha
-.wait_input:
-    in al, 0x64
-    test al, 0x02
-    jnz .wait_input
-    mov al, 0xD1
-    out 0x64, al
-.wait_input2:
-    in al, 0x64
-    test al, 0x02
-    jnz .wait_input2
-    mov al, 0xDF
-    out 0x60, al
-    popa
+    in   al, 0x64
+    test al, 2
+    jnz  enable_a20
+    mov  al, 0xD1
+    out  0x64, al
+
+    in   al, 0x64
+    test al, 2
+    jnz  $ ; Fastna här? HW-problem.
+    mov  al, 0xDF
+    out  0x60, al
     ret
 
-; BIOS disk error reporting
-disk_error:
-    push ds
-    mov ax, cs
-    mov ds, ax
-    mov si, err_msg
-.print:
-    lodsb
-    or al, al
-    jz .show_error
-    mov ah, 0x0E
-    int 0x10
-    jmp .print
-.show_error:
-    mov ah, 0x0E
-    mov al, ' '
-    int 0x10
-    mov al, 'H'
-    int 0x10
-    mov al, 'x'
-    int 0x10
-    mov al, [error_code]
-    call print_hex8
-    pop ds
-    cli
-    hlt
 
-save_error:
-    mov [cs:error_code], ah
-    jmp disk_error
+fail_msg: db 'FAIL (BIOS code):',0
+boot_drive: db 0
 
-print_hex8:
-    push ax
-    mov ah, al
-    shr al, 4
-    call print_hex_digit
-    mov al, ah
-    and al, 0x0F
-    call print_hex_digit
-    pop ax
-    ret
-
-print_hex_digit:
-    cmp al, 10
-    jl .num
-    add al, 'A'-10
-    jmp .out
-.num:
-    add al, '0'
-.out:
-    mov ah, 0x0E
-    int 0x10
-    ret
-
-error_code db 0
-err_msg db "Disk error! AH=", 0
-msg db "KLART!", 0
-BOOT_DRIVE db 0
-
-times 510-($-$$) db 0
-dw 0xAA55
+TIMES 510-($-$$) db 0
+DW 0xAA55
 
