@@ -56,55 +56,60 @@ entry:
 
 ; Function to enable to A20 line
 enable_a20:
-    in al, 0x92
-    test al, 2
-    jnz .done
-    or al, 2
-    out 0x92, al
+    in al, 0x92                         ; Read port 0x92 (Control Port A)
+    test al, 2                          ; Check if A20 is already enabled
+    jnz .done                           ; If it is, skip
+    or al, 2                            ; Set bit 1 (A20 Gate)
+    out 0x92, al                        ; Write to port 0x92 to enable A20
 .done:
     xor ax, ax
-    mov es, ax
-    mov di, 0x0500
+    mov es, ax                          ; ES = 0x0000
+    mov di, 0x0500                      ; ES:DI point to 0x0000:0500
     mov ax, 0xFFFF
-    mov ds, ax
-    mov si, 0x0510
-    mov al, [es:di]
+    mov ds, ax                          ; DS = 0xFFFF
+    mov si, 0x0510                      ; DS:SI point to 0xFFFF:0510 (Wraps to 0x10)
+    
+    ; Store original data at test addresses
+    mov al, [es:di]                     ; Load value at 0x0000:0500
     push ax
-    mov al, [ds:si]
+    mov al, [ds:si]                     ; Load value at 0xFFFF:0510
     push ax
-    mov byte [es:di], 0x00
-    mov byte [ds:si], 0xFF
-    cmp byte [es:di], 0xFF
-    pop ax
+
+    ; Test A20 by writing different values to wrap addresses
+    mov byte [es:di], 0x00              ; Write 0x00 to 0x0000:0500
+    mov byte [ds:si], 0xFF              ; Write 0xFF to 0xFFFF:0510
+    cmp byte [es:di], 0xFF              ; If A20 is enabled, values won't mirror
+    pop ax                              ; Restore old value at DS:SI
     mov [ds:si], al
-    pop ax
+    pop ax                              ; Restor old value as ES:DI
     mov [es:di], al
-    je .fail
-    clc
+    je .fail                            ; If readback is 0xFF, A20 failed to enable
+    
+    clc                                 ; Clear carry flag to indicate success
     ret
 .fail:
-    stc
+    stc                                 ; Set carry flag to indicate fail
     ret
 
 ; Prints message to the screen in Real Mode
 print_string:
     pusha
-    mov ah, 0x0E
+    mov ah, 0x0E                        ; BIOS Teletype output function
 .loop:
-    lodsb
-    test al, al
-    jz .done
-    int 0x10
-    jmp .loop
+    lodsb                               ; Load byte as DS:SI into AL, increment SI
+    test al, al                         ; Is it null terminator? (End of string)
+    jz .done                            ; If it is, jump out, we are done
+    int 0x10                            ; BIOS interrupt to print AL at cursor
+    jmp .loop                           ; Attempt to print next character
 .done:
     popa
     ret
 
 ; Error function, something went bad, print a message and halt the CPU
 error:
-    call print_string
-    mov si, msg_halt
-    call print_string
+    call print_string                   ; Prints what's currently in SI
+    mov si, msg_halt                    
+    call print_string                   ; Prints the msg_halt string
     cli
     hlt
 
@@ -120,14 +125,14 @@ init_pm:
     mov gs, ax
     mov ss, ax
     mov esp, 0x400000
-    mov ebp, esp                        ; Set the stack in Protected Mode
+    mov ebp, esp                        ; Set the stack in Protected Mode to 0x400000 (4MB)
     
     mov esi, 0x10000
     mov edi, 0x100000       
     mov ecx, KERNEL_MOVSDS  
     rep movsd                           ; Move the kernel from 0x10000 to 0x100000 (1MB) 
 
-    jmp 0x100000
+    jmp 0x100000                        ; Jump to 1MB in RAM, Kernel should be here now.
 
 ; Helper function to print 16-bit Hex values
 [BITS 16]
@@ -149,24 +154,37 @@ print_hex16:
 
 ; GDT Table
 gdt_start:
-    dd 0x0
-    dd 0x0                              ; First needs to be 0
+    dd 0x0                              
+    dd 0x0                              ; First needs to be 0, Null descriptor
 
 gdt_code:
-    dw 0xFFFF
-    dw 0x0
-    db 0x0
-    db 10011010b
-    db 11001111b
-    db 0x0                              ; Second is for Code Segment
+    dw 0xFFFF                           ; Segment Limit (4GB limit, with granularity)
+    dw 0x0                              ; Base Address 0-15     = 0
+    db 0x0                              ; Base Address 16-23    = 0
+
+    db 10011010b                        ; Access Byte: 
+                                        ; Present, Ring 0, Code, Readable, Accessed
+                                        ; 1, 00 , 1, 1, 0 , 1 , 0
+                                        ; P, DPL, S, E, DC, RW, A
+
+    db 11001111b                        ; Flags + Limit 16-19:
+                                        ; 4KB Granularity, 32-bit, high limit nibble
+                                        ; G, D/B, L, AVL + limit (16-19)
+
+    db 0x0                              ; Base Address 24-31    = 0
 
 gdt_data:
-    dw 0xFFFF
-    dw 0x0
-    db 0x0
-    db 10010010b
-    db 11001111b   
-    db 0x0                              ; Third for Data Segment
+    dw 0xFFFF                           ; Segment Limit (4GB limit, with granularity)
+    dw 0x0                              ; Base Address 0-15     = 0
+    db 0x0                              ; Base Address 16-23    = 0
+
+    db 10010010b                        ; Access Byte:
+                                        ; Present, Ring 0, Data, Writeable
+                                        ; 1, 00 , 1, 0, 0 , 1 , 0
+                                        ; P, DPL, S, E, DC, RW, A
+    
+    db 11001111b                        ; Flags + Limit 16-19, same as gdt_code
+    db 0x0                              ; Base Address 24-31    = 0
 
 gdt_end:
 
@@ -175,17 +193,17 @@ gdt_descriptor:
     dw gdt_end - gdt_start - 1
     dd gdt_start                        ; Calculated the correct GDT values
 
-CODE_SEG equ gdt_code - gdt_start
-DATA_SEG equ gdt_data - gdt_start
+CODE_SEG equ gdt_code - gdt_start       ; Calculate Code Segment
+DATA_SEG equ gdt_data - gdt_start       ; Calculate Data Segment
 
 hex_chars db '0123456789ABCDEF'         ; Hex characters
 
-; Data
-msg_a20_fail    db 'A20 fail',0
-msg_load_fail   db 'Load fail',0
-msg_halt        db 'Halted',0
+; Messages
+msg_a20_fail    db 'ERROR: Setting A20 Gate Failed',0
+msg_load_fail   db 'ERROR: Kernel missing',0
+msg_halt        db 'System Halted',0
 
-boot_drive      db 0
+boot_drive      db 0                    ; Holds the boot drive number
 
 ; Fill in the rest of the file with zeros and add the mandatory boot magic number at the end
 times 510-($-$$) db 0
