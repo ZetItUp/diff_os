@@ -5,8 +5,8 @@
 #define SCREEN_HEIGHT   25
 #define VIDEO_MEMORY    ((volatile unsigned short*)0xB8000)
 
-static int cursor_x;
-static int cursor_y;
+static int cursor_x = 0;
+static int cursor_y = 0;
 
 unsigned char current_attrib = MAKE_COLOR(FG_GRAY, BG_BLACK);
 
@@ -17,7 +17,7 @@ void putch(char c)
     putch_color(current_attrib, c);
 }
 
-void set_cursor_pos(unsigned short row, unsigned short col)
+void set_cursor_pos(unsigned short col, unsigned short row)
 {
     unsigned short pos = row * SCREEN_WIDTH + col;
 

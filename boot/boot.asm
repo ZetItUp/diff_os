@@ -1,135 +1,190 @@
 [BITS 16]
 [ORG 0x7C00]
 
-start:
+entry:
     cli
     xor ax, ax
     mov ds, ax
     mov es, ax
-
-    mov ax, 0x7000          ; Säkert stackområde
     mov ss, ax
-    mov sp, 0x0000
-    sti
-    cld
 
+    mov sp, 0x8000
+    mov bp, sp
+    
+    ; Save boot drive and disable SMM
     mov [boot_drive], dl
-
+    ;call disable_smm
+    ; Enable A20
     call enable_a20
+    mov ax, 0
+    mov ds, ax
+    mov es, ax
+    jnc .a20ok
+    mov si, msg_a20_fail
+    jmp error
+.a20ok:
 
-    ; -------------------------------
-    ; Load pmode.bin (LBA 1) to 0x8000
-    ; -------------------------------
-    mov cx, 3                  ; max 3 försök
-pmode_try:
-    ; Bygg DAP för pmode
-    lea si, [dap_pmode]
-    mov word [dap_pmode], 0x10         ; size
-    mov word [dap_pmode+2], 1          ; count
-    mov word [dap_pmode+4], 0x8000     ; offset
-    mov word [dap_pmode+6], 0x0000     ; segment
-    mov dword [dap_pmode+8], 1         ; LBA
-    mov dword [dap_pmode+12], 0
-
-    mov dl, [boot_drive]
-    mov ah, 0x42
-    int 0x13
-    jnc pmode_ok
-    loop pmode_try
-    mov al, ah
-    jmp disk_fail
-pmode_ok:
-    ; -------------------------------
-    ; Load kernel.bin (LBA 2048) to 0x10000
-    ; -------------------------------
     mov cx, 3
-kernel_try:
-    mov ax, [0x1FC]
-    lea si, [dap_kernel]
-    mov word [dap_kernel], 0x10        ; size
-    mov word [dap_kernel+2], 4 ; (eller 1 om du bara vill ha 1 sektor)
-    mov word [dap_kernel+4], 0x0000    ; offset
-    mov word [dap_kernel+6], 0x9000    ; segment
-    mov dword [dap_kernel+8], 2048     ; LBA
-    mov dword [dap_kernel+12], 0
+.load_kernel:
+    mov byte [bp], 0x10           ; Size of DAP
+    mov byte [bp+1], 0x00
 
-    mov dl, [boot_drive]
+%include "build/kernel_sizes.inc"
+    mov word [bp+2], KERNEL_SECTORS            ; kernel sectors
+    mov word [bp+4], 0x0000       ; Offset
+    mov word [bp+6], 0x1000        ; Segment (0x7E0:0 = 0x7E00)
+    mov dword [bp+8], 2048        ; LBA
+    mov dword [bp+12], 0x00
+    mov si, bp
+    mov dl, [boot_drive] 
     mov ah, 0x42
     int 0x13
+    jnc .kernel_ok
+    loop .load_kernel
+    mov si, msg_load_fail
+    jmp error
 
-    jnc kernel_ok
-    loop kernel_try
-    mov al, ah
-    jmp disk_fail
-kernel_ok:
-    cli    
-    jmp 0x0000:0x8000           ; Hoppa till pmode.bin
+.kernel_ok:
+    mov ax, 0
+    mov ds, ax
 
-disk_fail:
-    mov ah, 0x0E
-    mov bx, fail_msg
-.printfail:
-    mov al, [bx]
-    cmp al, 0
-    je .printcode
-    int 0x10
-    inc bx
-    jmp .printfail
-.printcode:
-    mov al, ' '
-    int 0x10
-    mov ah, 0x0E
-    mov al, '0'
-    int 0x10
-    mov al, 'x'
-    int 0x10
-    mov ah, 0x0E
-    mov al, [esp]    ; AH = BIOS error code
-    call print_hex8
-    jmp $
+    lgdt [gdt_descriptor]
 
-print_hex8:
-    push ax
-    push cx
-    mov cx, 2
-.hexloop:
-    rol al, 4
-    mov ah, 0x0E
-    mov bl, al
-    and bl, 0x0F
-    add bl, '0'
-    cmp bl, '9'
-    jbe .num
-    add bl, 7
-.num:
-    mov al, bl
-    int 0x10
-    loop .hexloop
-    pop cx
-    pop ax
-    ret
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+
+    jmp CODE_SEG:init_pm
+
 
 enable_a20:
-    in   al, 0x64
+    ; Fast method
+    in al, 0x92
     test al, 2
-    jnz  enable_a20
-    mov  al, 0xD1
-    out  0x64, al
-
-    in   al, 0x64
-    test al, 2
-    jnz  $ ; Fastna här? HW-problem.
-    mov  al, 0xDF
-    out  0x60, al
+    jnz .done
+    or al, 2
+    out 0x92, al
+.done:
+    ; Verify
+    xor ax, ax
+    mov es, ax
+    mov di, 0x0500
+    mov ax, 0xFFFF
+    mov ds, ax
+    mov si, 0x0510
+    mov al, [es:di]
+    push ax
+    mov al, [ds:si]
+    push ax
+    mov byte [es:di], 0x00
+    mov byte [ds:si], 0xFF
+    cmp byte [es:di], 0xFF
+    pop ax
+    mov [ds:si], al
+    pop ax
+    mov [es:di], al
+    je .fail
+    clc
+    ret
+.fail:
+    stc
     ret
 
+print_string:
+    pusha
+    mov ah, 0x0E
+.loop:
+    lodsb
+    test al, al
+    jz .done
+    int 0x10
+    jmp .loop
+.done:
+    popa
+    ret
 
-fail_msg: db 'FAIL (BIOS code):',0
-boot_drive: db 0
+error:
+    call print_string
+    mov si, msg_halt
+    call print_string
+    cli
+    hlt
 
-dap_pmode:  times 16 db 0
-dap_kernel: times 16 db 0
+[BITS 32]
+init_pm:
+%include "build/kernel_sizes.inc"
+    mov ax, DATA_SEG
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    mov esp, 0x400000
+    mov ebp, esp
+    
+    mov esi, 0x10000
+    mov edi, 0x100000
+    mov ecx, KERNEL_MOVSDS 
+    rep movsd
 
-TIMES 510-($-$$) db 0
-DW 0xAA55
+    jmp 0x100000
 
+[BITS 16]
+print_hex16:
+    ; Input: AX = value to print
+    pusha
+    mov cx, 4           ; 4 hex digits (16 bits)
+    mov dx, ax          ; Backup AX since we modify it
+.next_digit:
+    rol dx, 4           ; Rotate left 4 bits (bring next nibble to low 4 bits)
+    mov bx, dx
+    and bx, 0x000F      ; Isolate lowest 4 bits
+    mov al, [hex_chars + bx] ; Get ASCII character
+    mov ah, 0x0E        ; BIOS teletype function
+    int 0x10            ; Print character
+    loop .next_digit
+    popa
+    ret
+
+; GDT
+gdt_start:
+    dd 0x0
+    dd 0x0
+
+gdt_code:
+    dw 0xFFFF
+    dw 0x0
+    db 0x0
+    db 10011010b
+    db 11001111b
+    db 0x0
+
+gdt_data:
+    dw 0xFFFF
+    dw 0x0
+    db 0x0
+    db 10010010b
+    db 11001111b
+    db 0x0
+
+gdt_end:
+
+
+gdt_descriptor:
+    dw gdt_end - gdt_start - 1
+    dd gdt_start
+
+CODE_SEG equ gdt_code - gdt_start
+DATA_SEG equ gdt_data - gdt_start
+
+hex_chars db '0123456789ABCDEF'
+; Data
+msg_a20_fail    db 'A20 fail',0
+msg_load_fail   db 'Load fail',0
+msg_kernel_invalid db 'Bad kernel',0
+msg_halt        db 'Halted',0
+
+boot_drive      db 0
+
+times 510-($-$$) db 0
+dw 0xAA55

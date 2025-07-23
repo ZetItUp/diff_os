@@ -41,7 +41,7 @@ void set_pos(int x, int y);
 void set_color(unsigned char attrib);
 void clear(void);
 void puthex(int value);
-void set_cursor_pos(unsigned short row, unsigned short col);
+void set_cursor_pos(unsigned short col, unsigned short row);
 
 unsigned short get_cursor_pos(void);
 unsigned short get_row(void);

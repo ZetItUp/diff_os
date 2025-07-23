@@ -1,2 +1,2 @@
-file build/pmode.bin
+file build/boot.bin
 target remote localhost:1234
