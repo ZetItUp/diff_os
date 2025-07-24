@@ -1,9 +1,12 @@
 #include "string.h"
 #include "paging.h"
 #include "console.h"
+#include "idt.h"
+#include "stdint.h"
 
 void kmain(void)
 {
+    idt_init();
     clear();
     set_color(MAKE_COLOR(FG_GREEN, BG_BLACK));
     puts("A ");
@@ -15,6 +18,5 @@ void kmain(void)
     puts("OS");
     set_color(MAKE_COLOR(FG_GREEN, BG_BLACK));
 
-    while(1);
-   
+    while(1);   
 }

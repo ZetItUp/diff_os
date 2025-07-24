@@ -10,6 +10,7 @@ SECTIONS
 
     /* Textsekction (code) */
     .text : {
+        *kernel.o(.text)
         *(.text)
     }
 

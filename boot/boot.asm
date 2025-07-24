@@ -132,7 +132,7 @@ init_pm:
     mov ecx, KERNEL_MOVSDS  
     rep movsd                           ; Move the kernel from 0x10000 to 0x100000 (1MB) 
 
-    jmp 0x100000                        ; Jump to 1MB in RAM, Kernel should be here now.
+    jmp CODE_SEG:0x100000               ; Jump to 1MB in RAM, Kernel should be here now.
 
 ; Helper function to print 16-bit Hex values
 [BITS 16]

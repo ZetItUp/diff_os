@@ -16,16 +16,20 @@ NASMFLAGS = -f bin
 
 # Source Files
 BOOT_SRC = boot/boot.asm
-PMODE_SRC = kernel/arch/x86_64/cpu/pmode.asm
+
+ASM_SRC = \
+	kernel/arch/x86_64/cpu/isr_stub.asm
 
 KERNEL_SRC = \
-    kernel/kernel.c \
+	kernel/arch/x86_64/cpu/idt.c \
+	kernel/kernel.c \
     kernel/console.c \
     kernel/io.c \
     kernel/fs/diff.c \
     kernel/library/string.c \
-    kernel/memory/paging.c
+    kernel/memory/paging.c \
 
+ASM_OBJ = $(addprefix $(OBJ)/,$(notdir $(ASM_SRC:.asm=.o)))
 KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))
 
 # Targets
@@ -51,9 +55,9 @@ $(BUILD)/boot.bin: $(BOOT_SRC) $(BUILD)/kernel_sizes.inc
 	@echo "[ASM] Bootloader built: $@"
 
 # Kernel ELF
-$(BUILD)/kernel.elf: $(KERNEL_OBJ) linker.ld
+$(BUILD)/kernel.elf: $(KERNEL_OBJ) $(ASM_OBJ) linker.ld
 	@echo "[LD] Linking kernel"
-	@$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJ)
+	@$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJ) $(ASM_OBJ)
 	@echo "[LD] Kernel linked: $@"
 
 
@@ -69,6 +73,12 @@ $(BUILD)/kernel.bin: $(BUILD)/kernel.elf
 	@echo "[OBJCOPY] Creating kernel binary"
 	@$(OBJCOPY) $(OBJCOPYFLAGS) $< $@
 	@echo "[OBJCOPY] Kernel binary created: $@"
+
+# ASM source compilation
+$(OBJ)/%.o: kernel/arch/x86_64/cpu/%.asm
+	@mkdir -p $(OBJ)
+	@echo "[ASM] Compiling $<"
+	@nasm -f elf32 $< -o $@
 
 # C source compilation
 $(OBJ)/%.o: kernel/%.c
@@ -87,6 +97,11 @@ $(OBJ)/%.o: kernel/library/%.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJ)/%.o: kernel/memory/%.c
+	@mkdir -p $(OBJ)
+	@echo "[CC] Compiling $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 	@mkdir -p $(OBJ)
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
