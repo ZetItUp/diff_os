@@ -124,9 +124,15 @@ init_pm:
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov esp, 0x400000
-    mov ebp, esp                        ; Set the stack in Protected Mode to 0x400000 (4MB)
-    
+
+    mov edi, 0x7F000                    ; Beginning of stack (just below 0x7FFFF)
+    mov ecx, 0x400                      ; 4KB = 1024 dword (4 * 1024 = 4096 bytes)
+    xor eax, eax
+    rep stosd
+
+    mov esp, 0x7FFFF                    ; Set the stack in Protected Mode to 0x7FFFF
+    push esp
+
     mov esi, 0x10000
     mov edi, 0x100000       
     mov ecx, KERNEL_MOVSDS  

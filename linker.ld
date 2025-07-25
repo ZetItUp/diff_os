@@ -11,6 +11,7 @@ SECTIONS
     /* Textsekction (code) */
     .text : {
         *kernel.o(.text)
+        *isr_stub.o(.text)
         *(.text)
     }
 
@@ -23,6 +24,12 @@ SECTIONS
     /* Datasection (initialized variables) */
     .data : {
         *(.data)
+    }
+
+    .stack : {
+        __stack_bottom = .;
+        . = . + 0x4000; /* 16 KB stack, väx nedåt */
+        __stack_top = .;
     }
 
     /* BSS-section (zero-initialized variables) */

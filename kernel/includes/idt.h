@@ -20,7 +20,7 @@ struct IDTDescriptor
     uint32_t base;
 } __attribute__((packed));
 
-static struct IDTEntry idt[IDT_SIZE];
+extern struct IDTEntry idt[IDT_SIZE];
 
 void idt_set_entry(int num, uint32_t handler_addr, uint16_t selector, uint8_t type_attr);
 void idt_init();

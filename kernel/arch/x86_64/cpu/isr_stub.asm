@@ -1,13 +1,12 @@
 [BITS 32]
-
-extern fault_handler  ; C-funktion som tar emot struct eller pointer
+section .text
 
 %macro ISR_NOERR 1
 global isr%1
 isr%1:
     cli
-    push dword 0        ; fake error code
-    push dword %1       ; exception number
+    push byte 0        ; fake error code
+    push byte %1       ; exception number
     jmp isr_common_stub
 %endmacro
 
@@ -15,8 +14,19 @@ isr%1:
 global isr%1
 isr%1:
     cli
-    push dword %1       ; exception number (error code är redan pushad av CPU)
+    push byte %1       ; exception number (error code är redan pushad av CPU)
     jmp isr_common_stub
+%endmacro
+
+%macro MAKE_IRQ 2
+global irq%1
+
+irq%1:
+    cli
+    push byte 0
+    push byte %2
+    jmp irq_common_stub
+
 %endmacro
 
 ; ----- Alla 0–31 -----
@@ -52,9 +62,10 @@ ISR_NOERR 28
 ISR_NOERR 29
 ISR_NOERR 30
 ISR_NOERR 31
+ISR_NOERR 127
 
 ; ---- Common handler ----
-
+extern fault_handler
 isr_common_stub:
     pusha
     push ds
@@ -62,23 +73,73 @@ isr_common_stub:
     push fs
     push gs
     
-    mov ax, 0x10       ; Kernel data selector
+    mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     
-    mov eax, esp       ; Ge C-funktionen en pointer till structen på stacken
-  
+    mov eax, esp
     push eax
-    call fault_handler
-    add esp, 4
-        
+    mov eax, fault_handler
+    call eax
+    pop eax
     pop gs
     pop fs
     pop es
     pop ds
     popa
-    add esp, 8         ; 2 x 4 bytes (error code, exception number)
+    add esp, 8
     iret
 
+
+MAKE_IRQ 0, 32
+MAKE_IRQ 1, 33
+MAKE_IRQ 2, 34
+MAKE_IRQ 3, 35
+MAKE_IRQ 4, 36
+MAKE_IRQ 5, 37
+MAKE_IRQ 6, 38
+MAKE_IRQ 7, 39
+MAKE_IRQ 8, 40
+MAKE_IRQ 9, 41
+MAKE_IRQ 10, 42
+MAKE_IRQ 11, 43
+MAKE_IRQ 12, 44
+MAKE_IRQ 13, 45
+MAKE_IRQ 14, 46
+MAKE_IRQ 15, 47
+
+extern irq_handler_c
+irq_common_stub:
+    pusha
+	
+    push ds
+	push es
+	push fs
+	push gs
+
+	mov ax, 0x10
+	mov ds, ax
+	mov es, ax
+	mov fs, ax
+	mov gs, ax
+
+	mov eax, esp
+	push eax
+
+	mov eax, irq_handler_c
+	call eax
+
+	pop eax
+	pop gs
+	pop fs
+	pop es
+	pop ds
+	
+    popa
+	add esp, 8
+	iret
+
+section .bss
+    resb 8192

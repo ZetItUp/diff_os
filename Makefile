@@ -22,9 +22,12 @@ ASM_SRC = \
 
 KERNEL_SRC = \
 	kernel/arch/x86_64/cpu/idt.c \
+	kernel/arch/x86_64/cpu/irq.c \
+	kernel/arch/x86_64/cpu/io.c \
+	kernel/arch/x86_64/cpu/pic.c \
+	kernel/arch/x86_64/cpu/timer.c \
 	kernel/kernel.c \
     kernel/console.c \
-    kernel/io.c \
     kernel/fs/diff.c \
     kernel/library/string.c \
     kernel/memory/paging.c \
@@ -109,7 +112,7 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 # Run in QEMU
 run: $(TARGET)
 	@echo "[QEMU] Starting OS"
-	@qemu-system-i386 -monitor stdio -hda $(TARGET) -d int -no-reboot
+	@qemu-system-i386 -monitor stdio -hda $(TARGET) -d int -no-shutdown -no-reboot
 
 # Debug in QEMU with GDB
 debug: $(TARGET)
