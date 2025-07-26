@@ -2,7 +2,10 @@
 
 #include "stdint.h"
 
+#define NUM_IRQS    16
+
 typedef void (*irq_handler_t)(unsigned irq, void* context);
+extern irq_handler_t irq_handlers[NUM_IRQS];
 
 extern void irq0(void);
 extern void irq1(void);

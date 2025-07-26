@@ -2,13 +2,16 @@
 #include "idt.h"
 #include "io.h"
 #include "pic.h"
+#include "console.h"
+#include "string.h"
 
-#define NUM_IRQS    16
+irq_handler_t irq_handlers[NUM_IRQS];
 
-extern irq_handler_t irq_handlers[NUM_IRQS] = { 0 };
-
-void irq_handler_c(unsigned irq, void *context)
+void irq_handler_c(unsigned irq_ptr, void *context)
 {
+    uint8_t *stack = (uint8_t*)irq_ptr;
+    uint8_t irq = stack[1]; 
+
     if(irq < NUM_IRQS && irq_handlers[irq])
     {
         irq_handlers[irq](irq, context);

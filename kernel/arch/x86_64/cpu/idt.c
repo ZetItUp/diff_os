@@ -66,29 +66,25 @@ void idt_init()
         //idt_set_entry(i, (uint32_t)isr_test, 0x08, 0x8E);
     }
 
-    for(int i = 0; i < 16; i++)
-    {
-        idt_set_entry(32 + i, (uint32_t)(&irq0 + i), 0x08, 0x8E);
-    }
-
     struct IDTDescriptor idt_desc;
     idt_desc.limit = sizeof(idt) - 1;
     idt_desc.base = (uint32_t)&idt;
 
     // Load IDT with lidt
+    asm volatile("cli");
     asm volatile("lidt %0" : : "m"(idt_desc));
 }
 
 void idt_set_entry(int num, uint32_t handler_addr, uint16_t selector, uint8_t type_attr)
 {
     // Set lowest 16 bits of the handler address
-    idt[num].offset_low = handler_addr & 0xFFFF;
+    idt[num].offset_low = (handler_addr & 0xFFFF);
     // Segment selector, usually 0x08 (Kernel code segment in GDT)
     idt[num].selector = selector;
     // Reserved,set to 0
     idt[num].zero = 0;
     // Type and attribute, (ex. 0x8E,  Present, Ring 0, 32-bit Interrupt Gate)
-    idt[num].type_attr = type_attr;
+    idt[num].type_attr = type_attr | 0x60;
     // Set highest 16 bit of the handler address
     idt[num].offset_high = (handler_addr >> 16) & 0xFFFF;
 }
@@ -111,7 +107,7 @@ void fault_handler(struct err_stack_frame *frame)
 void dump_idt()
 {
     puts("IDT ENTRIES:\n");
-    for (int i = 20; i < 40; i++) {
+    for (int i = 0; i < 20; i++) {
         uint32_t handler = (idt[i].offset_high << 16) | idt[i].offset_low;
         puts("IDT[");
         puthex(i);

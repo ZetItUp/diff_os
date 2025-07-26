@@ -5,8 +5,8 @@ section .text
 global isr%1
 isr%1:
     cli
-    push byte 0        ; fake error code
-    push byte %1       ; exception number
+    push dword 0        ; fake error code
+    push dword %1       ; exception number
     jmp isr_common_stub
 %endmacro
 
@@ -14,7 +14,7 @@ isr%1:
 global isr%1
 isr%1:
     cli
-    push byte %1       ; exception number (error code är redan pushad av CPU)
+    push dword %1       ; exception number (error code är redan pushad av CPU)
     jmp isr_common_stub
 %endmacro
 
@@ -23,8 +23,8 @@ global irq%1
 
 irq%1:
     cli
-    push byte 0
-    push byte %2
+    push dword 0
+    push dword %2
     jmp irq_common_stub
 
 %endmacro
@@ -125,13 +125,17 @@ irq_common_stub:
 	mov fs, ax
 	mov gs, ax
 
-	mov eax, esp
+	mov eax, [esp + 48]
+    push eax
+
+    mov eax, esp
 	push eax
 
 	mov eax, irq_handler_c
 	call eax
 
-	pop eax
+    add esp, 8
+
 	pop gs
 	pop fs
 	pop es

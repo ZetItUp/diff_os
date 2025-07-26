@@ -9,7 +9,7 @@ BUILD = build
 OBJ = $(BUILD)/obj
 
 # Compiler/Linker Flags
-CFLAGS = -m32 -ffreestanding -nostdlib -O2 -Wall -Wextra -std=gnu99 -g -I kernel/includes
+CFLAGS = -m32 -ffreestanding -nostdlib -nostartfiles -O2 -Wall -Wextra -std=gnu99 -g -I kernel/includes
 LDFLAGS = -n -T linker.ld
 OBJCOPYFLAGS = -O binary
 NASMFLAGS = -f bin
@@ -43,7 +43,7 @@ TARGET = $(BUILD)/os-img.bin
 all: $(TARGET)
 
 # Main OS image
-$(TARGET): $(BUILD)/boot.bin $(BUILD)/kernel.elf
+$(TARGET): $(BUILD)/boot.bin $(BUILD)/kernel.bin
 	@echo "[IMG] Creating OS image"
 	@dd if=/dev/zero of=$@ bs=512 count=4096 2>/dev/null
 	@dd if=$(BUILD)/boot.bin of=$@ conv=notrunc 2>/dev/null
@@ -112,7 +112,7 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 # Run in QEMU
 run: $(TARGET)
 	@echo "[QEMU] Starting OS"
-	@qemu-system-i386 -monitor stdio -hda $(TARGET) -d int -no-shutdown -no-reboot
+	@qemu-system-i386 -monitor stdio -hda $(TARGET) -no-reboot
 
 # Debug in QEMU with GDB
 debug: $(TARGET)

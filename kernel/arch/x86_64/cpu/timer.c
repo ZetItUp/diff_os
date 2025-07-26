@@ -1,22 +1,26 @@
 #include "timer.h"
+#include "pic.h"
 #include "stddef.h"
 #include "io.h"
 #include "irq.h"
+#include "console.h"
 
 #define TIMER_CHANNEL0        0x40
 #define TIMER_COMMAND         0x43
-#define TIMER_IRQ              0
+#define TIMER_IRQ             0
 
 // Global tick count
 volatile uint32_t timer_ticks = 0;
+volatile bool timer_tick_updated = false;
 
 // Timer Handler
 static void timer_handler(uint32_t irq, void *context)
 {
     (void)irq;
     (void)context;      // Unused
-                        
-    //timer_ticks++;
+
+    timer_ticks++;
+    timer_tick_updated = true;
 }
 
 /*

@@ -26,3 +26,5 @@ void idt_set_entry(int num, uint32_t handler_addr, uint16_t selector, uint8_t ty
 void idt_init();
 
 void fault_handler(struct err_stack_frame *frame);
+
+void dump_idt(void);

@@ -1,6 +1,7 @@
 [BITS 16]
 [ORG 0x7C00]
 
+
 entry:
     cli                                 ; Stop interrupts on the CPU
     xor ax, ax
@@ -125,12 +126,13 @@ init_pm:
     mov gs, ax
     mov ss, ax
 
-    mov edi, 0x7F000                    ; Beginning of stack (just below 0x7FFFF)
+    mov edi, 0x8F000                    ; Beginning of stack (just below 0x7FFFF)
     mov ecx, 0x400                      ; 4KB = 1024 dword (4 * 1024 = 4096 bytes)
     xor eax, eax
     rep stosd
 
-    mov esp, 0x7FFFF                    ; Set the stack in Protected Mode to 0x7FFFF
+    mov esp, 0x7C00                     ; Set the stack in Protected Mode to 0x7FFFF
+    mov ebp, esp
     push esp
 
     mov esi, 0x10000
@@ -159,6 +161,7 @@ print_hex16:
     ret
 
 ; GDT Table
+global gdt_start
 gdt_start:
     dd 0x0                              
     dd 0x0                              ; First needs to be 0, Null descriptor
@@ -192,6 +195,7 @@ gdt_data:
     db 11001111b                        ; Flags + Limit 16-19, same as gdt_code
     db 0x0                              ; Base Address 24-31    = 0
 
+global gdt_end
 gdt_end:
 
 

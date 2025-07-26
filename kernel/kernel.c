@@ -8,6 +8,53 @@
 #include "timer.h"
 #include "stdint.h"
 
+__attribute__((naked, section(".text.start"))) void _start(void)
+{
+    asm volatile("mov $0x9000, %esp");
+    asm volatile("call kmain");
+    asm volatile("cli; hlt");
+}
+
+void display_banner();
+void print_time();
+
+void kmain(void)
+{
+    clear();
+    // Initialize IDT
+    idt_init();
+    // Remap PIC
+    pic_remap(0x20, 0x28);
+    // Initialize IRQ
+    irq_init();
+
+    // Install timer handler
+    timer_install();
+    
+    asm volatile("sti");
+    display_banner();
+    putch('\n');
+    
+    while(1)
+    {
+        print_time();
+    }
+}
+
+void print_time()
+{
+    if(timer_tick_updated == true)
+    {
+        timer_tick_updated = false;
+
+        set_x(39);
+        set_y(12);
+        char buffer[12];
+        itoa(timer_ticks, buffer);
+        puts(buffer);
+    }
+}
+
 void display_banner()
 {
     set_color(MAKE_COLOR(FG_GREEN, BG_BLACK));
@@ -20,36 +67,3 @@ void display_banner()
     puts("OS");
     set_color(MAKE_COLOR(FG_GREEN, BG_BLACK));
 }
-
-void kmain(void)
-{
-    clear();
-
-        uint32_t esp;
-    asm volatile("mov %%esp, %0" : "=r"(esp));
-    puts("ESP: 0x"); puthex(esp); puts("\n");
-
-extern struct IDTEntry idt[256];
-puts("IDT addr: 0x"); puthex((uint32_t)&idt[0]); puts("\n");
-
-
-extern void *irq_handlers[];
-puts("irq_handlers addr: 0x"); puthex((uint32_t)&irq_handlers[0]); puts("\n");
-    // Initialize IDT
-    idt_init();
-    // Initialize IRQ
-    irq_init();
-    //dump_idt();
-    //int a = 1/0;
-    // Remap PIC
-    pic_remap(0x20, 0x28);
-    // Install timer handler
-    timer_install();
-
-    asm volatile("sti");
-
-    display_banner();
-
-    while(1);   
-}
-
