@@ -1,2 +1,2 @@
-# diff_os
+# Different OS
 A different OS

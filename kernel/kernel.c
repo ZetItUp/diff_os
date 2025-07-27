@@ -60,8 +60,6 @@ void print_time()
 
 void display_banner()
 {
-    set_color(MAKE_COLOR(FG_GREEN, BG_BLACK));
-    puts("A ");
     set_color(MAKE_COLOR(FG_LIGHTGREEN, BG_BLACK));
     puts("D");
     set_color(MAKE_COLOR(FG_GREEN, BG_BLACK));
