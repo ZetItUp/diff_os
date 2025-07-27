@@ -20,7 +20,10 @@ void print_time();
 
 void kmain(void)
 {
+    init_paging();
+
     clear();
+
     // Initialize IDT
     idt_init();
     // Remap PIC
@@ -37,7 +40,7 @@ void kmain(void)
     
     while(1)
     {
-        print_time();
+        //print_time();
     }
 }
 
