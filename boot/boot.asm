@@ -1,7 +1,6 @@
 [BITS 16]
 [ORG 0x7C00]
 
-
 entry:
     cli                                 ; Stop interrupts on the CPU
     xor ax, ax
@@ -22,6 +21,32 @@ entry:
     mov si, msg_a20_fail                ; If we fail, crash and halt CPU
     jmp error
 .a20ok:
+
+; Get memorymap through BIOS using E820
+    mov di, e820_buffer                 ; ES:DI point to buffer
+    xor bx, bx                          ; Set EBX to 0
+    mov cx, 24                          ; 24 bytes per entry
+    xor si, si                          ; SI = entry counter
+
+.get_e820:
+    mov ax, 0xE820
+    mov dx, 0x534D                      ; 'SM'
+    push dx
+    mov dx, 0x4159                      ; 'AP'
+    int 0x15
+    jc .done_e820
+    cmp ax, 0x534D
+    jne .done_e820
+
+    add di, 24                          ; Next entry in buffer
+    inc si                              ; SI = still entry counter
+    cmp si, 32
+    jae .done_e820
+    test bx, bx
+    jnz .get_e820
+
+.done_e820:
+    mov [mem_entry_count], si
 
     mov cx, 3                           ; Attempt to read the kernel 3 times
 .load_kernel:   
@@ -140,6 +165,10 @@ init_pm:
     mov ecx, KERNEL_MOVSDS  
     rep movsd                           ; Move the kernel from 0x10000 to 0x100000 (1MB) 
 
+    ; Send E820 info to the kernel by pushing pointer + count
+    push dword [mem_entry_count]
+    push dword e820_buffer
+
     jmp CODE_SEG:0x100000               ; Jump to 1MB in RAM, Kernel should be here now.
 
 ; Helper function to print 16-bit Hex values
@@ -214,6 +243,10 @@ msg_load_fail   db 'ERROR: Kernel missing',0
 msg_halt        db 'System Halted',0
 
 boot_drive      db 0                    ; Holds the boot drive number
+
+e820_buffer:
+    times 32 * 24 db 0                  ; Buffer for 32 entries (24 bytes each)
+    mem_entry_count dw 0                ; Number of entries found
 
 ; Fill in the rest of the file with zeros and add the mandatory boot magic number at the end
 times 510-($-$$) db 0

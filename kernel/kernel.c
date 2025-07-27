@@ -19,11 +19,28 @@ __attribute__((naked, section(".text.start"))) void _start(void)
 void display_banner();
 void print_time();
 
-void kmain(void)
+void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 {
-    init_paging();
+    uint32_t total_ram = 0;
 
+    for(uint32_t i = 0; i < mem_entry_count; i++)
+    {
+        if(bios_mem_map[i].type == 1 && bios_mem_map[i].base_high == 0)
+        {
+            total_ram += bios_mem_map[i].length_low;
+        }
+    }
+
+    uint32_t ram_mb = (uint32_t)(total_ram / (1024 * 1024));
     clear();
+    printf("Available Memory: %u MB\n", ram_mb);
+
+    init_paging(ram_mb);
+
+    if(alloc_region(0x08000000, 12) == 0)
+    {
+        printf("Allocated 12 MB region at 0x08000000\n");
+    }
 
     // Initialize IDT
     idt_init();
@@ -36,6 +53,7 @@ void kmain(void)
     timer_install();
     
     asm volatile("sti");
+
     display_banner();
     putch('\n');
     

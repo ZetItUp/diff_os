@@ -5,7 +5,8 @@
 __attribute__((aligned(4096))) uint32_t page_directory[1024];
 
 // Bitmap for a 4MB Block
-static uint32_t block_bitmap[(MAX_BLOCKS + 31) / 32];   // 64 bits = 2 * 32 bit int
+static uint32_t *block_bitmap;
+static uint32_t max_blocks;         // Number of 4MB blocks (RAM / 4)
 
 // Helper methods for Bitmapping
 static inline int test_block(int i)
@@ -38,15 +39,27 @@ static int find_free_block()
     return -1;
 }
 
-void init_paging()
+void init_paging(uint32_t ram_mb)
 {
+    // Calculated number of blocks
+    max_blocks = ram_mb / 4;
+
+    // Limit to 4GB
+    if(max_blocks > MAX_BLOCKS)
+    {
+        max_blocks = MAX_BLOCKS;
+    }
+
+    static uint32_t bitmap_storage[(MAX_BLOCKS + 31) / 32];
+    block_bitmap = bitmap_storage;
+
     // Reset page directory and bitmap
     for(int i = 0; i < 1024; i++)
     {
         page_directory[i] = 0;
     }  
 
-    for(int i = 0; i < (MAX_BLOCKS + 31) / 32; i++)
+    for(int i = 0; i < (int)((max_blocks + 31) / 32); i++)
     {
         block_bitmap[i] = 0;
     }
