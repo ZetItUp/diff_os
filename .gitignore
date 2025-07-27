@@ -3,6 +3,7 @@
 *.iso
 *.elf
 *.img
+*.txt
 build/
 cross/
 token
