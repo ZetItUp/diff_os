@@ -1,3 +1,4 @@
+#include "stdio.h"
 #include "idt.h"
 #include "string.h"
 #include "paging.h"
@@ -53,18 +54,18 @@ void print_time()
         set_x(39);
         set_y(12);
         char buffer[12];
-        itoa(timer_ticks, buffer);
-        puts(buffer);
+        itoa(timer_ticks, buffer, 10);
+        printf("%s", buffer);
     }
 }
 
 void display_banner()
 {
     set_color(MAKE_COLOR(FG_LIGHTGREEN, BG_BLACK));
-    puts("D");
+    printf("D");
     set_color(MAKE_COLOR(FG_GREEN, BG_BLACK));
-    puts("ifferent ");
+    printf("ifferent ");
     set_color(MAKE_COLOR(FG_LIGHTGREEN, BG_BLACK));
-    puts("OS");
+    printf("OS");
     set_color(MAKE_COLOR(FG_GREEN, BG_BLACK));
 }

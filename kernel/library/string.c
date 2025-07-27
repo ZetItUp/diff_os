@@ -97,30 +97,45 @@ char *strchr(const char *str, char c)
     return NULL;
 }
 
-void itoa(uint32_t value, char* str) 
+void itoa(int value, char *str, int base)
 {
-    char temp[12];
-    int i = 0;
+    char *p = str;
+    int is_negative = 0;
 
-    if (value == 0) 
+    if(value == 0)
     {
-        str[0] = '0';
-        str[1] = '\0';
+        *p++ = '0';
+        *p = '\0';
 
         return;
     }
 
-    while (value > 0) 
+    if(value < 0 && base == 10)
     {
-        temp[i++] = '0' + (value % 10);
-        value /= 10;
+        is_negative = 1;
+        value = -value;
     }
 
-    for (int j = 0; j < i; j++) 
+    while(value)
     {
-        str[j] = temp[i - j - 1];
+        int digit = value % base;
+
+        *p++ = (digit < 10) ? '0' + digit : 'a' + (digit - 10);
+        value /= base;
     }
 
-    str[i] = '\0';
+    if(is_negative)
+    {
+        *p++ = '-';
+    }
+
+    *p = '\0';
+
+    for(char *start = str, *end = p - 1; start < end; start++, end--)
+    {
+        char tmp = *start;
+        *start = *end;
+        *end = tmp;
+    }
 }
 

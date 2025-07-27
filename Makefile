@@ -30,6 +30,7 @@ KERNEL_SRC = \
     kernel/console.c \
     kernel/fs/diff.c \
     kernel/library/string.c \
+	kernel/library/printf.c \
     kernel/memory/paging.c \
 
 ASM_OBJ = $(addprefix $(OBJ)/,$(notdir $(ASM_SRC:.asm=.o)))
