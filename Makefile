@@ -121,8 +121,8 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 # Run in QEMU
 run: $(TARGET)
 	@echo "[QEMU] Starting OS"
-	@qemu-system-i386 -monitor stdio -m 64M -hda $(TARGET) -no-reboot
-
+	@qemu-system-i386 -monitor stdio -m 64M -hda $(TARGET) 
+	
 # Debug in QEMU with GDB
 debug: $(TARGET)
 	@echo "[QEMU] Starting in debug mode"
