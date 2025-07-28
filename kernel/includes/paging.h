@@ -15,6 +15,7 @@ typedef struct {
     uint32_t length_low;
     uint32_t length_high;
     uint32_t type;          // 1 = Usable RAM
+    uint32_t acpi_ext;      // Extra flags
 } __attribute__((packed)) e820_entry_t;
 
 void init_paging(uint32_t ram_mb);

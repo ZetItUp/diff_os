@@ -49,6 +49,17 @@ void printf(const char *fmt, ...)
                         }
                     }
                     break;
+                case 'u':
+                    {
+                        unsigned int val = va_arg(args, unsigned int);
+                        itoa(val, buffer, 10); // använd bas 10
+
+                        for (char *s = buffer; *s; s++)
+                        {
+                            putch(*s);
+                        }
+                    }
+                    break;
                 case 'c':
                     {
                         char c = (char)va_arg(args, int);

@@ -77,6 +77,11 @@ void putch_color(unsigned char attrib, char c)
         // Go to the beginning of the line
         cursor_x = 0;
     }
+    else if(c == '\t')
+    {
+        cursor_x += 4;
+        set_x(cursor_x);
+    }
     else
     {
         // Print the character into the buffer

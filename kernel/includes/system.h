@@ -7,3 +7,8 @@ struct err_stack_frame
     uint32_t int_no, err_code;
     uint32_t eip, cs, eflags, useresp, ss;
 };
+
+typedef struct system_info
+{
+    uint32_t ram_mb;
+} sys_info_t;

@@ -15,7 +15,8 @@ OBJCOPYFLAGS = -O binary
 NASMFLAGS = -f bin
 
 # Source Files
-BOOT_SRC = boot/boot.asm
+BOOT_STAGE1 = boot/boot.asm
+BOOT_STAGE2 = boot/boot_stage2.asm
 
 ASM_SRC = \
 	kernel/arch/x86_64/cpu/isr_stub.asm
@@ -44,19 +45,26 @@ TARGET = $(BUILD)/os-img.bin
 all: $(TARGET)
 
 # Main OS image
-$(TARGET): $(BUILD)/boot.bin $(BUILD)/kernel.bin
+$(TARGET): $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] Creating OS image"
 	@dd if=/dev/zero of=$@ bs=512 count=4096 2>/dev/null
 	@dd if=$(BUILD)/boot.bin of=$@ conv=notrunc 2>/dev/null
+	@dd if=$(BUILD)/boot_stage2.bin of=$@ bs=512 seek=1 conv=notrunc 2>/dev/null
 	@dd if=$(BUILD)/kernel.bin of=$@ bs=512 seek=2048 conv=notrunc 2>/dev/null
 	@echo "[IMG] OS image created: $@"
 
-# Bootloader
-$(BUILD)/boot.bin: $(BOOT_SRC) $(BUILD)/kernel_sizes.inc
+# Bootloader Stages
+$(BUILD)/boot.bin: $(BOOT_STAGE1)
 	@mkdir -p $(BUILD)
-	@echo "[ASM] Building bootloader"
+	@echo "[ASM] Building Stage 1 bootloader"
 	@$(NASM) $(NASMFLAGS) $< -o $@
-	@echo "[ASM] Bootloader built: $@"
+	@echo "[ASM] Bootloader Stage 1 built: $@"
+
+$(BUILD)/boot_stage2.bin: $(BOOT_STAGE2) $(BUILD)/kernel_sizes.inc
+	@mkdir -p $(BUILD)
+	@echo "[ASM] Building Stage 2 loader"
+	@$(NASM) $(NASMFLAGS) $< -o $@
+	@echo "[ASM] Stage 2 loader built: $@"
 
 # Kernel ELF
 $(BUILD)/kernel.elf: $(KERNEL_OBJ) $(ASM_OBJ) linker.ld
@@ -113,12 +121,12 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 # Run in QEMU
 run: $(TARGET)
 	@echo "[QEMU] Starting OS"
-	@qemu-system-i386 -monitor stdio -hda $(TARGET) -no-reboot
+	@qemu-system-i386 -monitor stdio -m 64M -hda $(TARGET) -no-reboot
 
 # Debug in QEMU with GDB
 debug: $(TARGET)
 	@echo "[QEMU] Starting in debug mode"
-	@qemu-system-i386 -monitor stdio -drive format=raw,file=$(TARGET) -s -S &
+	@qemu-system-i386 -monitor stdio -m 64M -drive format=raw,file=$(TARGET) -s -S &
 	@echo "[GDB] Starting debugger"
 	@gdb -x 1kernel.gdb
 
