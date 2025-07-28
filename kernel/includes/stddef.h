@@ -1,6 +1,8 @@
-#ifndef STDDEF_H
-#define STDDEF_H
+#pragma once
+
+#include "stdint.h"
 
 #define NULL ((void*)0)
 
-#endif
+typedef unsigned int size_t;
+

@@ -36,5 +36,9 @@ SECTIONS
         *(.bss)
         __bss_end = .;
     }
+
+    __heap_start = .;
+    . = . + 1M;     /* 1MB Heap */
+    __heap_end = .;
     /DISCARD/ : { *(.comment .note .eh_frame) }
 }

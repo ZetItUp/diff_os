@@ -22,6 +22,8 @@ ASM_SRC = \
 	kernel/arch/x86_64/cpu/isr_stub.asm
 
 KERNEL_SRC = \
+    kernel/library/string.c \
+	kernel/library/printf.c \
 	kernel/arch/x86_64/cpu/idt.c \
 	kernel/arch/x86_64/cpu/irq.c \
 	kernel/arch/x86_64/cpu/io.c \
@@ -30,9 +32,8 @@ KERNEL_SRC = \
 	kernel/kernel.c \
     kernel/console.c \
     kernel/fs/diff.c \
-    kernel/library/string.c \
-	kernel/library/printf.c \
     kernel/memory/paging.c \
+	kernel/memory/heap.c
 
 ASM_OBJ = $(addprefix $(OBJ)/,$(notdir $(ASM_SRC:.asm=.o)))
 KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))

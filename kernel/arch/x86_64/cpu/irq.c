@@ -3,7 +3,6 @@
 #include "io.h"
 #include "pic.h"
 #include "console.h"
-#include "string.h"
 
 irq_handler_t irq_handlers[NUM_IRQS];
 

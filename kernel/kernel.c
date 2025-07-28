@@ -8,6 +8,7 @@
 #include "pic.h"
 #include "timer.h"
 #include "stdint.h"
+#include "heap.h"
 
 __attribute__((naked, section(".text.start"))) 
 void _start(void)
@@ -32,6 +33,9 @@ void display_sys_info();
 void print_time();
 void do_tests();
 
+extern char __heap_start;
+extern char __heap_end;
+
 static sys_info_t system;
 
 void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
@@ -49,7 +53,10 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 
     uint32_t ram_mb = (uint32_t)(total_ram / (1024 * 1024));
     system.ram_mb = ram_mb;
+    
+    // Initialize paging and heap
     init_paging(ram_mb);
+    init_heap(&__heap_start, &__heap_end);
 
     // Initialize IDT
     idt_init();

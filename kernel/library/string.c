@@ -1,5 +1,4 @@
 #include "string.h"
-#include "stddef.h"
 
 int strncmp(const char *s1, const char *s2, unsigned int n)
 {
@@ -137,5 +136,18 @@ void itoa(int value, char *str, int base)
         *start = *end;
         *end = tmp;
     }
+}
+
+void *memset(void *dest, int value, size_t count)
+{
+    unsigned char *ptr = (unsigned char *)dest;
+    unsigned char val = (unsigned char)value;
+
+    for(size_t i = 0; i < count; i++)
+    {
+        ptr[i] = val;
+    }
+
+    return dest;
 }
 
