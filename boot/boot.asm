@@ -25,7 +25,7 @@ entry:
     ; Load Stage 2 from disk (4 sectors) to 0x0000:0x8000
     mov byte [dap], 0x10                ; Size of DAP
     mov byte [dap+1], 0x00
-    mov word [dap+2], 4                 ; Stage 2 = 4 sectors
+    mov word [dap+2], 32                ; Stage 2 Loader = 32 sectors
     mov word [dap+4], 0x8000            ; Offset
     mov word [dap+6], 0x0000            ; Segment
     mov dword [dap+8], 1                ; LBA after boot sector

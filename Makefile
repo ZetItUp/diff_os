@@ -14,6 +14,12 @@ LDFLAGS = -n -T linker.ld
 OBJCOPYFLAGS = -O binary
 NASMFLAGS = -f bin
 
+# mkdiffos tool
+MKDIFFOS = $(BUILD)/mkdiffos
+TOOLS_DIR = tools
+
+IMAGE = $(TARGET)
+
 # Source Files
 BOOT_STAGE1 = boot/boot.asm
 BOOT_STAGE2 = boot/boot_stage2.asm
@@ -39,19 +45,20 @@ ASM_OBJ = $(addprefix $(OBJ)/,$(notdir $(ASM_SRC:.asm=.o)))
 KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))
 
 # Targets
-TARGET = $(BUILD)/os-img.bin
+TARGET = $(BUILD)/diffos.img
 
-.PHONY: all clean run debug
+.PHONY: all clean run debug tools
 
-all: $(TARGET)
+all: tools $(TARGET)
+
+tools:
+	@echo "[TOOLS] Making tools..."
+	@$(MAKE) -C $(TOOLS_DIR) all --no-print-directory
 
 # Main OS image
-$(TARGET): $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
+$(TARGET): tools $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] Creating OS image"
-	@dd if=/dev/zero of=$@ bs=512 count=4096 2>/dev/null
-	@dd if=$(BUILD)/boot.bin of=$@ conv=notrunc 2>/dev/null
-	@dd if=$(BUILD)/boot_stage2.bin of=$@ bs=512 seek=1 conv=notrunc 2>/dev/null
-	@dd if=$(BUILD)/kernel.bin of=$@ bs=512 seek=2048 conv=notrunc 2>/dev/null
+	$(MKDIFFOS) $(TARGET) 64 $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] OS image created: $@"
 
 # Bootloader Stages
@@ -134,4 +141,6 @@ debug: $(TARGET)
 # Clean build
 clean:
 	@echo "[CLEAN] Removing build files"
+	@echo "[CLEAN] Removing tools build files"
+	@$(MAKE) -C $(TOOLS_DIR) clean --no-print-directory
 	@rm -rf $(BUILD)

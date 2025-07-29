@@ -4,19 +4,42 @@
 mov ax, [0x8000]                        ; Get the boot drive we got from bios in Stage 1
 mov [boot_drive], ax
 
+DAP_ADDR        equ 0x3000
+MAX_SECTORS     equ 127
+SECTOR_SIZE     equ 512
+
+SUPERBLOCK_LBA  equ 2048
+SUPERBLOCK_SEG  equ 0x1000
+FILETABLE_SEG   equ 0x2000
+
+file_lba_low:       dw 0                ; LBA low word
+file_lba_high:      dw 0                ; LBA high word
+file_remain:        dw 0                ; Remaining Sectors
+buffer_segment:     dw 0
+
+dap:
+    db 0x10          ; Size
+    db 0             ; Reserved
+    dw 0             ; Sector count
+    dw 0             ; Buffer offset
+    dw 0             ; Buffer segment
+    dd 0             ; LBA low
+    dd 0             ; LBA high
+
 entry_stage2:
-    xor ebx, ebx                      ; continuation = 0
-    mov edx, 0x534D4150               ; 'SMAP'
+    xor ebx, ebx                        ; continuation = 0
+    mov edx, 0x534D4150                 ; 'SMAP'
     mov edi, e820_buffer
-    mov ax, 0                         ; clear ES
+    mov ax, 0                           ; clear ES
     mov es, ax
-    mov si, 0                         ; SI = entry counter
+    mov ds, ax
+    mov si, 0                           ; SI = entry counter
 
 .get_e820:
     mov eax, 0xE820
-    mov ecx, 24                       ; size of buffer
+    mov ecx, 24                         ; size of buffer
     int 0x15
-    jc .done_e820                     ; CF=1 -> done
+    jc .done_e820                       ; CF=1 -> done
     cmp eax, 0x534D4150
     jne .done_e820
 
@@ -30,43 +53,191 @@ entry_stage2:
 .done_e820:
     mov [mem_entry_count], si
 
-    mov cx, 3                           ; Attempt to read the kernel 3 times
-.load_kernel:   
-    mov byte [bp], 0x10                ; Size of DAP
-    mov byte [bp+1], 0x00
+    ; Mount Diff FS and find /system/kernel.bin
 
-%include "build/kernel_sizes.inc"       ; Include kernel_sizes.inc to get calculated sizes from buildtime
-    mov word [bp+2], KERNEL_SECTORS    ; Kernel sectors
-    mov word [bp+4], 0x0000            ; Offset
-    mov word [bp+6], 0x1000            ; Segment 
-    mov dword [bp+8], 2048             ; LBA (Kernel is at 2048)
-    mov dword [bp+12], 0x00
-    mov si, bp
-    mov dl, [boot_drive]                ; Get the boot drive, put it in dl
+start_loader:
+    ; Spara boot drive (DL från stage1)
+    mov [boot_drive], dl
+
+    ; === Steg 1: Läs superblock (1 sektor) ===
+    mov word [file_lba_low], SUPERBLOCK_LBA
+    mov word [file_lba_high], 0
+    mov word [buffer_segment], SUPERBLOCK_SEG
+    mov dx, 1
+    call read_chunk
+
+    ; DEBUG: printa första ordet i superblock
+    mov ax, SUPERBLOCK_SEG
+    mov es, ax
+    mov ax, [es:0]
+    call print_hex16
+    
+    ; === Steg 2: Hämta filtabellens info från superblock ===
+    mov ax, SUPERBLOCK_SEG
+    mov es, ax
+    mov ax, [es:0]       ; filetable LBA low
+    mov [file_lba_low], ax
+    mov ax, [es:2]       ; filetable LBA high
+    mov [file_lba_high], ax
+    mov ax, [es:4]       ; antal sektorer
+    mov [file_remain], ax
+
+    ; === Steg 3: Läs filtabellen i chunkar ===
+    mov word [buffer_segment], FILETABLE_SEG
+    call read_large_file
+
+    ; DEBUG: printa första ordet i filtabellen
+    mov ax, FILETABLE_SEG
+    mov es, ax
+    mov ax, [es:0]
+    call print_hex16
+
+    ; DONE → hoppa till nästa steg (t.ex. laddning av kernel)
+    jmp $
+
+
+; -------------------------------------------------
+; BIOS LBA READ via INT 13h (DL=boot drive)
+; (sector count in DX, segment in [buffer_segment], LBA in [file_lba_low])
+; -------------------------------------------------
+read_chunk:
+    ; Fyll DAP
+    mov byte [dap], 0x10
+    mov byte [dap+1], 0
+    mov [dap+2], dx
+    mov word [dap+4], 0
+    mov ax, [buffer_segment]
+    mov [dap+6], ax
+    mov ax, [file_lba_low]
+    mov [dap+8], ax
+    mov ax, [file_lba_high]
+    mov [dap+10], ax
+    mov word [dap+12], 0
+    mov word [dap+14], 0
+
+
+
+    ; Läs
+    mov si, dap
+    mov dl, [boot_drive]
     mov ah, 0x42
-    int 0x13                            ; Read from disk
-    jnc .kernel_ok                      ; If read succeeded, jump to kernel_ok
-    loop .load_kernel                   ; Else loop back to .load_kernel
-    mov si, msg_load_fail               ; Couldn't load the kernel, show error and halt CPU
-    jmp error   
 
-.kernel_ok:
-    xor ax, ax                          
-    mov ds, ax                          ; Make sure Data Segment is zero
+    push ax
 
-    lgdt [gdt_descriptor]               ; Load GDT Descriptor
+    call debug_dap
+
+    pop ax
+
+    int 0x13
+    jc fail_load
+    ret
+
+; -------------------------------------------------
+; read_large_file - laddar [file_remain] sektorer från [file_lba_low] till minne
+; -------------------------------------------------
+read_large_file:
+.next_chunk:
+    mov ax, [file_remain]
+    or ax, ax
+    jz .done
+
+    cmp ax, MAX_SECTORS
+    jbe .use_ax
+    mov dx, MAX_SECTORS
+    jmp .have_dx
+.use_ax:
+    mov dx, ax
+.have_dx:
+
+    call read_chunk
+
+    ; Uppdatera buffer segment
+    mov ax, dx
+    shl ax, 5
+    add [buffer_segment], ax
+
+    ; Uppdatera LBA
+    mov ax, [file_lba_low]
+    add ax, dx
+    mov [file_lba_low], ax
+    jc .carry
+    jmp .skip
+.carry:
+    inc word [file_lba_high]
+.skip:
+
+    ; Uppdatera remain
+    mov ax, [file_remain]
+    sub ax, dx
+    mov [file_remain], ax
+
+    jmp .next_chunk
+.done:
+    ret
+
+
+debug_dap:
+    mov si, dap
+    mov cx, 16       ; Visa hela 16-byte DAP
+    mov ah, 0x0E     ; BIOS teletype
+.dap_loop:
+    lodsb            ; Läs byte från [si] till al, öka si
+    push ax
+    shr al, 4
+    call .nibble
+    pop ax
+    and al, 0x0F
+    call .nibble
+    mov al, ' '
+    int 0x10
+    loop .dap_loop
+    ;jmp $            ; Frysa här för att läsa utskriften
+
+
+.nibble:
+    add al, '0'
+    cmp al, '9'
+    jbe .print
+    add al, 7
+.print:
+    int 0x10
+    ret
+
+print_hex8:
+    push ax
+    mov ah, 0x0E
+    push bx
+    mov bh, al
+    shr al, 4
+    and al, 0x0F
+    mov bl, al
+    mov al, [hex_chars + bx]
+    int 0x10
+    mov al, bh
+    and al, 0x0F
+    mov bl, al
+    mov al, [hex_chars + bx]
+    int 0x10
+    mov al, ' '
+    int 0x10
+    pop bx
+    pop ax
+    ret    
+
+
+    ; Switch to Protected Mode
+    xor ax, ax
+    mov ds, ax                          ; Make sure DS is 0 (zero)
+    lgdt [gdt_descriptor]
 
     mov eax, cr0
     or eax, 1                           ; Set PM bit to 1
     mov cr0, eax
-
-    jmp CODE_SEG:init_pm                ; Do far jump into init_pm
+    jmp CODE_SEG:init_pm                ; Far jump into init_pm
 
 ; 32-bit Protected Mode Initialization
 [BITS 32]
 init_pm:
-%include "build/kernel_sizes.inc"       ; This needs to be included here so 32-bit
-                                        ; protected mode knows about KERNEL_MOVSDS
     mov ax, DATA_SEG
     mov ds, ax
     mov es, ax
@@ -85,7 +256,8 @@ init_pm:
 
     mov esi, 0x10000
     mov edi, 0x100000       
-    mov ecx, KERNEL_MOVSDS  
+    mov ecx, [kernel_sectors]
+    shl ecx, 7                          ; Sectors * 512 / 4
     rep movsd                           ; Move the kernel from 0x10000 to 0x100000 (1MB) 
 
     ; Send E820 info to the kernel by pushing pointer + count
@@ -95,6 +267,11 @@ init_pm:
     jmp CODE_SEG:0x100000               ; Jump to 1MB in RAM, Kernel should be here now.
 
 [BITS 16]
+; Error Handling
+fail_load:
+    mov si, msg_load_fail
+    jmp error
+
 ; Prints message to the screen in Real Mode
 print_string:
     pusha
@@ -181,11 +358,30 @@ DATA_SEG equ gdt_data - gdt_start       ; Calculate Data Segment
 hex_chars db '0123456789ABCDEF'         ; Hex characters
 boot_drive db 0
 
+kernel_name db 'kernel.bin',0
+system_name db 'system', 0
+
+system_id dw 0
+filetable_lba dd 0
+filetable_size dd 0
+kernel_start_lba dd 0
+kernel_sectors dd 0
+
+msg_sys db 'SYS=',0
+msg_ker db 'KER=',0
+msg_sec db 'SEC=',0
+
 e820_buffer:
     times 32 * 24 db 0                  ; Buffer for 32 entries (24 bytes each)
     mem_entry_count dd 0                ; Number of entries found
 
 ; Messages
+msg_remain db 'Remaining: ',0
+msg_ftlba       db 'Filetable:',0
+msg_ftsize      db 'Filetable Size: ', 0
+msg_chunk       db 'CHUNK...',0
 msg_load_fail   db 'ERROR: Kernel missing',0
 msg_halt        db 'System Halted',0
-
+msg_kern        db 'Kernel',0
+msg_dap db 'DAP:',0
+msg_ok          db 'OK',0
