@@ -7,7 +7,7 @@ SECTIONS
     
     . = 0x100000;
 
-    /* Textsekction (code) */
+    /* Textsection (code) */
     .text ALIGN(0x1000) : {
         *(.text.start)
         *(.text)
@@ -26,11 +26,11 @@ SECTIONS
 
     .stack ALIGN(0x1000) : {
         __stack_bottom = .;
-        . = . + 0x4000; /* 16 KB stack, väx nedåt */
+        . = . + 0x4000; /* 16 KB stack */
         __stack_top = .;
     }
 
-    /* BSS-section (zero-initialized variables) */
+    /* BSS-section  */
     .bss ALIGN(0x1000) : {
         __bss_start = .;
         *(.bss)

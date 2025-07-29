@@ -10,7 +10,7 @@
 #define SECTOR_SIZE 512
 #define RESERVED_STAGE2_SECTORS 31
 #define FS_START_LBA 2048
-#define PARTITION_TYPE 0x83         
+#define PARTITION_TYPE 0xC8        // Let's pretend DiffFS is something from DR-DOS 
 #define MAX_FILES 256
 #define MAX_FILENAME_LEN 64
 
