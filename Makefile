@@ -129,7 +129,7 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 # Run in QEMU
 run: $(TARGET)
 	@echo "[QEMU] Starting OS"
-	@qemu-system-i386 -monitor stdio -m 64M -hda $(TARGET) 
+	@qemu-system-i386 -monitor stdio -m 64M -drive id=disk,file=build/diffos.img,if=ide,format=raw
 	
 # Debug in QEMU with GDB
 debug: $(TARGET)

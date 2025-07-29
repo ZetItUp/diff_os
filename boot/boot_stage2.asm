@@ -4,13 +4,12 @@
 mov ax, [0x8000]                        ; Get the boot drive we got from bios in Stage 1
 mov [boot_drive], ax
 
-DAP_ADDR        equ 0x3000
 MAX_SECTORS     equ 127
 SECTOR_SIZE     equ 512
 
 SUPERBLOCK_LBA  equ 2048
 SUPERBLOCK_SEG  equ 0x1000
-FILETABLE_SEG   equ 0x2000
+FILETABLE_SEG   equ 0x3000
 
 file_lba_low:       dw 0                ; LBA low word
 file_lba_high:      dw 0                ; LBA high word
@@ -18,13 +17,13 @@ file_remain:        dw 0                ; Remaining Sectors
 buffer_segment:     dw 0
 
 dap:
-    db 0x10          ; Size
-    db 0             ; Reserved
-    dw 0             ; Sector count
-    dw 0             ; Buffer offset
-    dw 0             ; Buffer segment
-    dd 0             ; LBA low
-    dd 0             ; LBA high
+    db 0x10                             ; Size
+    db 0                                ; Reserved
+    dw 0                                ; Sector count
+    dw 0                                ; Buffer offset
+    dw 0                                ; Buffer segment
+    dd 0                                ; LBA low
+    dd 0                                ; LBA high
 
 entry_stage2:
     xor ebx, ebx                        ; continuation = 0
@@ -53,55 +52,64 @@ entry_stage2:
 .done_e820:
     mov [mem_entry_count], si
 
-    ; Mount Diff FS and find /system/kernel.bin
-
 start_loader:
-    ; Spara boot drive (DL från stage1)
-    mov [boot_drive], dl
-
-    ; === Steg 1: Läs superblock (1 sektor) ===
+    ; Read superblock, 1 sector
     mov word [file_lba_low], SUPERBLOCK_LBA
     mov word [file_lba_high], 0
     mov word [buffer_segment], SUPERBLOCK_SEG
     mov dx, 1
     call read_chunk
 
-    ; DEBUG: printa första ordet i superblock
+    ; Get filetable from the superblock
     mov ax, SUPERBLOCK_SEG
     mov es, ax
-    mov ax, [es:0]
-    call print_hex16
-    
-    ; === Steg 2: Hämta filtabellens info från superblock ===
-    mov ax, SUPERBLOCK_SEG
-    mov es, ax
-    mov ax, [es:0]       ; filetable LBA low
+
+    mov ax, [es:0x0C]                   ; Filetable LBA low
     mov [file_lba_low], ax
-    mov ax, [es:2]       ; filetable LBA high
+    mov ax, [es:0x0E]                   ; Filetable LBA high
     mov [file_lba_high], ax
-    mov ax, [es:4]       ; antal sektorer
+    mov ax, [es:0x10]                   ; Total sectors
     mov [file_remain], ax
 
-    ; === Steg 3: Läs filtabellen i chunkar ===
+    ; Read the file table in chunks
     mov word [buffer_segment], FILETABLE_SEG
     call read_large_file
-
-    ; DEBUG: printa första ordet i filtabellen
+    
+    ; Get the kernel from the file table
     mov ax, FILETABLE_SEG
     mov es, ax
-    mov ax, [es:0]
-    call print_hex16
 
-    ; DONE → hoppa till nästa steg (t.ex. laddning av kernel)
-    jmp $
+    ; Kernel entry = Entry 2 (offset 2 * sizeof(FileEntry))
+    ; sizeof(FileEntry) = 128 bytes (0x80)
+    mov bx, 0x100                       ; (2 * 0x80) = 0x100
 
+    ; Start sector (4 bytes) at offset 0x40 
+    mov ax, [es:bx+0x4C]
+    mov [file_lba_low], ax
+    mov ax, [es:bx+0x4E]
+    mov [file_lba_high], ax
+
+    ; Sector count at offset 0x44
+    mov ax, [es:bx+0x50]
+    mov [file_remain], ax
+    mov [kernel_sectors], ax            ; Store for Protected Mode
+    
+    ; Read kernel
+    mov word [buffer_segment], 0x1000   ; 0x1000:0000 = 1MB
+    call read_large_file
+
+    call switch_pm
+.halt:
+    cli
+    hlt
+    jmp .halt
 
 ; -------------------------------------------------
 ; BIOS LBA READ via INT 13h (DL=boot drive)
 ; (sector count in DX, segment in [buffer_segment], LBA in [file_lba_low])
 ; -------------------------------------------------
 read_chunk:
-    ; Fyll DAP
+    ; DAP
     mov byte [dap], 0x10
     mov byte [dap+1], 0
     mov [dap+2], dx
@@ -115,28 +123,20 @@ read_chunk:
     mov word [dap+12], 0
     mov word [dap+14], 0
 
-
-
-    ; Läs
+    ; Read
     mov si, dap
     mov dl, [boot_drive]
     mov ah, 0x42
-
-    push ax
-
-    call debug_dap
-
-    pop ax
-
     int 0x13
     jc fail_load
     ret
 
 ; -------------------------------------------------
-; read_large_file - laddar [file_remain] sektorer från [file_lba_low] till minne
+; read_large_file - load [file_remain] sectors from [file_lba_low] into RAM
 ; -------------------------------------------------
 read_large_file:
 .next_chunk:
+    xor dx, dx
     mov ax, [file_remain]
     or ax, ax
     jz .done
@@ -145,62 +145,42 @@ read_large_file:
     jbe .use_ax
     mov dx, MAX_SECTORS
     jmp .have_dx
+
 .use_ax:
     mov dx, ax
+
 .have_dx:
-
+    mov ax, [buffer_segment]
+    mov cx, dx
     call read_chunk
-
-    ; Uppdatera buffer segment
+    mov dx, cx
+    mov ax, dx
+    
+    ; Update buffer segment
     mov ax, dx
     shl ax, 5
     add [buffer_segment], ax
 
-    ; Uppdatera LBA
+    ; Update LBA
     mov ax, [file_lba_low]
     add ax, dx
     mov [file_lba_low], ax
     jc .carry
     jmp .skip
+
 .carry:
     inc word [file_lba_high]
+
 .skip:
 
-    ; Uppdatera remain
+    ; Update remain
     mov ax, [file_remain]
     sub ax, dx
     mov [file_remain], ax
 
     jmp .next_chunk
+
 .done:
-    ret
-
-
-debug_dap:
-    mov si, dap
-    mov cx, 16       ; Visa hela 16-byte DAP
-    mov ah, 0x0E     ; BIOS teletype
-.dap_loop:
-    lodsb            ; Läs byte från [si] till al, öka si
-    push ax
-    shr al, 4
-    call .nibble
-    pop ax
-    and al, 0x0F
-    call .nibble
-    mov al, ' '
-    int 0x10
-    loop .dap_loop
-    ;jmp $            ; Frysa här för att läsa utskriften
-
-
-.nibble:
-    add al, '0'
-    cmp al, '9'
-    jbe .print
-    add al, 7
-.print:
-    int 0x10
     ret
 
 print_hex8:
@@ -224,7 +204,7 @@ print_hex8:
     pop ax
     ret    
 
-
+switch_pm:
     ; Switch to Protected Mode
     xor ax, ax
     mov ds, ax                          ; Make sure DS is 0 (zero)
@@ -250,7 +230,7 @@ init_pm:
     xor eax, eax
     rep stosd
 
-    mov esp, 0x7C00                     ; Set the stack in Protected Mode to 0x7FFFF
+    mov esp, 0x7FFFF                     ; Set the stack in Protected Mode to 0x7FFFF
     mov ebp, esp
     push esp
 
@@ -269,6 +249,7 @@ init_pm:
 [BITS 16]
 ; Error Handling
 fail_load:
+    call print_hex16
     mov si, msg_load_fail
     jmp error
 
@@ -358,30 +339,12 @@ DATA_SEG equ gdt_data - gdt_start       ; Calculate Data Segment
 hex_chars db '0123456789ABCDEF'         ; Hex characters
 boot_drive db 0
 
-kernel_name db 'kernel.bin',0
-system_name db 'system', 0
-
-system_id dw 0
-filetable_lba dd 0
-filetable_size dd 0
-kernel_start_lba dd 0
 kernel_sectors dd 0
-
-msg_sys db 'SYS=',0
-msg_ker db 'KER=',0
-msg_sec db 'SEC=',0
 
 e820_buffer:
     times 32 * 24 db 0                  ; Buffer for 32 entries (24 bytes each)
     mem_entry_count dd 0                ; Number of entries found
 
 ; Messages
-msg_remain db 'Remaining: ',0
-msg_ftlba       db 'Filetable:',0
-msg_ftsize      db 'Filetable Size: ', 0
-msg_chunk       db 'CHUNK...',0
 msg_load_fail   db 'ERROR: Kernel missing',0
 msg_halt        db 'System Halted',0
-msg_kern        db 'Kernel',0
-msg_dap db 'DAP:',0
-msg_ok          db 'OK',0

@@ -10,7 +10,7 @@
 #define SECTOR_SIZE 512
 #define RESERVED_STAGE2_SECTORS 31
 #define FS_START_LBA 2048
-#define PARTITION_TYPE 0x99         
+#define PARTITION_TYPE 0x83         
 #define MAX_FILES 256
 #define MAX_FILENAME_LEN 64
 
