@@ -83,10 +83,6 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 
     while(1)
     {
-        if (inb(0x64) & 0x01) {
-        uint8_t sc = inb(0x60);
-        printf("POLL: %02x\n", sc);
-    }
         //print_time();
     }
 }

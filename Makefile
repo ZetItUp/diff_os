@@ -136,8 +136,8 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 # Run in QEMU
 run: $(TARGET)
 	@echo "[QEMU] Starting OS"
-	@VBoxManage convertfromraw --format VDI build/diffos.img build/diffos.vdi
-	@qemu-system-i386 -monitor stdio -m 64M -machine pc -drive id=disk,file=build/diffos.img,if=ide,format=raw -device i8042
+	#@VBoxManage convertfromraw --format VDI build/diffos.img build/diffos.vdi
+	@qemu-system-i386 -monitor stdio -m 64M -drive id=disk,file=build/diffos.img,if=ide,format=raw
 
 # Debug in QEMU with GDB
 debug: $(TARGET)

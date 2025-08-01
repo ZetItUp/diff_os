@@ -59,7 +59,6 @@ static void wait_output(void)
 // Queue 
 static void kbq_send_cmd(kb_cmd_t *cmd)
 {
-    printf("SEND cmd=%x, has_data=%d, data=%x\n", cmd->command, cmd->has_data, cmd->data);
     wait_input();
     
     kb_cmdq_state = KBQ_WAIT_ACK;
@@ -70,17 +69,13 @@ static void kbq_send_cmd(kb_cmd_t *cmd)
         wait_input();
         outb(KEYBOARD_DATA, cmd->data);
     }
-
-    printf("kbq_send_cmd: now waiting for ack\n");
 }
 
 static void kbq_start_next(void)
 {
-    printf("kbq_start_next: count=%d, state=%d, head=%d, tail=%d\n", kb_q_count, kb_cmdq_state, kb_q_head, kb_q_tail);
     if(kb_q_count == 0)
     {
         kb_cmdq_state = KBQ_IDLE;
-        printf("kbq_start_next: now idle\n");
 
         return;
     }
@@ -91,8 +86,6 @@ static void kbq_start_next(void)
 
 static int kbq_enqueue(uint8_t cmd, int has_data, uint8_t data)
 {
-    printf("ENQUEUE cmd=%x, has_data=%d, data=%x (state=%d)\n", cmd, has_data, data, kb_cmdq_state);
-
     if(kb_q_count >= KB_CMD_QUEUE_SIZE)
     {
         return -1;
@@ -167,14 +160,6 @@ static void keyboard_irq(void)
 {
     uint8_t val = inb(KEYBOARD_DATA);
 
-    uint8_t status = inb(0x64);
-if (status & 0x01) {
-    uint8_t data = inb(0x60);
-    printf("IRQ1: status=%x data=%x\n", status, data);
-} else {
-    printf("IRQ1: status=%x (NO DATA)\n", status);
-}
-
     // Handle command queue states
     if(kb_cmdq_state == KBQ_WAIT_ACK)
     {
@@ -224,15 +209,13 @@ if (status & 0x01) {
         return;
     }
 
-    if (val == 0xFA || val == 0xFE)
+    if (val == 0xFA || val == 0xFE || val == 0xAA)
     {
         return;
     }
 
     // TODO: Implement scan code state machine
     printf("[Keyboard] %x\n", val);
-
-    pic_send_eoi(1);
 }
 
 driver_t keyboard_driver =
