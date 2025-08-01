@@ -3,13 +3,21 @@
 #include "io.h"
 #include "pic.h"
 #include "console.h"
+#include "stdio.h"
+#include "drivers/driver.h"
 
 irq_handler_t irq_handlers[NUM_IRQS];
 
 void irq_handler_c(unsigned irq_ptr, void *context)
 {
-    uint8_t *stack = (uint8_t*)irq_ptr;
-    uint8_t irq = stack[1]; 
+    uint32_t *stack = (uint32_t*)irq_ptr;
+    uint32_t irq = stack[0]; 
+
+    // Check if Driver Manager should handle it
+    if(irq >= 32)
+    {
+        driver_irq_dispatch(irq - 32);
+    }
 
     if(irq < NUM_IRQS && irq_handlers[irq])
     {
@@ -17,7 +25,14 @@ void irq_handler_c(unsigned irq_ptr, void *context)
     }
 
     // Always send EOI
-    pic_send_eoi((unsigned char)irq);
+    if(irq >= 32)
+    {
+        pic_send_eoi((unsigned char)irq - 32);
+    }
+    else
+    {
+        pic_send_eoi((unsigned char)irq);
+    }
 }
 
 void irq_install_handler(uint8_t irq, irq_handler_t handler)

@@ -35,6 +35,8 @@ KERNEL_SRC = \
 	kernel/arch/x86_64/cpu/io.c \
 	kernel/arch/x86_64/cpu/pic.c \
 	kernel/arch/x86_64/cpu/timer.c \
+	kernel/drivers/driver.c \
+	kernel/drivers/keyboard.c \
 	kernel/kernel.c \
     kernel/console.c \
     kernel/fs/diff.c \
@@ -116,6 +118,11 @@ $(OBJ)/%.o: kernel/library/%.c
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+$(OBJ)/%.o: kernel/drivers/%.c
+	@mkdir -p $(OBJ)
+	@echo "[CC] Compiling $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
 $(OBJ)/%.o: kernel/memory/%.c
 	@mkdir -p $(OBJ)
 	@echo "[CC] Compiling $<"
@@ -129,8 +136,9 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 # Run in QEMU
 run: $(TARGET)
 	@echo "[QEMU] Starting OS"
-	@qemu-system-i386 -monitor stdio -m 64M -drive id=disk,file=build/diffos.img,if=ide,format=raw
-	
+	@VBoxManage convertfromraw --format VDI build/diffos.img build/diffos.vdi
+	@qemu-system-i386 -monitor stdio -m 64M -machine pc -drive id=disk,file=build/diffos.img,if=ide,format=raw -device i8042
+
 # Debug in QEMU with GDB
 debug: $(TARGET)
 	@echo "[QEMU] Starting in debug mode"

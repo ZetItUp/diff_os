@@ -4,7 +4,6 @@ section .text
 %macro ISR_NOERR 1
 global isr%1
 isr%1:
-    cli
     push dword 0        ; fake error code
     push dword %1       ; exception number
     jmp isr_common_stub
@@ -13,7 +12,6 @@ isr%1:
 %macro ISR_ERR 1
 global isr%1
 isr%1:
-    cli
     push dword %1       ; exception number (error code är redan pushad av CPU)
     jmp isr_common_stub
 %endmacro
@@ -22,7 +20,6 @@ isr%1:
 global irq%1
 
 irq%1:
-    cli
     push dword 0
     push dword %2
     jmp irq_common_stub
@@ -125,15 +122,15 @@ irq_common_stub:
 	mov fs, ax
 	mov gs, ax
 
-	mov eax, [esp + 48]
-    push eax
-
+    ; IRQ number is on the stack from MAKE_IRQ
+    ; This means that after pusha + segment-push
+    ; the correct offset is at 46 bytes
+	lea edx, [esp + 48]
     mov eax, esp
-	push eax
+    push eax                ; Argument for irq_handler_c(int irq)
+    push edx
 
-	mov eax, irq_handler_c
-	call eax
-
+	call irq_handler_c
     add esp, 8
 
 	pop gs

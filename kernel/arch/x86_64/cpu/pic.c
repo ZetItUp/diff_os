@@ -1,5 +1,6 @@
 #include "pic.h"
 #include "io.h"
+#include "stdio.h"
 
 // Wait for I/O to let the PIC settle
 static inline void io_wait(void)
@@ -15,10 +16,6 @@ static inline void io_wait(void)
  */
 void pic_remap(int offset1, int offset2)
 {
-    // Save masks
-    unsigned char mask1 = inb(PIC1_DATA);
-    unsigned char mask2 = inb(PIC2_DATA);
-
     // Start Initialization
     outb(PIC1_COMMAND, 0x11);
     io_wait();
@@ -45,8 +42,8 @@ void pic_remap(int offset1, int offset2)
     io_wait();
 
     // Restore saved masks
-    outb(PIC1_DATA, mask1);
-    outb(PIC2_DATA, mask2);
+    outb(PIC1_DATA, 0x0);
+    outb(PIC2_DATA, 0x0);
 }
 
 // Send End of Interrupt Signal (EOI) to PICs
@@ -83,8 +80,8 @@ void pic_set_mask(uint8_t irq_line)
 // Unmask a given IRQ line. (Enable it)
 void pic_clear_mask(uint8_t irq_line)
 {
-    uint16_t port;
-    uint8_t value;
+    uint16_t port = 0;
+    uint8_t value = 0;
 
     if(irq_line < 8)
     {

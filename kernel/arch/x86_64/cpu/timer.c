@@ -4,6 +4,7 @@
 #include "io.h"
 #include "irq.h"
 #include "console.h"
+#include "stdio.h"
 
 #define TIMER_CHANNEL0        0x40
 #define TIMER_COMMAND         0x43

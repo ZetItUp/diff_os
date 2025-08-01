@@ -6,9 +6,11 @@
 #include "idt.h"
 #include "irq.h"
 #include "pic.h"
+#include "io.h"
 #include "timer.h"
 #include "stdint.h"
 #include "heap.h"
+#include "drivers/driver.h"
 
 __attribute__((naked, section(".text.start"))) 
 void _start(void)
@@ -36,13 +38,16 @@ void do_tests();
 extern char __heap_start;
 extern char __heap_end;
 
+extern driver_t keyboard_driver;
+int keyboard_pop(void);
+
 static sys_info_t system;
 
 void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 {
     clear();
-    uint32_t total_ram = 0;
 
+    uint32_t total_ram = 0;
     for(uint32_t i = 0; i < mem_entry_count; i++)
     {
         if(bios_mem_map[i].type == 1 && bios_mem_map[i].base_high == 0)
@@ -63,20 +68,25 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
     // Remap PIC
     pic_remap(0x20, 0x28);
     // Initialize IRQ
-    irq_init();
-
+    irq_init(); 
     // Install timer handler
     timer_install();
-    
     asm volatile("sti");
 
     display_banner();
-    display_sys_info(); 
+    display_sys_info();
+
+
+    driver_register(&keyboard_driver);
 
     //do_tests();
 
     while(1)
     {
+        if (inb(0x64) & 0x01) {
+        uint8_t sc = inb(0x60);
+        printf("POLL: %02x\n", sc);
+    }
         //print_time();
     }
 }
