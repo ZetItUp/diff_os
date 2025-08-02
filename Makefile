@@ -20,6 +20,18 @@ TOOLS_DIR = tools
 
 IMAGE = $(TARGET)
 
+IMAGE_DRIVERS_PATH = image/system/drivers
+
+# Drivers
+DRIVERS_PATH = drivers
+DRIVERS_SOURCE := $(wildcard $(DRIVERS_PATH)/*.c)
+DRIVERS_OBJ := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%.o,$(DRIVERS_SOURCE))
+DRIVERS_DDF := $(patsubst $(DRIVERS_PATH)/%.c,$(IMAGE_DRIVERS_PATH)/%.ddf,$(DRIVERS_SOURCE))
+
+DRIVERS_CFLAGS = -ffreestanding -I kernel/includes -c
+DRIVERS_LD = -Ttext 0x0 -r
+DRIVERS_OBJCOPY = -O binary
+
 # Source Files
 BOOT_STAGE1 = boot/boot.asm
 BOOT_STAGE2 = boot/boot_stage2.asm
@@ -36,7 +48,6 @@ KERNEL_SRC = \
 	kernel/arch/x86_64/cpu/pic.c \
 	kernel/arch/x86_64/cpu/timer.c \
 	kernel/drivers/driver.c \
-	kernel/drivers/keyboard.c \
 	kernel/kernel.c \
     kernel/console.c \
     kernel/fs/diff.c \
@@ -49,9 +60,9 @@ KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))
 # Targets
 TARGET = $(BUILD)/diffos.img
 
-.PHONY: all clean run debug tools
+.PHONY: all clean run debug tools drivers
 
-all: tools $(TARGET)
+all: tools drivers $(TARGET)
 
 tools:
 	@echo "[TOOLS] Making tools..."
@@ -60,7 +71,7 @@ tools:
 # Main OS image
 $(TARGET): tools $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] Creating OS image"
-	$(MKDIFFOS) $(TARGET) 64 $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
+	@$(MKDIFFOS) $(TARGET) 64 $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] OS image created: $@"
 
 # Bootloader Stages
@@ -88,7 +99,6 @@ $(BUILD)/kernel_sizes.inc: $(BUILD)/kernel.bin
 	@echo "KERNEL_SIZE equ $$(stat -c %s $(BUILD)/kernel.bin)" > $@
 	@echo "KERNEL_SECTORS equ $$(expr \( $$(stat -c %s $(BUILD)/kernel.bin) + 511 \) / 512)" >> $@
 	@echo "KERNEL_MOVSDS equ $$(expr \( $$(stat -c %s $(BUILD)/kernel.bin) + 3 \) / 4)" >> $@
-
 
 # Kernel binary
 $(BUILD)/kernel.bin: $(BUILD)/kernel.elf
@@ -133,10 +143,39 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+# Drivers
+drivers: $(DRIVERS_DDF)
+
+$(DRIVERS_PATH)/obj:
+	@mkdir -p drivers/obj
+
+$(DRIVERS_PATH)/obj/%.o: $(DRIVERS_PATH)/%.c | $(DRIVERS_PATH)/obj
+	@echo "[DRIVERS CC] Compiling $<"
+	@i386-elf-gcc $(DRIVERS_CFLAGS) $< -o $@
+
+$(DRIVERS_PATH)/obj/%.ddf.elf: $(DRIVERS_PATH)/obj/%.o
+	@echo "[DRIVERS LD] Linking driver $<"
+	@i386-elf-ld $(DRIVERS_LD) -o $@ $<
+
+$(IMAGE_DRIVERS_PATH)/%.ddf: $(DRIVERS_PATH)/obj/%.ddf.elf | $(IMAGE_DRIVERS_PATH)
+	@echo "[DRIVERS] Creating driver $<"
+	@i386-elf-objcopy $(DRIVERS_OBJCOPY) $< $@
+	@echo "[DRIVERS] Driver $< created"
+	@rm $<
+
+$(IMAGE_DRIVERS_PATH):
+	@mkdir -p $(IMAGE_DRIVERS_PATH)
+
+drivers_clean:
+	@echo "[DRIVERS] Removing driver files"
+	@rm -rf $(DRIVERS_PATH)/obj
+	@rm -rf $(DRIVERS_PATH)/*.ddf
+
+
 # Run in QEMU
-run: $(TARGET)
+run: all
 	@echo "[QEMU] Starting OS"
-	#@VBoxManage convertfromraw --format VDI build/diffos.img build/diffos.vdi
+	@# @VBoxManage convertfromraw --format VDI build/diffos.img build/diffos.vdi
 	@qemu-system-i386 -monitor stdio -m 64M -drive id=disk,file=build/diffos.img,if=ide,format=raw
 
 # Debug in QEMU with GDB
@@ -147,7 +186,7 @@ debug: $(TARGET)
 	@gdb -x 1kernel.gdb
 
 # Clean build
-clean:
+clean: drivers_clean
 	@echo "[CLEAN] Removing build files"
 	@echo "[CLEAN] Removing tools build files"
 	@$(MAKE) -C $(TOOLS_DIR) clean --no-print-directory

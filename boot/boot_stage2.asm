@@ -71,6 +71,12 @@ start_loader:
     mov ax, [es:0x10]                   ; Total sectors
     mov [file_remain], ax
 
+mov ax, [file_lba_low]
+call print_hex16
+mov ax, [file_lba_high]
+call print_hex16
+
+
     ; Read the file table in chunks
     mov word [buffer_segment], FILETABLE_SEG
     call read_large_file
@@ -93,10 +99,13 @@ start_loader:
     mov ax, [es:bx+0x50]
     mov [file_remain], ax
     mov [kernel_sectors], ax            ; Store for Protected Mode
-    
+    mov ah, 0x0E
+    mov al, 'Q'
+    int 0x10
     ; Read kernel
     mov word [buffer_segment], 0x1000   ; 0x1000:0000 = 1MB
     call read_large_file
+    
 
     call switch_pm
 .halt:

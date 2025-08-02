@@ -38,7 +38,6 @@ void do_tests();
 extern char __heap_start;
 extern char __heap_end;
 
-extern driver_t keyboard_driver;
 int keyboard_pop(void);
 
 static sys_info_t system;
@@ -75,9 +74,6 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 
     display_banner();
     display_sys_info();
-
-
-    driver_register(&keyboard_driver);
 
     //do_tests();
 

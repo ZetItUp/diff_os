@@ -1,25 +1,26 @@
 # Compiler
 CC = gcc
-CFLAGS = -O2 -Wall -Wextra
+CFLAGS = -O2 -Wall -Wextra -Wno-format-truncation
 
 # Paths
 BUILD_DIR = ../build
-TARGET = $(BUILD_DIR)/mkdiffos
 
 # Source
-SRC = mkdiff.c
+SRCS := $(wildcard *.c)
+TOOLS := $(SRCS:.c=)
+TARGETS := $(addprefix $(BUILD_DIR)/, $(TOOLS))
 
-all: $(TARGET)
+all: $(TARGETS)
 
-$(TARGET): $(SRC) | $(BUILD_DIR)
-	@echo "[CC] Compiling mkdiffos tool"
+$(BUILD_DIR)/%: %.c | $(BUILD_DIR)
+	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) $< -o $@
 
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
 
 clean:
-	@rm -f $(TARGET)
+	@rm -f $(TARGETS)
 
 .PHONY: all clean
 

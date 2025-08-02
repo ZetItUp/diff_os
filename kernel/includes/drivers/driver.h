@@ -1,5 +1,7 @@
 #pragma once
 
+#include "drivers/ddf.h"
+
 typedef struct driver
 {
     const char *name;

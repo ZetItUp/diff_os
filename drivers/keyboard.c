@@ -1,9 +1,28 @@
 #include "drivers/driver.h"
+#include "drivers/ddf.h"
 #include "io.h"
 #include "stdio.h"
 #include "stddef.h"
 #include "console.h"
 #include "pic.h"
+
+void keyboard_init(kernel_exports_t *exports);
+void keyboard_exit(void);
+void keyboard_irq(void);
+
+__attribute__((section(".ddf_header")))
+const ddf_header_t ddf_header =
+{
+    .magic = DDF_MAGIC,
+    .init_offset = 0,
+    .exit_offset = 0,
+    .irq_offset  = 0,
+    .symbol_table_offset = 0,
+    .symbol_table_count = 3,
+    .name = "PS/2 Keyboard",
+    .version_major = 0,
+    .version_minor = 1,
+};
 
 #define KEYBOARD_DATA       0x60
 #define KEYBOARD_COMMAND    0x64
@@ -27,6 +46,8 @@ typedef enum
     KBQ_ERROR
 } kb_cmdq_state_t;
 
+static kernel_exports_t *kernel = 0;
+
 static kb_cmd_t kb_cmdq[KB_CMD_QUEUE_SIZE];
 static int kb_q_head = 0;
 static int kb_q_tail = 0;
@@ -38,7 +59,7 @@ static void wait_input(void)
 {
     for(int i = 0; i < 10000; i++)
     {
-        if (!(inb(KEYBOARD_STATUS) & 0x02))
+        if (!(kernel->inb(KEYBOARD_STATUS) & 0x02))
         {
             return;
         }
@@ -49,7 +70,7 @@ static void wait_output(void)
 {
     for(int i = 0; i < 10000; i++)
     {
-        if (inb(KEYBOARD_STATUS) & 0x01)
+        if (kernel->inb(KEYBOARD_STATUS) & 0x01)
         {
             return;
         }
@@ -62,12 +83,12 @@ static void kbq_send_cmd(kb_cmd_t *cmd)
     wait_input();
     
     kb_cmdq_state = KBQ_WAIT_ACK;
-    outb(KEYBOARD_DATA, cmd->command);
+    kernel->outb(KEYBOARD_DATA, cmd->command);
 
     if(cmd->has_data)
     {
         wait_input();
-        outb(KEYBOARD_DATA, cmd->data);
+        kernel->outb(KEYBOARD_DATA, cmd->data);
     }
 }
 
@@ -112,53 +133,54 @@ static void i8042_init(void)
 {
     // Disable keyboard
     wait_input();
-    outb(KEYBOARD_COMMAND, 0xAD);
+    kernel->outb(KEYBOARD_COMMAND, 0xAD);
 
     // Flush output
-    while(inb(KEYBOARD_STATUS) & 0x01)
+    while(kernel->inb(KEYBOARD_STATUS) & 0x01)
     {
-        inb(KEYBOARD_DATA);
+        kernel->inb(KEYBOARD_DATA);
     }
 
     // Controller Self-Test
     wait_input();
-    outb(KEYBOARD_COMMAND, 0xAA);
+    kernel->outb(KEYBOARD_COMMAND, 0xAA);
     wait_output();
 
-    uint8_t res = inb(KEYBOARD_DATA);
+    uint8_t res = kernel->inb(KEYBOARD_DATA);
     if(res != 0x55)
     {
-        printf("[DRIVER] Keyboard self-test failed: %x\n", res);
+        kernel->printf("[DRIVER] Keyboard self-test failed: %x\n", res);
     }
 
     // Enable keyboard port
     wait_input();
-    outb(KEYBOARD_COMMAND, 0xAE);
+    kernel->outb(KEYBOARD_COMMAND, 0xAE);
 }
 
 // Driver hooks
-static void keyboard_init(void)
+void keyboard_init(kernel_exports_t *exports)
 {
+    kernel = exports;
     i8042_init();
 
-    pic_clear_mask(1);          // Enable IRQ1 in PIC
+    kernel->pic_clear_mask(1);          // Enable IRQ1 in PIC
     kbq_enqueue(0xFF, 0, 0);    // Reset/disable scanning
     //kbq_enqueue(0xED, 1, 0);    // Set LEDs (off)
     kbq_enqueue(0xF4, 0, 0);    // Enable scanning
                                 
-    printf("[DRIVER] PS/2 Keyboard driver installed!\n");
+    kernel->printf("[DRIVER] PS/2 Keyboard driver installed!\n");
 }
 
-static void keyboard_exit(void)
+void keyboard_exit(void)
 {
     // Disable keyboard IRQ
-    pic_set_mask(1);            // Mask IRQ1 in PIC
-    printf("[DRIVER] PS/2 Keyboard driver removed successfully!\n");
+    kernel->pic_set_mask(1);            // Mask IRQ1 in PIC
+    kernel->printf("[DRIVER] PS/2 Keyboard driver removed successfully!\n");
 }
 
-static void keyboard_irq(void)
+void keyboard_irq(void)
 {
-    uint8_t val = inb(KEYBOARD_DATA);
+    uint8_t val = kernel->inb(KEYBOARD_DATA);
 
     // Handle command queue states
     if(kb_cmdq_state == KBQ_WAIT_ACK)
@@ -198,7 +220,7 @@ static void keyboard_irq(void)
             kb_cmdq_state = KBQ_IDLE;
             kbq_start_next();
 
-            printf("[DRIVER] Keyboard Self-test OK\n");
+            kernel->printf("[DRIVER] Keyboard Self-test OK\n");
             return;
         }
         // Fallthrough here, scancode during wait_ack = ignore
@@ -215,14 +237,5 @@ static void keyboard_irq(void)
     }
 
     // TODO: Implement scan code state machine
-    printf("[Keyboard] %x\n", val);
+    kernel->printf("[Keyboard] %x\n", val);
 }
-
-driver_t keyboard_driver =
-{
-    .name = "PS/2 Keyboard",
-    .irq_line = 1,               // IRQ1 is Keyboard
-    .init = keyboard_init,
-    .exit = keyboard_exit,
-    .handle_irq = keyboard_irq
-};
