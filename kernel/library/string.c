@@ -1,5 +1,94 @@
 #include "string.h"
 
+size_t strspn(const char *s, const char *accept)
+{
+    size_t count = 0;
+    for (; *s; s++)
+    {
+        const char *a = accept;
+        int found = 0;
+        while (*a)
+        {
+            if (*s == *a)
+            {
+                found = 1;
+                break;
+            }
+            a++;
+        }
+        if (!found)
+        {
+            return count;
+        }
+        count++;
+    }
+    return count;
+}
+
+size_t strcspn(const char *s, const char *reject)
+{
+    size_t count = 0;
+    for (; *s; s++)
+    {
+        const char *r = reject;
+        while (*r)
+        {
+            if (*s == *r)
+            {
+                return count;
+            }
+            r++;
+        }
+        count++;
+    }
+    return count;
+}
+
+size_t strlen(const char *s)
+{
+    size_t len = 0;
+    while (s[len])
+    {
+        len++;
+    }
+    return len;
+}
+
+char *strtok_r(char *str, const char *delim, char **saveptr)
+{
+    char *start;
+    if (str)
+    {
+        start = str;
+    }
+    else
+    {
+        start = *saveptr;
+    }
+
+    // Skip leading delimiters
+    start += strspn(start, delim);
+    if (*start == '\0')
+    {
+        *saveptr = start;
+        return NULL;
+    }
+
+    // Find end of token
+    char *end = start + strcspn(start, delim);
+    if (*end)
+    {
+        *end = '\0';
+        *saveptr = end + 1;
+    }
+    else
+    {
+        *saveptr = end;
+    }
+
+    return start;
+}
+
 int strncmp(const char *s1, const char *s2, unsigned int n)
 {
     for(unsigned int i = 0; i < n; i++)
@@ -138,6 +227,36 @@ void itoa(int value, char *str, int base)
     }
 }
 
+char *strcpy(char *dst, const char *src)
+{
+    char *ret = dst;
+    
+    while ((*dst++ = *src++))
+    {
+        ; // Kopiera tills nullbyte
+    }
+    
+    return ret;
+}
+
+char *strcat(char *dst, const char *src)
+{
+    char *ret = dst;
+    
+    while (*dst)
+    {
+        dst++;
+    }
+    
+    while ((*dst++ = *src++))
+    {
+        ;
+    }
+    
+    return ret;
+}
+
+
 void *memset(void *dest, int value, size_t count)
 {
     unsigned char *ptr = (unsigned char *)dest;
@@ -150,4 +269,5 @@ void *memset(void *dest, int value, size_t count)
 
     return dest;
 }
+
 

@@ -10,7 +10,10 @@
 #include "timer.h"
 #include "stdint.h"
 #include "heap.h"
+#include "diff.h"
+#include "drivers/config.h"
 #include "drivers/driver.h"
+#include "drivers/ata.h"
 
 __attribute__((naked, section(".text.start"))) 
 void _start(void)
@@ -20,7 +23,7 @@ void _start(void)
         "mov (%esp), %eax\n\t"      // EAX = bios_mem_map
         "mov 4(%esp), %edx\n\t"     // EDX = mem_entry_count
 
-        "mov $0x9000, %esp\n\t"     // Place a new stack
+        "mov $0x20000, %esp\n\t"     // Place a new stack
         "push %edx\n\t"             // mem_entry_count
         "push %eax\n\t"             // bios_mem_map
 
@@ -33,6 +36,7 @@ void _start(void)
 void display_banner();
 void display_sys_info();
 void print_time();
+void test_ata_read();
 void do_tests();
 
 extern char __heap_start;
@@ -74,6 +78,25 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 
     display_banner();
     display_sys_info();
+
+    
+    SuperBlock sb;
+    if(read_superblock(&sb) != 0)
+    {
+        printf("[ERROR] Could not read superblock!\n");
+
+        while(1);
+    }
+
+    if(read_file_table(&sb) != 0)
+    {
+        printf("[ERROR] Could not read file table!\n");
+
+        while(1);
+    }
+
+    load_drivers(file_table, "/system/sys.cfg");
+    //test_ata_read();
 
     //do_tests();
 
@@ -163,6 +186,45 @@ void do_tests()
     unmap_page(0x5000000);
     printf("done.\n");
 
+}
+
+
+void test_ata_read(void)
+{
+    SuperBlock sb;
+    if (read_superblock(&sb) != 0)
+    {
+        printf("Could not read superblock\n");
+        return;
+    }
+
+    FileTable table;
+    if (disk_read(sb.file_table_sector, sb.file_table_size, &table) != 0)
+    {
+        printf("Could not read file table\n");
+        return;
+    }
+    
+    int idx = find_entry_by_path(&table, "/system/kernel.bin");
+    if (idx == -1)
+    {
+        printf("kernel.bin not found!\n");
+        return;
+    }
+    FileEntry *fe = &table.entries[idx];
+
+    uint8_t buffer[512];
+    if (ata_read(fe->start_sector, 1, buffer) == 0)
+    {
+        printf("kernel.bin start sector: %d\nFirst 16 bytes:\n", fe->start_sector);
+        for (int i = 0; i < 16; i++)
+            printf("%x ", buffer[i]);
+        printf("\n");
+    }
+    else
+    {
+        printf("Failed to read kernel.bin sector!\n");
+    }
 }
 
 void print_time()

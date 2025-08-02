@@ -48,6 +48,8 @@ KERNEL_SRC = \
 	kernel/arch/x86_64/cpu/pic.c \
 	kernel/arch/x86_64/cpu/timer.c \
 	kernel/drivers/driver.c \
+	kernel/drivers/ata.c \
+	kernel/drivers/config.c \
 	kernel/kernel.c \
     kernel/console.c \
     kernel/fs/diff.c \
