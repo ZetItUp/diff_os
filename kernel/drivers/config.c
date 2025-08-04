@@ -2,6 +2,7 @@
 #include "string.h"
 #include "drivers/ata.h"
 #include "drivers/config.h"
+#include "drivers/module_loader.h"
 #include "diff.h"
 #include "heap.h"
 
@@ -25,8 +26,8 @@ void load_drivers(const FileTable *table, const char *cfg_path)
         return;
     }
 
-    char *syscfg_data = kmalloc(syscfg_size + 1); // +1 för null-terminering
-
+    uint32_t sector_bytes = fe->sector_count * 512;
+    char *syscfg_data = kmalloc(sector_bytes + 1); // +1 för null-terminering
     if (disk_read(fe->start_sector, fe->sector_count, syscfg_data) != 0)
     {
         printf("Failed to read sys.cfg!\n");
@@ -34,7 +35,7 @@ void load_drivers(const FileTable *table, const char *cfg_path)
         
         return;
     }
-    
+
     syscfg_data[syscfg_size] = 0;
 
     char driver_path[128] = "";
@@ -78,10 +79,8 @@ void load_drivers(const FileTable *table, const char *cfg_path)
             }
 
             strcat(abs_path, line);
-
-            printf("Would load driver: %s\n", abs_path);
-
-            //load_driver(abs_path);
+            
+            load_driver(abs_path);
         }
     }
 

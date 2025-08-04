@@ -1,4 +1,5 @@
 #include "diff.h"
+#include "stdio.h"
 #include "string.h"
 #include "stddef.h"
 #include "heap.h"
@@ -6,6 +7,7 @@
 
 #define SECTOR_SIZE     512
 
+SuperBlock superblock;
 FileTable *file_table;
 static uint8_t *file_bitmap;
 static uint8_t *sector_bitmap;      // Points to bitmap in RAM
@@ -21,12 +23,34 @@ int read_superblock(SuperBlock *sb)
     return disk_read(2048, 1, sb);
 }
 
+int init_filesystem(void)
+{
+    // Read SuperBlock
+    if(read_superblock(&superblock) != 0)
+    {
+        printf("[Diff FS] ERROR: Unable to read superblock!\n");
+
+        return -1;
+    }
+
+    // Read FileTable
+    if(read_file_table(&superblock) != 0)
+    {
+        printf("[Diff FS] ERROR: Unable to read file table!\n");
+
+        return -1;
+    }
+
+    // Success
+    return 0;
+}
+
 // Read file table and its bitmap from disk
 int read_file_table(const SuperBlock *sb)
 {
     size_t table_size_bytes = sb->file_table_size * SECTOR_SIZE;
+    
     file_table = kmalloc(table_size_bytes);
-
     if (disk_read(sb->file_table_sector, sb->file_table_size, file_table) != 0)
     {
         return -1;
@@ -34,7 +58,6 @@ int read_file_table(const SuperBlock *sb)
 
     size_t bitmap_size_bytes = sb->file_table_bitmap_size * SECTOR_SIZE;
     file_bitmap = kmalloc(bitmap_size_bytes);
-
     if (disk_read(sb->file_table_bitmap_sector, sb->file_table_bitmap_size, file_bitmap) != 0)
     {
         return -1;

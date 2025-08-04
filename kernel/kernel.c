@@ -11,6 +11,7 @@
 #include "stdint.h"
 #include "heap.h"
 #include "diff.h"
+#include "drivers/module_loader.h"
 #include "drivers/config.h"
 #include "drivers/driver.h"
 #include "drivers/ata.h"
@@ -78,23 +79,10 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 
     display_banner();
     display_sys_info();
+ 
+    printf("g_exports.printf: %x\n", (uint32_t)g_exports.printf);
 
-    
-    SuperBlock sb;
-    if(read_superblock(&sb) != 0)
-    {
-        printf("[ERROR] Could not read superblock!\n");
-
-        while(1);
-    }
-
-    if(read_file_table(&sb) != 0)
-    {
-        printf("[ERROR] Could not read file table!\n");
-
-        while(1);
-    }
-
+    init_filesystem();
     load_drivers(file_table, "/system/sys.cfg");
     //test_ata_read();
 

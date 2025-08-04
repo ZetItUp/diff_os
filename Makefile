@@ -17,20 +17,11 @@ NASMFLAGS = -f bin
 # mkdiffos tool
 MKDIFFOS = $(BUILD)/mkdiffos
 TOOLS_DIR = tools
-
+DRIVERS_DIR = drivers
 IMAGE = $(TARGET)
 
-IMAGE_DRIVERS_PATH = image/system/drivers
 
-# Drivers
-DRIVERS_PATH = drivers
-DRIVERS_SOURCE := $(wildcard $(DRIVERS_PATH)/*.c)
-DRIVERS_OBJ := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%.o,$(DRIVERS_SOURCE))
-DRIVERS_DDF := $(patsubst $(DRIVERS_PATH)/%.c,$(IMAGE_DRIVERS_PATH)/%.ddf,$(DRIVERS_SOURCE))
-
-DRIVERS_CFLAGS = -ffreestanding -I kernel/includes -c
-DRIVERS_LD = -Ttext 0x0 -r
-DRIVERS_OBJCOPY = -O binary
+.PRECIOUS: %.o %.elf %.bin %.patched
 
 # Source Files
 BOOT_STAGE1 = boot/boot.asm
@@ -50,6 +41,7 @@ KERNEL_SRC = \
 	kernel/drivers/driver.c \
 	kernel/drivers/ata.c \
 	kernel/drivers/config.c \
+	kernel/drivers/module_loader.c \
 	kernel/kernel.c \
     kernel/console.c \
     kernel/fs/diff.c \
@@ -69,6 +61,10 @@ all: tools drivers $(TARGET)
 tools:
 	@echo "[TOOLS] Making tools..."
 	@$(MAKE) -C $(TOOLS_DIR) all --no-print-directory
+
+drivers:
+	@echo "[DRIVERS] Creating Drivers...i"
+	$(MAKE) -C $(DRIVERS_DIR) all
 
 # Main OS image
 $(TARGET): tools $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
@@ -145,34 +141,6 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-# Drivers
-drivers: $(DRIVERS_DDF)
-
-$(DRIVERS_PATH)/obj:
-	@mkdir -p drivers/obj
-
-$(DRIVERS_PATH)/obj/%.o: $(DRIVERS_PATH)/%.c | $(DRIVERS_PATH)/obj
-	@echo "[DRIVERS CC] Compiling $<"
-	@i386-elf-gcc $(DRIVERS_CFLAGS) $< -o $@
-
-$(DRIVERS_PATH)/obj/%.ddf.elf: $(DRIVERS_PATH)/obj/%.o
-	@echo "[DRIVERS LD] Linking driver $<"
-	@i386-elf-ld $(DRIVERS_LD) -o $@ $<
-
-$(IMAGE_DRIVERS_PATH)/%.ddf: $(DRIVERS_PATH)/obj/%.ddf.elf | $(IMAGE_DRIVERS_PATH)
-	@echo "[DRIVERS] Creating driver $<"
-	@i386-elf-objcopy $(DRIVERS_OBJCOPY) $< $@
-	@echo "[DRIVERS] Driver $< created"
-	@rm $<
-
-$(IMAGE_DRIVERS_PATH):
-	@mkdir -p $(IMAGE_DRIVERS_PATH)
-
-drivers_clean:
-	@echo "[DRIVERS] Removing driver files"
-	@rm -rf $(DRIVERS_PATH)/obj
-	@rm -rf $(DRIVERS_PATH)/*.ddf
-
 
 # Run in QEMU
 run: all
@@ -188,8 +156,9 @@ debug: $(TARGET)
 	@gdb -x 1kernel.gdb
 
 # Clean build
-clean: drivers_clean
+clean:
 	@echo "[CLEAN] Removing build files"
 	@echo "[CLEAN] Removing tools build files"
 	@$(MAKE) -C $(TOOLS_DIR) clean --no-print-directory
+	@$(MAKE) -C $(DRIVERS_DIR) clean --no-print-directory
 	@rm -rf $(BUILD)

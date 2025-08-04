@@ -3,12 +3,11 @@
 #include "drivers/ddf.h"
 #include "stdio.h"
 #include "stdint.h"
+#include "string.h"
+#include "io.h"
+#include "pic.h"
 
-kernel_exports_t g_exports =
-{
-    .inb = inb,
-    .outb = outb,
-    .printf = printf,
-    .pic_clear_mask = pic_clear_mask,
-    .pic_set_mask = pic_set_mask
-};
+extern kernel_exports_t g_exports;
+
+void load_driver(const char *path);
+void *load_ddf_module(const char *path);

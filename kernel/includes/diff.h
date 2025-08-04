@@ -68,6 +68,9 @@ int find_entry_by_path(const FileTable *table, const char *path);
 // Read a file's contents into buffer, returns 0 on success, -1 on fail
 int read_file(const SuperBlock *sb, const FileTable *table, const char *path, void *buffer);
 
+// Initialize Filesyste
+int init_filesystem(void);
+
 // Bitmap helpers
 void set_bitmap_bit(uint8_t *bitmap, int index);
 void clear_bitmap_bit(uint8_t *bitmap, int index);

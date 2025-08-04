@@ -6,10 +6,6 @@
 #include "console.h"
 #include "pic.h"
 
-void keyboard_init(kernel_exports_t *exports);
-void keyboard_exit(void);
-void keyboard_irq(void);
-
 __attribute__((section(".ddf_header")))
 const ddf_header_t ddf_header =
 {
@@ -23,6 +19,10 @@ const ddf_header_t ddf_header =
     .version_major = 0,
     .version_minor = 1,
 };
+
+void ddf_driver_init(kernel_exports_t *exports);
+void ddf_driver_exit(void);
+void ddf_driver_irq(void);
 
 #define KEYBOARD_DATA       0x60
 #define KEYBOARD_COMMAND    0x64
@@ -48,7 +48,7 @@ typedef enum
 
 static kernel_exports_t *kernel = 0;
 
-static kb_cmd_t kb_cmdq[KB_CMD_QUEUE_SIZE];
+static kb_cmd_t kb_cmdq[KB_CMD_QUEUE_SIZE] = {0};
 static int kb_q_head = 0;
 static int kb_q_tail = 0;
 static int kb_q_count = 0;
@@ -157,10 +157,15 @@ static void i8042_init(void)
     kernel->outb(KEYBOARD_COMMAND, 0xAE);
 }
 
+__attribute__((section(".data"))) uint32_t my_kernel_addr = 0xDEADBEEF;
+
 // Driver hooks
-void keyboard_init(kernel_exports_t *exports)
+void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
+    my_kernel_addr = (uint32_t)kernel;
+    exports->printf("exports.printf addr: %x\n", (uint32_t)exports->printf);
+    
     i8042_init();
 
     kernel->pic_clear_mask(1);          // Enable IRQ1 in PIC
@@ -171,15 +176,16 @@ void keyboard_init(kernel_exports_t *exports)
     kernel->printf("[DRIVER] PS/2 Keyboard driver installed!\n");
 }
 
-void keyboard_exit(void)
+void ddf_driver_exit(void)
 {
     // Disable keyboard IRQ
     kernel->pic_set_mask(1);            // Mask IRQ1 in PIC
     kernel->printf("[DRIVER] PS/2 Keyboard driver removed successfully!\n");
 }
 
-void keyboard_irq(void)
+void ddf_driver_irq(void)
 {
+    kernel->printf("K\n");
     uint8_t val = kernel->inb(KEYBOARD_DATA);
 
     // Handle command queue states

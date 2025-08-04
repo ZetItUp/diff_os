@@ -1,96 +1,109 @@
 #include "heap.h"
+#include "stdio.h"
 
-// Heap base and heap limit
-static block_header_t *heap_base = NULL;
-static char *heap_limit = NULL;
+#define MIN_BLOCK_SIZE (HEAP_BLOCK_SIZE + 8)  // Minsta tillåtna blockstorlek
 
-// Initialize the heap
-void init_heap(void *start, void *end)
-{
-    // Make the entire heap one large block
-    heap_base = (block_header_t*)start;
-    heap_base->size = (char*)end - (char*)start - HEAP_BLOCK_SIZE;  // Size
-    heap_base->free = 1;            // Block is free
-    heap_base->next = NULL;         // No previous or next yet
-    heap_base->prev = NULL;
-    heap_limit = (char*)end;        // Store the end address
-}
+block_header_t *heap_base = 0;
+char *heap_limit = 0;
 
-// Allocate memory on the heap (First Fit)
-void* kmalloc(size_t size)
-{
-    size = ALIGN4(size);    // Align the size to the closest 4 byte
-    block_header_t *current = heap_base;
-
-    // Look for a block thats big enough
-    while(current)
-    {
-        if(current->free && current->size >= size)
-        {
-            // If the block is larger than what we need, split it.
-            if(current->size > size + HEAP_BLOCK_SIZE)
-            {
-                block_header_t *new_block = (block_header_t*)((char*)current + HEAP_BLOCK_SIZE + size);
-                new_block->size = current->size - size - HEAP_BLOCK_SIZE;
-                new_block->free = 1;
-                new_block->next = current->next;
-                new_block->prev = current;
-
-                if(new_block->next)
-                {
-                    new_block->next->prev = new_block;
-                }
-
-                current->next = new_block;
-                current->size = size;
-            }
-
-            current->free = 0;      // Mark as unavailable
-                                    
-            // Return a pointer to the data
-            return (char*)current + HEAP_BLOCK_SIZE;
-        }
-
-        current = current->next;
-    }
-
-    // If it ends up here, there is no more space
-    return NULL;
-}
-
-// Free allocated block
-void kfree(void *ptr)
-{
-    if(!ptr)
-    {
+void init_heap(void *start, void *end) {
+    if (start == 0 || end == 0 || end <= start) {
+        printf("ERROR: Invalid heap range\n");
         return;
     }
 
-    // Get pointer to the block header
+    heap_base = (block_header_t*)start;
+    heap_base->size = (char*)end - (char*)start - HEAP_BLOCK_SIZE;
+    heap_base->free = 1;
+    heap_base->next = 0;
+    heap_base->prev = 0;
+    heap_limit = (char*)end;
+}
+
+void* kmalloc(size_t size) {
+    if (size == 0 || !heap_base) return 0;
+    
+    size = ALIGN4(size);
+    block_header_t *current = heap_base;
+
+    // First-fit search
+    while (current) {
+        if (current->free) {
+            // Exakt match eller tillräckligt med plats för att splitta
+            if (current->size >= size) {
+                size_t remaining = current->size - size;
+                
+                // Kontrollera om vi kan splitta blocket
+                if (remaining >= MIN_BLOCK_SIZE) {
+                    block_header_t *new_block = (block_header_t*)((char*)current + HEAP_BLOCK_SIZE + size);
+                    
+                    new_block->size = remaining - HEAP_BLOCK_SIZE;
+                    new_block->free = 1;
+                    new_block->next = current->next;
+                    new_block->prev = current;
+                    
+                    if (current->next) {
+                        current->next->prev = new_block;
+                    }
+                    
+                    current->next = new_block;
+                    current->size = size;
+                }
+                
+                current->free = 0;
+                return (char*)current + HEAP_BLOCK_SIZE;
+            }
+        }
+        current = current->next;
+    }
+    
+    return 0;  // Ingen lämplig block hittades
+}
+
+void kfree(void *ptr) {
+    if (!ptr || !heap_base) return;
+
     block_header_t *block = (block_header_t*)((char*)ptr - HEAP_BLOCK_SIZE);
     block->free = 1;
-    
-    // Try to merge with the next block if it's free
-    if(block->next && block->next->free)
-    {
+
+    // Sammanfoga med nästa block om det är fritt
+    if (block->next && block->next->free) {
         block->size += HEAP_BLOCK_SIZE + block->next->size;
         block->next = block->next->next;
-
-        if(block->next)
-        {
+        if (block->next) {
             block->next->prev = block;
         }
     }
 
-    // Attempt to merge with previous block if it's free
-    if(block->prev && block->prev->free)
-    {
+    // Sammanfoga med föregående block om det är fritt
+    if (block->prev && block->prev->free) {
         block->prev->size += HEAP_BLOCK_SIZE + block->size;
         block->prev->next = block->next;
-
-        if(block->next)
-        {
+        if (block->next) {
             block->next->prev = block->prev;
         }
     }
+}
+
+void heap_dump() {
+    if (!heap_base) {
+        printf("Heap not initialized\n");
+        return;
+    }
+
+    block_header_t *current = heap_base;
+    int total_used = 0;
+    int total_free = 0;
+    
+    printf("--- HEAP DUMP ---\n");
+    while (current) {
+        printf("Block %x: size=%d, free=%d\n", 
+              (unsigned)current, (int)current->size, current->free);
+        
+        if (current->free) total_free += current->size;
+        else total_used += current->size;
+        
+        current = current->next;
+    }
+    printf("Total: used=%d, free=%d\n", total_used, total_free);
 }

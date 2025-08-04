@@ -16,8 +16,10 @@ typedef struct block_header
 #define ALIGN4(x)   (((((x) - 1) >> 2) << 2) + 4)
 #define HEAP_BLOCK_SIZE  sizeof(block_header_t)
 
+extern block_header_t *heap_base;
+extern char *heap_limit;
 void init_heap(void *start, void *end);
 void *kmalloc(size_t size);
 void kfree(void *ptr);
-
+void heap_dump();
 
