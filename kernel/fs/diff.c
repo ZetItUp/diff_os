@@ -17,7 +17,6 @@ int disk_read(uint32_t sector, uint32_t count, void *buffer)
     return ata_read(sector, count, buffer);
 }
 
-// Read superblock from fixed sector (FS_START_LBA)
 int read_superblock(SuperBlock *sb)
 {
     return disk_read(2048, 1, sb);

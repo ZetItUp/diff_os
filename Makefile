@@ -9,7 +9,7 @@ BUILD = build
 OBJ = $(BUILD)/obj
 
 # Compiler/Linker Flags
-CFLAGS = -m32 -ffreestanding -nostdlib -nostartfiles -O2 -Wall -Wextra -std=gnu99 -g -I kernel/includes
+CFLAGS = -m32 -g -ffreestanding -nostdlib -nostartfiles -O2 -Wall -Wextra -std=gnu99 -g -I kernel/includes
 LDFLAGS = -n -T linker.ld
 OBJCOPYFLAGS = -O binary
 NASMFLAGS = -f bin
@@ -38,8 +38,8 @@ KERNEL_SRC = \
 	kernel/arch/x86_64/cpu/io.c \
 	kernel/arch/x86_64/cpu/pic.c \
 	kernel/arch/x86_64/cpu/timer.c \
-	kernel/drivers/driver.c \
 	kernel/drivers/ata.c \
+	kernel/drivers/driver.c \
 	kernel/drivers/config.c \
 	kernel/drivers/module_loader.c \
 	kernel/kernel.c \
@@ -64,7 +64,7 @@ tools:
 
 drivers:
 	@echo "[DRIVERS] Creating Drivers...i"
-	$(MAKE) -C $(DRIVERS_DIR) all
+	@$(MAKE) -C $(DRIVERS_DIR) all --no-print-directory
 
 # Main OS image
 $(TARGET): tools $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
@@ -88,7 +88,7 @@ $(BUILD)/boot_stage2.bin: $(BOOT_STAGE2) $(BUILD)/kernel_sizes.inc
 # Kernel ELF
 $(BUILD)/kernel.elf: $(KERNEL_OBJ) $(ASM_OBJ) linker.ld
 	@echo "[LD] Linking kernel"
-	@$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJ) $(ASM_OBJ)
+	@$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJ) $(ASM_OBJ) 2>/dev/null
 	@echo "[LD] Kernel linked: $@"
 
 
@@ -149,7 +149,7 @@ run: all
 	@qemu-system-i386 -monitor stdio -m 64M -drive id=disk,file=build/diffos.img,if=ide,format=raw
 
 # Debug in QEMU with GDB
-debug: $(TARGET)
+debug: all
 	@echo "[QEMU] Starting in debug mode"
 	@qemu-system-i386 -monitor stdio -m 64M -drive format=raw,file=$(TARGET) -s -S &
 	@echo "[GDB] Starting debugger"

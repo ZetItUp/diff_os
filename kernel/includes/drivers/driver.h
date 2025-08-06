@@ -14,6 +14,7 @@ typedef struct driver
 
 #define MAX_DRIVERS 32
 
+void driver_printf(kernel_exports_t *exports, const char *fmt, ...);
 void driver_register(driver_t *drv);
 void driver_unregister(driver_t *drv);
 void driver_irq_dispatch(int irq);

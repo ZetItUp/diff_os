@@ -13,17 +13,17 @@ void irq_handler_c(unsigned irq_ptr, void *context)
     uint32_t *stack = (uint32_t*)irq_ptr;
     uint32_t irq = stack[0]; 
 
-    // Check if Driver Manager should handle it
-    if(irq >= 32)
-    {
-        driver_irq_dispatch(irq - 32);
-    }
+    uint32_t real_irq = irq - 32;
 
-    if(irq < NUM_IRQS && irq_handlers[irq])
+    if(irq >= 32 && real_irq < NUM_IRQS && irq_handlers[real_irq])
+    {
+        irq_handlers[real_irq](real_irq, context);
+    }
+    else if(irq < NUM_IRQS && irq_handlers[irq])
     {
         irq_handlers[irq](irq, context);
     }
-
+    
     // Always send EOI
     if(irq >= 32)
     {

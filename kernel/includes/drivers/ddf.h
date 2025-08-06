@@ -13,9 +13,20 @@ typedef struct
     uint32_t irq_offset;
     uint32_t symbol_table_offset;       // Offset from module start to symbol table
     uint32_t symbol_table_count;        // Number of symbols
-    const char *name;
+    uint32_t strtab_offset;             // Offset for string table
     uint32_t version_major;
     uint32_t version_minor;
+    uint32_t reloc_table_offset;
+    uint32_t reloc_table_count;
+    uint32_t text_offset;
+    uint32_t text_size;
+    uint32_t rodata_offset;
+    uint32_t rodata_size;
+    uint32_t data_offset;
+    uint32_t data_size;
+    uint32_t bss_offset;
+    uint32_t bss_size;
+    uint32_t irq_number;
 } __attribute__((packed)) ddf_header_t;
 
 typedef struct
@@ -25,15 +36,31 @@ typedef struct
     uint32_t type;                      // 0 = Function, 1 = Data
 } __attribute__((packed)) ddf_symbol_t;
 
+
 typedef struct kernel_exports
 {
+    uint32_t marker;
     unsigned char (*inb)(unsigned short port);
     void (*outb)(unsigned short port, unsigned char data);
     void (*printf)(const char *fmt, ...);
+    void (*vprintf)(const char *fmt, va_list ap);
     void (*pic_clear_mask)(uint8_t);
     void (*pic_set_mask)(uint8_t);
 } __attribute__((packed)) kernel_exports_t;
 
+typedef struct
+{
+    void *module_base;
+    ddf_header_t *header;
+    void (*driver_init)(kernel_exports_t*);
+    void (*driver_irq)(unsigned, void*);
+    void (*driver_exit)(void);
+    uint32_t irq_number;
+} ddf_module_t;
+
+void ddf_driver_init(kernel_exports_t *exports);
+void ddf_driver_exit(void);
+void ddf_driver_irq(void);
 extern ddf_symbol_t ddf_symbol_table[];
 extern const uint32_t ddf_symbol_table_count;
-void *ddf_find_symbol(void *module, uint32_t module_size, const char *name);
+void *ddf_find_symbol(void *module_base, ddf_header_t *header, const char *name);

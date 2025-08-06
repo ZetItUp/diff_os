@@ -1,144 +1,207 @@
 #include "drivers/ddf.h"
 #include "drivers/module_loader.h"
+#include "paging.h"
 #include "diff.h"
-#include "string.h"
 #include "stdint.h"
-#include "stdio.h"
+#include "string.h"
 #include "heap.h"
+#include "irq.h"
 
-kernel_exports_t g_exports = 
-{
+#define DDF_MAGIC 0x00464444
+
+kernel_exports_t g_exports = {
+    .marker = 0xCAFEBABE,
     .inb = inb,
     .outb = outb,
     .printf = printf,
+    .vprintf = vprintf,
     .pic_clear_mask = pic_clear_mask,
     .pic_set_mask = pic_set_mask
 };
 
-void load_driver(const char *path)
+static ddf_header_t *find_ddf_header(uint8_t *module_base, uint32_t size, uint32_t *out_offset)
 {
-    void *module_base = load_ddf_module(path);
-
-    if(!module_base)
+    static const uint32_t common_header_offsets[] = 
     {
-        return;
-    }
+        0x0000, 
+        0x0800, 
+        0x1000, 
+        0x2000
+    };
 
-    ddf_header_t *header = (ddf_header_t*)module_base;
-
-    if(header->magic != DDF_MAGIC)
+    for (unsigned i = 0; i < sizeof(common_header_offsets)/sizeof(common_header_offsets[0]); i++)
     {
-        return;
-    }
-printf("DDF HEADER:\n");
-printf("  magic: %x\n", header->magic);
-printf("  init_offset: %d\n", header->init_offset);
-printf("  exit_offset: %d\n", header->exit_offset);
-printf("  irq_offset: %d\n", header->irq_offset);
-printf("  symbol_table_offset: %d\n", header->symbol_table_offset);
-printf("  symbol_table_count: %d\n", header->symbol_table_count);
-printf("  version_major: %d\n", header->version_major);
-printf("  version_minor: %d\n", header->version_minor);
-
-    // Relative offsets from module base
-    void (*init_fn)(kernel_exports_t*) = (void(*)(kernel_exports_t*))((uint8_t*)module_base + header->init_offset);
-    void (*exit_fn)(void) = (void(*)(void))((uint8_t*)module_base + header->exit_offset);
-    void (*irq_fn)(void) = (void(*)(void))((uint8_t*)module_base + header->irq_offset);
-
-    // Save exit_fn and irq_fn in a suitable place
-    
-    // Run driver-init and give it the kernel table
-
-    init_fn(&g_exports);
-}
-
-void *ddf_find_symbol(void *module, uint32_t module_size, const char *name)
-{
-    (void)module_size;
-    ddf_header_t *header = (ddf_header_t*)module;
-    uint8_t *base = (uint8_t*)module;
-    ddf_symbol_t *sym_table = (ddf_symbol_t*)(base + header->symbol_table_offset);
-    const char *str_table = (const char*)(base + header->symbol_table_offset + header->symbol_table_count * sizeof(ddf_symbol_t));
-
-    // Debug: skriv ut symboltabellen
-    printf("[DEBUG] Symbol table count = %d\n", header->symbol_table_count);
-    for(uint32_t i = 0; i < header->symbol_table_count; ++i)
-    {
-        const char *sym_name = str_table + sym_table[i].name_offset;
-        int sym_type = sym_table[i].type;
-        uint32_t val_off = sym_table[i].value_offset;
-
-        printf("Symbol %d: name='%s', type=%d, value_offset=0x%x\n", i, sym_name, sym_type, val_off);
-    }
-
-    // Sök efter symbolen
-    for(uint32_t i = 0; i < header->symbol_table_count; ++i)
-    {
-        const char *sym_name = str_table + sym_table[i].name_offset;
-        if(!strcmp(sym_name, name))
+        uint32_t off = common_header_offsets[i];
+        
+        if (off + sizeof(ddf_header_t) > size)
         {
-            return (void*)(base + sym_table[i].value_offset);
+            continue;
+        }
+
+        ddf_header_t *hdr = (ddf_header_t*)(module_base + off);
+        
+        if (hdr->magic == DDF_MAGIC) 
+        {
+            if (out_offset) 
+            {
+                *out_offset = off;
+            }
+            
+            return hdr;
         }
     }
-    return NULL;
+
+    for (uint32_t off = 0; off + sizeof(ddf_header_t) < size; off += 4)
+    {
+        ddf_header_t *hdr = (ddf_header_t*)(module_base + off);
+        
+        if (hdr->magic == DDF_MAGIC) 
+        {
+            if (out_offset)
+            {
+                *out_offset = off;
+            }
+
+            return hdr;
+        }
+    }
+
+    return 0;
 }
 
-
-void *load_ddf_module(const char *path)
+void *load_ddf_module(const char *path, ddf_header_t **out_header, uint32_t *out_header_offset, uint32_t *out_size)
 {
     extern SuperBlock superblock;
     extern FileTable *file_table;
 
-    // Find the file in FileTable
     int index = find_entry_by_path(file_table, path);
     if(index == -1)
-    {
-        printf("[MODULE ERROR] Could not find driver %s!\n", path);
-
-        return NULL;
+    { 
+        return 0;
     }
 
     const FileEntry *fe = &file_table->entries[index];
     if(fe->type != ENTRY_TYPE_FILE || fe->file_size_bytes == 0)
     {
-        printf("[MODULE ERROR] Invalid module: %s!\n", path);
+        return 0;
+    }
 
-        return NULL;
+    // Read raw file into temp buffer
+    uint32_t size = fe->sector_count * 512;
+    uint8_t *raw_buf = kmalloc(size);
+    
+    if(!raw_buf)
+    {
+        return 0;
     }
     
-    uint32_t size = fe->sector_count * 512;
-    uint8_t *module_base = kmalloc(size);
-    if(!module_base)
+    if(read_file(&superblock, file_table, path, raw_buf) != 0) 
     {
-        printf("[MODULE ERROR] Unable to allocate memory for module: %s\n", path);
-
-        return NULL;
+        kfree(raw_buf);
+    
+        return 0;
     }
 
-    // Read module into RAM
-    if(read_file(&superblock, file_table, path, module_base) != 0)
+    uint32_t hdr_off = 0;
+    ddf_header_t *header = find_ddf_header(raw_buf, size, &hdr_off);
+    if (!header)
     {
-        printf("[MODULE ERROR] Unable to read module from disk: %s\n", path);
-        kfree(module_base);
-
-        return NULL;
+        printf("[ERROR] DDF header not found!\n");
+        kfree(raw_buf);
+   
+        return 0;
     }
 
-    if(fe->file_size_bytes < size)
+    uint32_t text_off    = header->text_offset;
+    uint32_t text_size   = header->text_size;
+    uint32_t rodata_off  = header->rodata_offset;
+    uint32_t rodata_size = header->rodata_size;
+    uint32_t data_off    = header->data_offset;
+    uint32_t data_size   = header->data_size;
+    uint32_t bss_off     = header->bss_offset;
+    uint32_t bss_size    = header->bss_size;
+
+    uint32_t module_total = bss_off + bss_size;
+    uint8_t *module_base = kmalloc(module_total);
+    
+    if (!module_base) 
     {
-        module_base[fe->file_size_bytes] = 0;
+        printf("[ERROR] Could not allocate memory for module\n");
+        kfree(raw_buf);
+        return 0;
     }
 
-    ddf_header_t *header = (ddf_header_t*)module_base;
-    printf("init_offset=%d exit_offset=%d irq_offset=%d size=%d\n",
-        header->init_offset, header->exit_offset, header->irq_offset, fe->file_size_bytes);
+    memcpy(module_base + text_off,    raw_buf + text_off,    text_size);
+    memcpy(module_base + rodata_off,  raw_buf + rodata_off,  rodata_size);
+    memcpy(module_base + data_off,    raw_buf + data_off,    data_size);
+    memset(module_base + bss_off, 0, bss_size);
 
-    uint32_t *magic = ddf_find_symbol(module_base, size, "my_kernel_addr");
-    if (magic)
-        printf("driver's my_kernel_addr = %x\n", *magic);
-    else
-        printf("Symbol 'my_kernel_addr' not found!\n");
+    memcpy(module_base + hdr_off, raw_buf + hdr_off, sizeof(ddf_header_t));
+    kfree(raw_buf);
 
+    if(out_header)
+    {
+        *out_header = (ddf_header_t*)(module_base + hdr_off);
+    }
 
-    return (void*)module_base;
+    if(out_header_offset)
+    {
+        *out_header_offset = hdr_off;
+    }
+
+    if(out_size) 
+    {
+        *out_size = module_total;
+    }
+
+    return module_base;
 }
+
+ddf_module_t *load_driver(const char *path)
+{
+    ddf_header_t *header = 0;
+    uint32_t header_offset = 0;
+    uint32_t module_size = 0;
+    
+    void *module_base = load_ddf_module(path, &header, &header_offset, &module_size);
+    
+    if (!module_base) 
+    {
+        printf("[ERROR] Module Base is NULL\n");
+    
+        return NULL;
+    }
+
+    if(!header)
+    {
+        printf("ERROR] Header is NULL\n");
+    
+        return NULL;
+    }
+
+    // Get ddf_driver_init function
+    void (*init_fn)(kernel_exports_t*) = (void(*)(kernel_exports_t*))((uint8_t*)module_base + header->init_offset);
+    
+    // Get ddf_driver_irq function
+    void (*irq_fn)(unsigned, void *) = (void (*)(unsigned, void *))((uint8_t*)module_base + header->irq_offset);
+    
+    // Get ddf_driver_exit function
+    void (*exit_fn)(void) = (void(*)(void))((uint8_t*)module_base + header->exit_offset);
+    
+    ddf_module_t *module = kmalloc(sizeof(ddf_module_t));
+    module->module_base = module_base;
+    module->header = header;
+    module->driver_init = init_fn;
+    module->driver_irq = irq_fn;
+    module->driver_exit = exit_fn;
+    module->irq_number = header->irq_number;
+
+    if(module->driver_init)
+    {
+        module->driver_init(&g_exports);
+    }
+
+    return module;
+}
+
+

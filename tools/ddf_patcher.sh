@@ -7,19 +7,19 @@ patch_file() {
     local elf="$1"
     echo "Processing: $(basename "$elf")"
     
-    # Strikt hämtning av offsets utan extra mellanslag
+    # Get offsets without spaces
     local init_off=$(nm -n "$elf" | awk '/ ddf_driver_init$/ {printf "0x%08x", strtonum("0x"$1); exit}')
     local exit_off=$(nm -n "$elf" | awk '/ ddf_driver_exit$/ {printf "0x%08x", strtonum("0x"$1); exit}')
     local irq_off=$(nm -n "$elf" | awk '/ ddf_driver_irq$/ {printf "0x%08x", strtonum("0x"$1); exit}')
     local symtab_off=$(nm -n "$elf" | awk '/ ddf_symbol_table$/ {printf "0x%08x", strtonum("0x"$1); exit}')
     
-    # Kritiska symboler måste finnas
+    # Make sure we have atleast init, exit and irq offsets
     if [[ -z "$init_off" || -z "$exit_off" || -z "$irq_off" ]]; then
         echo "ERROR: Missing critical symbols in $(basename "$elf")"
         return 1
     fi
 
-    # Symbolräkning
+    # Count symbols
     local sym_count=0
     local nm_file="${elf%.ddf.elf}_nosym.nm.txt"
     if [[ -f "$nm_file" ]]; then
@@ -35,14 +35,13 @@ patch_file() {
     echo "  symtab:  $symtab_off"
     echo "  count:   $sym_count"
 
-    # Skicka till patch-skriptet
+    # Patch the DDF file
     python3 "$TOOLS_DIR/patch_ddf.py" "$elf" "$init_off" "$exit_off" "$irq_off" "$symtab_off" "$sym_count" || {
         echo "ERROR: Patching failed for $(basename "$elf")"
         return 1
     }
 }
 
-# Huvudloop - hoppa över _nosym filer
 for elf in "$DRIVERS_DIR"/*.ddf.elf; do
     if [[ "$elf" != *_nosym.ddf.elf ]]; then
         patch_file "$elf"

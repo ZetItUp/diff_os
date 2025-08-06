@@ -65,6 +65,18 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
     
     // Initialize paging and heap
     init_paging(ram_mb);
+    
+    // Get the heap start and end to calculate the heap size
+    uint32_t heap_start = (uint32_t)&__heap_start;
+    uint32_t heap_end = (uint32_t)&__heap_end;
+    //uint32_t heap_size = heap_end - heap_start;
+
+    // Map the heap to 4KB pages
+    for(uint32_t addr = heap_start & ~0xFFF; addr < heap_end; addr += 0x1000)
+    {
+        map_page(addr, 0x1000); // 4KB per page
+    }
+
     init_heap(&__heap_start, &__heap_end);
 
     // Initialize IDT
@@ -74,18 +86,14 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
     // Initialize IRQ
     irq_init(); 
     // Install timer handler
-    timer_install();
     asm volatile("sti");
 
     display_banner();
     display_sys_info();
- 
-    printf("g_exports.printf: %x\n", (uint32_t)g_exports.printf);
 
     init_filesystem();
     load_drivers(file_table, "/system/sys.cfg");
     //test_ata_read();
-
     //do_tests();
 
     while(1)

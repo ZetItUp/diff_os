@@ -6,29 +6,16 @@
 #include "console.h"
 #include "pic.h"
 
-__attribute__((section(".ddf_header")))
-const ddf_header_t ddf_header =
-{
-    .magic = DDF_MAGIC,
-    .init_offset = 0,
-    .exit_offset = 0,
-    .irq_offset  = 0,
-    .symbol_table_offset = 0,
-    .symbol_table_count = 3,
-    .name = "PS/2 Keyboard",
-    .version_major = 0,
-    .version_minor = 1,
-};
-
-void ddf_driver_init(kernel_exports_t *exports);
-void ddf_driver_exit(void);
-void ddf_driver_irq(void);
-
 #define KEYBOARD_DATA       0x60
 #define KEYBOARD_COMMAND    0x64
 #define KEYBOARD_STATUS     0x64
 
 #define KB_CMD_QUEUE_SIZE   9
+
+// Driver Meta Data
+// Assign which IRQ number it uses.
+__attribute__((section(".ddf_meta"), used))
+volatile unsigned int ddf_irq_number = 1;
 
 typedef struct
 {
@@ -157,25 +144,23 @@ static void i8042_init(void)
     kernel->outb(KEYBOARD_COMMAND, 0xAE);
 }
 
-__attribute__((section(".data"))) uint32_t my_kernel_addr = 0xDEADBEEF;
 
-// Driver hooks
+__attribute__((section(".text")))
 void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
-    my_kernel_addr = (uint32_t)kernel;
-    exports->printf("exports.printf addr: %x\n", (uint32_t)exports->printf);
-    
     i8042_init();
 
-    kernel->pic_clear_mask(1);          // Enable IRQ1 in PIC
-    kbq_enqueue(0xFF, 0, 0);    // Reset/disable scanning
-    //kbq_enqueue(0xED, 1, 0);    // Set LEDs (off)
-    kbq_enqueue(0xF4, 0, 0);    // Enable scanning
-                                
+    // TODO: This needs to be fixed, they can't be here...
+    //kbq_enqueue(0xFF, 0, 0);    // Reset/disable scanning
+    //kbq_enqueue(0xF4, 0, 0);    // Enable scanning
+
+    kernel->pic_clear_mask(1);  // Unmask IRQ1
+    
     kernel->printf("[DRIVER] PS/2 Keyboard driver installed!\n");
 }
 
+__attribute__((section(".text")))
 void ddf_driver_exit(void)
 {
     // Disable keyboard IRQ
@@ -183,65 +168,61 @@ void ddf_driver_exit(void)
     kernel->printf("[DRIVER] PS/2 Keyboard driver removed successfully!\n");
 }
 
+__attribute__((section(".text")))
 void ddf_driver_irq(void)
 {
-    kernel->printf("K\n");
-    uint8_t val = kernel->inb(KEYBOARD_DATA);
-
-    // Handle command queue states
-    if(kb_cmdq_state == KBQ_WAIT_ACK)
+    while (kernel->inb(KEYBOARD_STATUS) & 0x01) 
     {
-        if(val == 0xFA)
-        {
-            // ACK
-            kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
-            kb_q_count--;
-            kb_cmdq_state = KBQ_IDLE;
-            kbq_start_next();
+        uint8_t val = kernel->inb(KEYBOARD_DATA);
 
-            return;
-        }
-        else if(val == 0xFE)
+        if(kb_cmdq_state == KBQ_WAIT_ACK)
         {
-            // Resend
-            kb_cmdq[kb_q_head].retries++;
-
-            if(kb_cmdq[kb_q_head].retries < kb_resend_limit)
-            {
-                kb_cmdq_state = KBQ_SEND;
-                kbq_send_cmd(&kb_cmdq[kb_q_head]);
-            }
-            else
+            if(val == 0xFA)
             {
                 kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
                 kb_q_count--;
-                kb_cmdq_state = KBQ_ERROR;
+                kb_cmdq_state = KBQ_IDLE;
                 kbq_start_next();
+                
+                continue;
             }
-
-            return;
+            else if(val == 0xFE)
+            {
+                kb_cmdq[kb_q_head].retries++;
+                
+                if(kb_cmdq[kb_q_head].retries < kb_resend_limit)
+                {
+                    kb_cmdq_state = KBQ_SEND;
+                    kbq_send_cmd(&kb_cmdq[kb_q_head]);
+                }
+                else
+                {
+                    kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
+                    kb_q_count--;
+                    kb_cmdq_state = KBQ_ERROR;
+                    kbq_start_next();
+                }
+                
+                continue;
+            }
+            else if(val == 0xAA)
+            {
+                kernel->printf("[DRIVER] Keyboard Self-test OK\n");
+                kb_cmdq_state = KBQ_IDLE;
+                kbq_start_next();
+                
+                continue;
+            }
+            
+            continue;
         }
-        else if(val == 0xAA)
+
+        if (val == 0xFA || val == 0xFE || val == 0xAA) 
         {
-            kb_cmdq_state = KBQ_IDLE;
-            kbq_start_next();
-
-            kernel->printf("[DRIVER] Keyboard Self-test OK\n");
-            return;
+            continue;
         }
-        // Fallthrough here, scancode during wait_ack = ignore
-    }
 
-    if(kb_cmdq_state == KBQ_WAIT_ACK)
-    {
-        return;
+        // Just print the scancode to the screen for now
+        kernel->printf("%x", val);
     }
-
-    if (val == 0xFA || val == 0xFE || val == 0xAA)
-    {
-        return;
-    }
-
-    // TODO: Implement scan code state machine
-    kernel->printf("[Keyboard] %x\n", val);
 }

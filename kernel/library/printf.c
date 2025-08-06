@@ -1,4 +1,5 @@
 #include "stdarg.h"
+#include "stdio.h"
 #include "string.h"
 
 extern void putch(char c);
@@ -7,6 +8,12 @@ void printf(const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
+void vprintf(const char *fmt, va_list args)
+{
     char buffer[32];
 
     while(*fmt)

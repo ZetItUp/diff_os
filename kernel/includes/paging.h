@@ -21,6 +21,8 @@ typedef struct {
     uint32_t acpi_ext;      // Extra flags
 } __attribute__((packed)) e820_entry_t;
 
+extern uint32_t page_directory[1024];
+
 void init_paging(uint32_t ram_mb);
 int map_page(uint32_t virt_addr, uint32_t size);
 void unmap_page(uint32_t virt_addr);

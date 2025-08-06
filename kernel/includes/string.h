@@ -19,5 +19,6 @@ char *strchr(const char *str, char c);
 void itoa(int value, char *str, int base);
 
 void *memset(void *dest, int value, size_t count);
+void *memcpy(void *dest, const void *src, unsigned int n);
 
 #endif

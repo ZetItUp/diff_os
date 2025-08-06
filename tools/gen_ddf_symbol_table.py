@@ -1,28 +1,43 @@
 #!/usr/bin/env python3
 import sys
+import re
 
 def main(nm_file, out_file):
+    REQUIRED_SYMBOLS = {
+        'ddf_driver_init',
+        'ddf_driver_exit', 
+        'ddf_driver_irq'
+    }
+    
+    # Store symbols here
     symbols = []
-    required_symbols = {'ddf_driver_init', 'ddf_driver_exit', 'ddf_driver_irq'}
     found_required = set()
+    symbol_count = 0
 
-    # Parse nm output
-    with open(nm_file) as f:
+    # Regex to collect nm output
+    NM_REGEX = re.compile(r'^([0-9a-fA-F]+)\s+([TtDdBbRr])\s+(.+)$')
+
+    # Read nm output and collect symbols
+    with open(nm_file, 'r') as f:
         for line in f:
-            parts = line.strip().split()
-            if len(parts) < 3:
+            line = line.strip()
+            match = NM_REGEX.match(line)
+            if not match:
                 continue
+
+            addr, typ, name = match.groups()
             
-            addr, typ, name = parts[0], parts[1], ' '.join(parts[2:])
-            
-            # Skip local/uninteresting symbols
-            if not name or name[0] in ('.', '$') or name == 'ddf_header':
+            # Ignore unwanted symbols
+            if (not name or 
+                name.startswith('.') or 
+                name.startswith('$') or 
+                name == 'ddf_header'):
                 continue
-            
-            # Handle different symbol types
-            if typ.upper() in ['T', 't']:  # Text/code
+
+            # Check symbol type
+            if typ.upper() in ['T', 't']:                           # Text/code
                 sym_type = 0
-            elif typ.upper() in ['D', 'd', 'B', 'b', 'R', 'r']:  # Data
+            elif typ.upper() in ['D', 'd', 'B', 'b', 'R', 'r']:     # Data
                 sym_type = 1
             else:
                 continue
@@ -30,52 +45,79 @@ def main(nm_file, out_file):
             addr_int = int(addr, 16)
             symbols.append((name, addr_int, sym_type))
             
-            if name in required_symbols:
+            if name in REQUIRED_SYMBOLS:
                 found_required.add(name)
 
-    # Verify required symbols
-    missing = required_symbols - found_required
+    # Verify all symbols
+    missing = REQUIRED_SYMBOLS - found_required
     if missing:
         print(f"ERROR: Missing required symbols: {missing}")
         sys.exit(1)
 
-    # Build string table
-    string_table = bytearray(b'\x00')  # Start with null byte
-    offsets = {}
+    # Build a stringtable
+    string_table = bytearray(b'\x00')                               # Null byte at the start
+    name_offsets = {}
     
     for name, _, _ in symbols:
-        if name not in offsets:
-            name_bytes = name.encode('utf-8') + b'\x00'
-            offsets[name] = len(string_table)
-            string_table.extend(name_bytes)
+        if name not in name_offsets:
+            # 4-byte alignment for each string
+            padding = (4 - (len(string_table) % 4) % 4)
+            string_table.extend(b'\x00' * padding)
+            
+            # Save offset and store in string
+            name_offsets[name] = len(string_table)
+            string_table.extend(name.encode('utf-8') + b'\x00')
 
-    # Generate C code
+    # Generate C code for symboltable
     with open(out_file, 'w') as out:
+        # Header
+        out.write('/* Automatically generated DDF symbol table - DO NOT EDIT */\n')
         out.write('#include "drivers/ddf.h"\n\n')
-        out.write('__attribute__((section(".ddf_strtab"), used)) \n')
-        out.write('static const char string_table[] = {\n    ')
         
-        # Write string table as hex bytes
-        for i, byte in enumerate(string_table):
-            out.write(f'0x{byte:02x}, ')
-            if (i+1) % 16 == 0:
-                out.write('\n    ')
-        out.write('\n};\n\n')
+        # Stringtable
+        out.write('__attribute__((section(".ddf_strtab"), aligned(4), used))\n')
+        out.write('static const char ddf_string_table[] = \n{\n    ')
         
-        out.write('__attribute__((section(".ddf_symtab"), used)) \n')
-        out.write('ddf_symbol_t ddf_symbol_table[] = {\n')
-        for name, addr, typ in symbols:
-            out.write(f'    {{ .name_offset = {offsets[name]}, ')
-            out.write(f'.value_offset = 0x{addr:x}, ')
-            out.write(f'.type = {typ} }}, // {name}\n')
+        # Write the stringtable as hex bytes
+        for i in range(0, len(string_table), 16):
+            chunk = string_table[i:i+16]
+            out.write(', '.join(f'0x{b:02x}' for b in chunk))
+            out.write(',\n    ' if i+16 < len(string_table) else '\n')
+        
         out.write('};\n\n')
         
+        # Symboltable
+        out.write('__attribute__((section(".ddf_symtab"), aligned(4), used))\n')
+        out.write('ddf_symbol_t ddf_symbol_table[] = \n{\n')
+        
+        for name, addr, typ in symbols:
+            out.write(f'    {{\n        .name_offset = {name_offsets[name]},\n')
+            out.write(f'        .value_offset = 0x{addr:x},\n')
+            out.write(f'        .type = {typ}\n    }}, // {name}\n')
+        
+        out.write('};\n\n')
+        
+        # Symbolcount
         out.write(f'const uint32_t ddf_symbol_table_count = {len(symbols)};\n')
+        
+        # Debug-info
+        out.write('\n/* Symbol table summary:\n')
+        out.write(f'   Total symbols: {len(symbols)}\n')
+        out.write(f'   String table size: {len(string_table)} bytes\n')
+        out.write('*/\n')
 
-    print(f"Generated symbol table with {len(symbols)} entries")
+    print(f"Successfully generated symbol table with {len(symbols)} entries")
+    print(f"String table size: {len(string_table)} bytes")
+    print(f"Output file: {out_file}")
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
+        print("DDF Symbol Table Generator")
         print("Usage: gen_ddf_symbol_table.py <nm_output.txt> <output.c>")
         sys.exit(1)
-    main(sys.argv[1], sys.argv[2])
+    
+    try:
+        main(sys.argv[1], sys.argv[2])
+    except Exception as e:
+        print(f"ERROR: {str(e)}")
+        sys.exit(1)

@@ -1,3 +1,4 @@
+#include "stdarg.h"
 #include "drivers/driver.h"
 
 static driver_t *driver_list[MAX_DRIVERS];
@@ -27,7 +28,6 @@ void driver_unregister(driver_t *drv)
                 drv->exit();
             }
                 
-            // Move the last element to this position
             driver_list[i] = driver_list[driver_count - 1];
             driver_count--;
 

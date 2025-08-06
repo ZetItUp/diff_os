@@ -1,74 +1,33 @@
-#!/usr/bin/env python3
 import sys
 import struct
-import os
-
-DDF_MAGIC = 0x00464444
-COMMON_HEADER_OFFSETS = [0x0000, 0x1000, 0x0800, 0x2000]  # Vanliga header-platser
-
-def find_ddf_header(f):
-    """Sök dynamiskt efter DDF-header"""
-    for offset in COMMON_HEADER_OFFSETS:
-        f.seek(offset)
-        magic_bytes = f.read(4)
-        if len(magic_bytes) == 4 and struct.unpack("<I", magic_bytes)[0] == DDF_MAGIC:
-            return offset
-    return None
-
-def read_ddf_header(f, offset):
-    """Läs DDF-header från given offset"""
-    f.seek(offset)
-    header_fmt = "<6I2I"  # magic, init, exit, irq, symtab, symcount, name_ptr, version
-    data = f.read(32)
-    if len(data) != 32:
-        return None
-    
-    return dict(zip(
-        ["magic", "init", "exit", "irq", "symtab", "symcount", "name_ptr", "version_major", "version_minor"],
-        struct.unpack(header_fmt, data)
-    ))
 
 def main(filename):
-    if not os.path.exists(filename):
-        print(f"ERROR: File '{filename}' not found")
+    with open(filename, "rb") as f:
+        data = f.read()
+    if data[:4] != b'DDF\x00':
+        print("Not a valid DDF file (missing magic)")
         return 1
 
-    with open(filename, "rb") as f:
-        # Hitta header dynamiskt
-        header_offset = find_ddf_header(f)
-        if header_offset is None:
-            print("ERROR: Could not find DDF header (magic number 0x00464444)")
-            print("Tried offsets:", [f"0x{o:x}" for o in COMMON_HEADER_OFFSETS])
-            return 1
+    header = struct.unpack("<11I", data[:44])
+    print("DDF Header:")
+    print(f"  magic               : 0x{header[0]:08x}")
+    print(f"  init                : 0x{header[1]:08x}")
+    print(f"  exit                : 0x{header[2]:08x}")
+    print(f"  irq                 : 0x{header[3]:08x}")
+    print(f"  symtab              : 0x{header[4]:08x}")
+    print(f"  symcount            : 0x{header[5]:08x}")
+    print(f"  strtab_offset       : 0x{header[6]:08x}")
+    print(f"  version_major       : 0x{header[7]:08x}")
+    print(f"  version_minor       : 0x{header[8]:08x}")
+    print(f"  reloc_table_offset  : 0x{header[9]:08x}")
+    print(f"  reloc_table_count   : 0x{header[10]:08x}")
 
-        print(f"Found DDF header at offset 0x{header_offset:x}")
-
-        # Läs header
-        header = read_ddf_header(f, header_offset)
-        if not header:
-            print("ERROR: Invalid DDF header format")
-            return 1
-
-        print("\nDDF Header:")
-        for k, v in header.items():
-            print(f"  {k:15}: 0x{v:08x}")
-
-        # Verifiera kritiska symboler
-        required = {
-            'init': header['init'],
-            'exit': header['exit'], 
-            'irq': header['irq']
-        }
-        
-        print("\nCritical Symbols:")
-        for name, offset in required.items():
-            print(f"  {name:15}: 0x{offset:08x} {'(OK)' if offset else '(MISSING)'}")
-
-        return 0
+    symtab_offset = header[4]
+    symcount = header[5]
+    for i in range(symcount):
+        entry = struct.unpack_from('<III', data, symtab_offset + i*12)
+        print(f"  Symbol[{i}] name_off={entry[0]} value_off={entry[1]} type={entry[2]}")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <driver_file>")
-        sys.exit(1)
-    
     sys.exit(main(sys.argv[1]))
+

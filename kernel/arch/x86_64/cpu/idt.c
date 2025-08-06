@@ -1,6 +1,7 @@
 #include "idt.h"
 #include "irq.h"
 #include "console.h"
+#include "stdio.h"
 
 #define ISR_STUB(i) extern void isr##i(void);
 #define XISR(n) ISR_STUB(n)
@@ -63,7 +64,6 @@ void idt_init()
     for(int i = 0; i < 32; i++)
     {
         idt_set_entry(i, (uint32_t)isr_stubs[i], 0x08, 0x8E);
-        //idt_set_entry(i, (uint32_t)isr_test, 0x08, 0x8E);
     }
 
     struct IDTDescriptor idt_desc;
@@ -99,6 +99,20 @@ void fault_handler(struct err_stack_frame *frame)
         puts(exception_messages[frame->int_no]);
         set_color(MAKE_COLOR(FG_YELLOW, BG_RED));
         puts(" Exception");
+
+        // Print which exception (nr)
+        printf("int_no=%d\n", frame->int_no);
+
+        // Print EIP
+        printf("EIP=%x\n", frame->eip);
+
+        // Print error code (for page fault, gives a lot of info)
+        printf("err_code=%x\n", frame->err_code);
+
+        // Print CR2 (fault addr), only valid for #PF!
+        uint32_t cr2;
+        asm volatile("mov %%cr2, %0" : "=r"(cr2));
+        printf("CR2 (fault addr) = %x\n", cr2);
 
         for(;;);
     }    

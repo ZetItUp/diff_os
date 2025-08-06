@@ -4,6 +4,7 @@
 *.elf
 *.img
 *.txt
+*.ddf
 build/
 cross/
-token
+1token

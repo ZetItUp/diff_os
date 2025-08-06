@@ -1,4 +1,4 @@
-# --- Config ---
+# Config
 CC = i386-elf-gcc
 LD = i386-elf-ld
 OBJCOPY = i386-elf-objcopy
@@ -8,26 +8,30 @@ DRIVERS_PATH = .
 IMAGE_DRIVERS_PATH = ../image/system/drivers
 TOOLS_DIR = ../tools
 
-CFLAGS = -ffreestanding -I ../kernel/includes -c
-LDFLAGS = -T driver.ld --gc-sections --undefined=ddf_driver_init --undefined=ddf_driver_exit --undefined=ddf_driver_irq -o 
+CFLAGS = -g -ffreestanding -fPIC -fno-stack-protector -nodefaultlibs -nostdlib \
+-ffunction-sections -fdata-sections -fno-common -I ../kernel/includes -c
 
-# --- Files ---
-DRIVERS_SOURCE := $(wildcard $(DRIVERS_PATH)/*.c)
+LDFLAGS = -T driver.ld --gc-section \
+--undefined=ddf_driver_init --undefined=ddf_driver_exit --undefined=ddf_driver_irq \
+--undefined=ddf_irq_number \
+-pie --emit-relocs -o
 
-DRIVERS_OBJ := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%.o,$(DRIVERS_SOURCE))
-DRIVERS_NOSYM_ELF := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%_nosym.ddf.elf,$(DRIVERS_SOURCE))
-DRIVERS_NM := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%_nosym.nm.txt,$(DRIVERS_SOURCE))
-DRIVERS_SYMBOLS_C := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%_symbols.c,$(DRIVERS_SOURCE))
-DRIVERS_SYMBOLS_OBJ := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%_symbols.o,$(DRIVERS_SOURCE))
-DRIVERS_ELF := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%.ddf.elf,$(DRIVERS_SOURCE))
-DRIVERS_PATCHED_ELF := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%.ddf.patched.elf,$(DRIVERS_SOURCE))
-DRIVERS_BIN := $(patsubst $(DRIVERS_PATH)/%.c,$(IMAGE_DRIVERS_PATH)/%.ddf,$(DRIVERS_SOURCE))
 
-$(info DRIVERS_SOURCE is $(DRIVERS_SOURCE))
-$(info DRIVERS_PATH is $(DRIVERS_PATH))
+# Source files
+ALL_DRIVER_CS := $(wildcard $(DRIVERS_PATH)/*.c)
 
-# --- Rules ---
-.PRECIOUS: %.o %.elf %.bin %.elf.bin %.txt %.ddf.elf %.c %.ddf.patched.elf
+DRIVER_HELPER := $(DRIVERS_PATH)/driver.c
+DRIVERS_CS := $(filter-out $(DRIVER_HELPER),$(ALL_DRIVER_CS))
+
+DRIVERS_OBJ := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%.o,$(DRIVERS_CS))
+DRIVERS_NOSYM_ELF := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%_nosym.ddf.elf,$(DRIVERS_CS))
+DRIVERS_NM := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%_nosym.nm.txt,$(DRIVERS_CS))
+DRIVERS_SYMBOLS_C := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%_symbols.c,$(DRIVERS_CS))
+DRIVERS_SYMBOLS_OBJ := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%_symbols.o,$(DRIVERS_CS))
+DRIVERS_ELF := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%.ddf.elf,$(DRIVERS_CS))
+DRIVERS_BIN := $(patsubst $(DRIVERS_PATH)/%.c,$(IMAGE_DRIVERS_PATH)/%.ddf,$(DRIVERS_CS))
+
+.PRECIOUS: %.o %.elf %.bin %.elf.bin %.txt %.ddf.elf %.c
 .PHONY: all clean drivers
 
 all: drivers
@@ -37,68 +41,59 @@ all: drivers
 drivers: $(DRIVERS_BIN)
 	@echo "[DRIVERS] All drivers built"
 
-# Create needed directories
+# Directory creation
 $(DRIVERS_PATH)/obj:
-	mkdir -p $(DRIVERS_PATH)/obj
+	@mkdir -p $(DRIVERS_PATH)/obj
 
 $(IMAGE_DRIVERS_PATH):
-	mkdir -p $(IMAGE_DRIVERS_PATH)
+	@mkdir -p $(IMAGE_DRIVERS_PATH)
 
-# Compile driver source to object
+# Driver Compilation
 .SECONDARY:
 $(DRIVERS_PATH)/obj/%.o: $(DRIVERS_PATH)/%.c | $(DRIVERS_PATH)/obj
 	@echo "[DRIVERS CC] Compiling $<"
-	$(CC) $(CFLAGS) $< -o $@
+	@$(CC) $(CFLAGS) $< -o $@
 
-# Link intermediate ELF WITHOUT symbol table (för nm)
+$(DRIVERS_PATH)/obj/driver.o: $(DRIVERS_PATH)/driver.c | $(DRIVERS_PATH)/obj
+	@echo "[DRIVERS CC] Compiling driver.c"
+	@$(CC) $(CFLAGS) $< -o $@
+
 .SECONDARY:
-$(DRIVERS_PATH)/obj/%_nosym.ddf.elf: $(DRIVERS_PATH)/obj/%.o | $(DRIVERS_PATH)/obj
-	@echo "[DRIVERS LD] Linking intermediate ELF (no symbols) $*"
-	$(LD) $(LDFLAGS) $@ $<
+$(DRIVERS_PATH)/obj/%_nosym.ddf.elf: $(DRIVERS_PATH)/obj/%.o $(DRIVERS_PATH)/obj/driver.o | $(DRIVERS_PATH)/obj
+	@echo "[DRIVERS LD] Linking ELF without symbols $*"
+	@$(LD) $(LDFLAGS) $@ $^ 2>/dev/null
 
-# Generate nm output from intermediate ELF
+# Generate nm output from ELF
 .SECONDARY:
 $(DRIVERS_PATH)/obj/%_nosym.nm.txt: $(DRIVERS_PATH)/obj/%_nosym.ddf.elf
 	@echo "[DRIVERS] Generating nm output for $<"
-	nm -n $< > $@
+	@nm -n $< > $@
 
 # Generate symbol table C from nm output
 $(DRIVERS_PATH)/obj/%_symbols.c: $(DRIVERS_PATH)/obj/%_nosym.nm.txt | $(DRIVERS_PATH)/obj
 	@echo "[DRIVERS] Generating symbol table C for $*"
-	$(PYTHON) $(TOOLS_DIR)/gen_ddf_symbol_table.py $< $@
+	@$(PYTHON) $(TOOLS_DIR)/gen_ddf_symbol_table.py $< $@
 
 # Compile symbol table C to object
 .SECONDARY:
 $(DRIVERS_PATH)/obj/%_symbols.o: $(DRIVERS_PATH)/obj/%_symbols.c
 	@echo "[DRIVERS CC] Compiling symbol table $<"
-	$(CC) $(CFLAGS) $< -o $@
+	@$(CC) $(CFLAGS) $< -o $@
 
-# Link final ELF with driver object and symbol table object
+# Link final ELF
 .SECONDARY:
-$(DRIVERS_PATH)/obj/%.ddf.elf: $(DRIVERS_PATH)/obj/%.o $(DRIVERS_PATH)/obj/%_symbols.o | $(DRIVERS_PATH)/obj
+$(DRIVERS_PATH)/obj/%.ddf.elf: $(DRIVERS_PATH)/obj/%.o $(DRIVERS_PATH)/obj/%_symbols.o $(DRIVERS_PATH)/obj/driver.o | $(DRIVERS_PATH)/obj
 	@echo "[DRIVERS LD] Linking final ELF $*"
-	$(LD) $(LDFLAGS) $@ $^
+	@$(LD) $(LDFLAGS) $@ $^ 2>/dev/null
 
-# Patch DDF header offsets in final ELF
 .SECONDARY:
-$(DRIVERS_PATH)/obj/%.ddf.patched.elf: $(DRIVERS_PATH)/obj/%.ddf.elf
-	@echo "[DRIVERS] Patching DDF header offsets for $*"
-	@INIT=$$(nm -n $< | grep ' ddf_driver_init$$' | awk '{print $$1}' | head -n1); \
-	EXIT=$$(nm -n $< | grep ' ddf_driver_exit$$' | awk '{print $$1}' | head -n1); \
-	IRQ=$$(nm -n $< | grep ' ddf_driver_irq$$' | awk '{print $$1}' | head -n1); \
-	SYMTAB=$$(nm -n $< | grep ' ddf_symbol_table$$' | awk '{print $$1}' | head -n1); \
-	cp $< $@; \
-	$(PYTHON) $(TOOLS_DIR)/patch_ddf.py $@ $$INIT $$EXIT $$IRQ $$SYMTAB; \
-	echo "[DRIVERS] DDF header patched for $*"
+$(IMAGE_DRIVERS_PATH)/%.ddf: $(DRIVERS_PATH)/obj/%.ddf.elf | $(IMAGE_DRIVERS_PATH)
+	@echo "[DRIVERS] Creating DDF driver $*"
+	@$(PYTHON) $(TOOLS_DIR)/patch_ddf.py $< $@
 
-# Convert patched ELF to raw binary driver
-$(IMAGE_DRIVERS_PATH)/%.ddf: $(DRIVERS_PATH)/obj/%.ddf.patched.elf | $(IMAGE_DRIVERS_PATH)
-	@echo "[DRIVERS] Creating binary driver $*"
-	$(OBJCOPY) -O binary $< $@
-
-# Clean build artifacts
+# Clean
 clean:
 	@echo "[DRIVERS] Cleaning build files"
-	rm -rf $(DRIVERS_PATH)/obj
-	rm -rf $(IMAGE_DRIVERS_PATH)/*.ddf
+	@rm -rf $(DRIVERS_PATH)/obj
+	@rm -rf $(IMAGE_DRIVERS_PATH)/*.ddf
 
