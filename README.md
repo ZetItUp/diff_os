@@ -23,4 +23,5 @@ The ways i've done some stuff in it may seem weird, but im learning.
 Open the Makefile in the root folder and make sure the paths and programs points to your builds.
 If everything is configured correctly, you should just need to do
 * make clean && make run
+
 and it will boot up.
