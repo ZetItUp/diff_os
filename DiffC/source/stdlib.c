@@ -1,0 +1,91 @@
+#include <stdlib.h>
+#include <syscall.h>
+
+void exit(int code)
+{
+    system_exit(code);
+}
+
+void itoa(int value, char *str, int base)
+{
+    char *p = str;
+    int is_negative = 0;
+
+    if(value == 0)
+    {
+        *p++ = '0';
+        *p = '\0';
+
+        return;
+    }
+
+    if(value < 0 && base == 10)
+    {
+        is_negative = 1;
+        value = -value;
+    }
+
+    while(value)
+    {
+        int digit = value % base;
+
+        *p++ = (digit < 10) ? '0' + digit : 'a' + (digit - 10);
+        value /= base;
+    }
+
+    if(is_negative)
+    {
+        *p++ = '-';
+    }
+
+    *p = '\0';
+
+    for(char *start = str, *end = p - 1; start < end; start++, end--)
+    {
+        char tmp = *start;
+        *start = *end;
+        *end = tmp;
+    }
+}
+
+void utoa(unsigned int val, char* buf, int base)
+{
+    char tmp[32];
+    int i = 0;
+ 
+    if (val == 0)
+    {
+        tmp[i++] = '0';
+    }
+    else 
+    {
+        while (val > 0) 
+        {
+            int digit = val % base;
+            
+            tmp[i++] = digit < 10 ? ('0' + digit) : ('a' + digit - 10);
+            val /= base;
+        }
+    }
+
+    int len = i;
+    
+    for (int j = 0; j < len; j++)
+    {
+        buf[j] = tmp[len - j - 1];
+    }
+    buf[len] = 0;
+}
+
+void utohex(uintptr_t val, char* buf, int outlen)
+{
+    int digits = (outlen > 8) ? 8 : 2;
+ 
+    for (int i = digits-1; i >= 0; --i) 
+    {
+        int shift = 4*i;
+        buf[digits-1-i] = "0123456789ABCDEF"[(val >> shift) & 0xF];
+    }
+ 
+    buf[digits] = 0;
+}

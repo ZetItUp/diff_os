@@ -7,6 +7,9 @@ mov [boot_drive], ax
 MAX_SECTORS     equ 127
 SECTOR_SIZE     equ 512
 
+%define TSS_SIZE   104
+%define TSS_LIMIT  (TSS_SIZE-1)
+
 SUPERBLOCK_LBA  equ 2048
 SUPERBLOCK_SEG  equ 0x1000
 FILETABLE_SEG   equ 0x3000
@@ -70,12 +73,6 @@ start_loader:
     mov [file_lba_high], ax
     mov ax, [es:0x10]                   ; Total sectors
     mov [file_remain], ax
-
-mov ax, [file_lba_low]
-call print_hex16
-mov ax, [file_lba_high]
-call print_hex16
-
 
     ; Read the file table in chunks
     mov word [buffer_segment], FILETABLE_SEG
@@ -239,9 +236,26 @@ init_pm:
     xor eax, eax
     rep stosd
 
-    mov esp, 0x7FFFF                     ; Set the stack in Protected Mode to 0x7FFFF
+    mov esp, 0x7FFFF                    ; Set the stack in Protected Mode to 0x7FFFF
     mov ebp, esp
     push esp
+
+    ; Patch GDT TSS Descriptor with the address to TSS
+    mov eax, tss
+    mov word [gdt_tss + 2], ax
+    shr eax, 16
+    mov byte [gdt_tss + 4], al
+    mov byte [gdt_tss + 7], ah
+
+    ; Init TSS: SS0 = Kernel Data, ESP0 = kernel_stack_top
+    mov eax, kernel_stack_top
+    mov [tss + 4], eax                  ; ESP0
+    mov ax, DATA_SEG
+    mov [tss + 8], ax                   ; SS0
+    mov word [tss + 102], 104           ; I/O Map Base = TSS size
+
+    mov ax, TSS_SEG
+    ltr ax
 
     mov esi, 0x10000
     mov edi, 0x100000       
@@ -335,6 +349,32 @@ gdt_data:
     db 11001111b                        ; Flags + Limit 16-19, same as gdt_code
     db 0x0                              ; Base Address 24-31    = 0
 
+
+gdt_user_code:
+    dw 0xFFFF
+    dw 0x0000
+    db 0x00
+    db 11111010b
+    db 11001111b
+    db 0x00
+
+gdt_user_data:
+    dw 0xFFFF
+    dw 0x0000
+    db 0x00
+    db 11110010b
+    db 11001111b
+    db 0x00
+
+; 32-bit TSS Descriptor
+gdt_tss:
+    dw TSS_LIMIT 
+    dw 0
+    db 0
+    db 10001001b                        ; Type=0x9, S = 0, DPL = 0, P = 1
+    db ((TSS_LIMIT >> 16) & 0x0F)
+    db 0
+
 global gdt_end
 gdt_end:
 
@@ -344,15 +384,37 @@ gdt_descriptor:
 
 CODE_SEG equ gdt_code - gdt_start       ; Calculate Code Segment
 DATA_SEG equ gdt_data - gdt_start       ; Calculate Data Segment
+USER_CODE_SEG equ (gdt_user_code - gdt_start) | 3
+USER_DATA_SEG equ (gdt_user_data - gdt_start) | 3
+
+TSS_SEG equ gdt_tss - gdt_start
+
+; TSS (32-bit)
+align 4
+tss:
+    times 104 db 0                      ; 32-bit TSS (104 bytes)
+tss_end:
+
+section .bss
+; Kernel stack (Ring 0)
+align 16
+kernel_stack:
+    resb 16384                          ; 16 KB
+
+kernel_stack_top:
+
+
+e820_buffer:
+    resb 32 * 24                       ; Buffer for 32 entries (24 bytes each)
+mem_entry_count:
+    resd 1                             ; Number of entries found
+
+section .text
 
 hex_chars db '0123456789ABCDEF'         ; Hex characters
 boot_drive db 0
 
 kernel_sectors dd 0
-
-e820_buffer:
-    times 32 * 24 db 0                  ; Buffer for 32 entries (24 bytes each)
-    mem_entry_count dd 0                ; Number of entries found
 
 ; Messages
 msg_load_fail   db 'ERROR: Kernel missing',0

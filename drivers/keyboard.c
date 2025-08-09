@@ -157,7 +157,7 @@ void ddf_driver_init(kernel_exports_t *exports)
 
     kernel->pic_clear_mask(1);  // Unmask IRQ1
     
-    kernel->printf("[DRIVER] PS/2 Keyboard driver installed!\n");
+    //kernel->printf("[DRIVER] PS/2 Keyboard driver installed!\n");
 }
 
 __attribute__((section(".text")))

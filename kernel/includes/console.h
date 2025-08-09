@@ -34,7 +34,7 @@
 
 void putch_color(unsigned char attrib, char c);
 void putch(char c);
-void puts(const char *str);
+int puts(const char *str);
 void set_x(int x);
 void set_y(int y);
 void set_pos(int x, int y);

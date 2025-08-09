@@ -1,8 +1,7 @@
-#ifndef STRING_H
-#define STRING_H
+#pragma once
 
-#include "stdint.h"
-#include "stddef.h"
+#include <stdint.h>
+#include <stddef.h>
 
 size_t strlen(const char *s);
 size_t strcspn(const char *s, const char *reject);
@@ -11,18 +10,11 @@ char *strtok_r(char *str, const char *delim, char **saveptr);
 int strncmp(const char *s1, const char *s2, unsigned int n);
 int strcmp(const char *s1, const char *s2);
 char *strcat(char *dst, const char *src);
-char *strncat(char *dest, const char *src, size_t n);
-char *strrchr(const char *s, int c);
 char *strcpy(char *dst, const char *src);
 char *strncpy(char *dest, const char *src, unsigned int n);
 char *strtok(char *str, const char *delim);
 char *strchr(const char *str, char c);
 
-void itoa(int value, char *str, int base);
-void utoa(unsigned int val, char* buf, int base);
-void utohex(uintptr_t val, char* buf, int outlen);
-
 void *memset(void *dest, int value, size_t count);
 void *memcpy(void *dest, const void *src, unsigned int n);
 
-#endif

@@ -28,8 +28,9 @@ BOOT_STAGE1 = boot/boot.asm
 BOOT_STAGE2 = boot/boot_stage2.asm
 
 ASM_SRC = \
-	kernel/arch/x86_64/cpu/isr_stub.asm
-
+	kernel/arch/x86_64/cpu/isr_stub.asm \
+	kernel/arch/x86_64/cpu/usermode.asm
+	
 KERNEL_SRC = \
     kernel/library/string.c \
 	kernel/library/printf.c \
@@ -42,6 +43,9 @@ KERNEL_SRC = \
 	kernel/drivers/driver.c \
 	kernel/drivers/config.c \
 	kernel/drivers/module_loader.c \
+	kernel/system/syscall.c \
+	kernel/dex/dex_loader.c \
+	kernel/dex/exl_loader.c \
 	kernel/kernel.c \
     kernel/console.c \
     kernel/fs/diff.c \
@@ -69,6 +73,7 @@ drivers:
 # Main OS image
 $(TARGET): tools $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] Creating OS image"
+	@cp $(BUILD)/kernel.bin image/system/kernel.bin
 	@$(MKDIFFOS) $(TARGET) 64 $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] OS image created: $@"
 
@@ -88,7 +93,7 @@ $(BUILD)/boot_stage2.bin: $(BOOT_STAGE2) $(BUILD)/kernel_sizes.inc
 # Kernel ELF
 $(BUILD)/kernel.elf: $(KERNEL_OBJ) $(ASM_OBJ) linker.ld
 	@echo "[LD] Linking kernel"
-	@$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJ) $(ASM_OBJ) 2>/dev/null
+	$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJ) $(ASM_OBJ) # 2>/dev/null
 	@echo "[LD] Kernel linked: $@"
 
 
@@ -121,6 +126,11 @@ $(OBJ)/%.o: kernel/fs/%.c
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+$(OBJ)/%.o: kernel/dex/%.c
+	@mkdir -p $(OBJ)
+	@echo "[CC] Compiling $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
 $(OBJ)/%.o: kernel/library/%.c
 	@mkdir -p $(OBJ)
 	@echo "[CC] Compiling $<"
@@ -132,6 +142,11 @@ $(OBJ)/%.o: kernel/drivers/%.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJ)/%.o: kernel/memory/%.c
+	@mkdir -p $(OBJ)
+	@echo "[CC] Compiling $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJ)/%.o: kernel/system/%.c
 	@mkdir -p $(OBJ)
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@

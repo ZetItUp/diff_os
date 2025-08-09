@@ -1,5 +1,7 @@
 #include "io.h"
 #include "console.h"
+#include "stdint.h"
+#include "stdio.h"
 
 #define SCREEN_WIDTH    80
 #define SCREEN_HEIGHT   25
@@ -124,12 +126,14 @@ void putch_color(unsigned char attrib, char c)
     set_cursor_pos(cursor_x, cursor_y);
 }
 
-void puts(const char *str)
+int puts(const char *str)
 {
     while (*str)
     {
         putch(*str++);
     }
+
+    return 0;
 }
 
 void set_color(unsigned char attrib)

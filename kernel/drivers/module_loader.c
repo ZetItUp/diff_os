@@ -71,9 +71,6 @@ static ddf_header_t *find_ddf_header(uint8_t *module_base, uint32_t size, uint32
 
 void *load_ddf_module(const char *path, ddf_header_t **out_header, uint32_t *out_header_offset, uint32_t *out_size)
 {
-    extern SuperBlock superblock;
-    extern FileTable *file_table;
-
     int index = find_entry_by_path(file_table, path);
     if(index == -1)
     { 
@@ -95,7 +92,7 @@ void *load_ddf_module(const char *path, ddf_header_t **out_header, uint32_t *out
         return 0;
     }
     
-    if(read_file(&superblock, file_table, path, raw_buf) != 0) 
+    if(read_file(file_table, path, raw_buf) <= 0) 
     {
         kfree(raw_buf);
     
@@ -187,7 +184,7 @@ ddf_module_t *load_driver(const char *path)
     
     // Get ddf_driver_exit function
     void (*exit_fn)(void) = (void(*)(void))((uint8_t*)module_base + header->exit_offset);
-    
+
     ddf_module_t *module = kmalloc(sizeof(ddf_module_t));
     module->module_base = module_base;
     module->header = header;
@@ -195,12 +192,12 @@ ddf_module_t *load_driver(const char *path)
     module->driver_irq = irq_fn;
     module->driver_exit = exit_fn;
     module->irq_number = header->irq_number;
-
+    
     if(module->driver_init)
     {
         module->driver_init(&g_exports);
     }
-
+    
     return module;
 }
 

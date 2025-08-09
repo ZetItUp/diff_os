@@ -1,0 +1,4 @@
+{
+  "diffc": ["printf", "puts", "putchar", "malloc", "free", "memcpy", "memset"]
+}
+

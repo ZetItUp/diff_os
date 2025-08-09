@@ -2,6 +2,8 @@
 #include "irq.h"
 #include "console.h"
 #include "stdio.h"
+#include "paging.h"
+#include "system/syscall.h"
 
 #define ISR_STUB(i) extern void isr##i(void);
 #define XISR(n) ISR_STUB(n)
@@ -21,6 +23,7 @@ void *isr_stubs[32] =
 #undef XPTR
 
 struct IDTEntry idt[IDT_SIZE];
+extern void system_call_init(void);
 
 const char *exception_messages[] =
 {
@@ -73,6 +76,8 @@ void idt_init()
     // Load IDT with lidt
     asm volatile("cli");
     asm volatile("lidt %0" : : "m"(idt_desc));
+
+    system_call_init();
 }
 
 void idt_set_entry(int num, uint32_t handler_addr, uint16_t selector, uint8_t type_attr)
@@ -84,15 +89,53 @@ void idt_set_entry(int num, uint32_t handler_addr, uint16_t selector, uint8_t ty
     // Reserved,set to 0
     idt[num].zero = 0;
     // Type and attribute, (ex. 0x8E,  Present, Ring 0, 32-bit Interrupt Gate)
-    idt[num].type_attr = type_attr | 0x60;
+    idt[num].type_attr = type_attr;
     // Set highest 16 bit of the handler address
     idt[num].offset_high = (handler_addr >> 16) & 0xFFFF;
 }
 
-void fault_handler(struct err_stack_frame *frame)
+static void print_page_fault(struct stack_frame *f)
+{
+    uint32_t cr2;
+    asm volatile("mov %%cr2, %0" : "=r"(cr2));
+
+    printf("\n==== PAGE FAULT ====\n");
+    printf("EIP=%08x  CR2=%08x\n", f->eip, cr2);
+    dump_err_bits(f->err_code);
+
+    // Regdump
+    printf("EAX=%08x EBX=%08x ECX=%08x EDX=%08x\n", f->eax, f->ebx, f->ecx, f->edx);
+    printf("ESI=%08x EDI=%08x EBP=%08x ESP=%08x\n", f->esi, f->edi, f->ebp, f->esp);
+
+    // PDE/PTE för faultande adress
+    dump_pde_pte(cr2);
+
+    // Instruktionsbytes vid EIP (bör vara mappad annars exekveras den inte)
+    printf("[bytes @EIP]");
+    hexdump_bytes((const void*)f->eip, 16);
+
+    // Försök visa bytes vid CR2 om sidan finns
+    if (page_present(cr2)) {
+        printf("[bytes @CR2]");
+        hexdump_bytes((const void*)cr2, 16);
+    } else {
+        printf("[bytes @CR2] (unmapped)\n");
+    }
+
+    // Liten stack-dump ur userspace (kan hjälpa att se returadresser/parametrar)
+    if (page_present(f->esp)) {
+        printf("[user stack]");
+        hexdump_bytes((const void*)f->esp, 32);
+    }
+
+    // Stoppa här så du hinner läsa loggen
+    for(;;) asm volatile("hlt");
+}
+
+void fault_handler(struct stack_frame *frame)
 {
     if(frame->int_no < 32)
-    {
+    {/*
         set_color(MAKE_COLOR(FG_YELLOW, BG_RED));
         puts("ERROR! ");
         set_color(MAKE_COLOR(FG_WHITE, BG_RED));
@@ -113,7 +156,11 @@ void fault_handler(struct err_stack_frame *frame)
         uint32_t cr2;
         asm volatile("mov %%cr2, %0" : "=r"(cr2));
         printf("CR2 (fault addr) = %x\n", cr2);
-
+        */
+        if(frame->int_no == 14)
+        {    
+            print_page_fault(frame);
+        }
         for(;;);
     }    
 }

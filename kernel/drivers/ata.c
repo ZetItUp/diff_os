@@ -62,7 +62,7 @@ int ata_read(uint32_t lba, uint32_t count, void *buffer)
         {
             printf("[ATA] Busy Timeout!\n");
 
-            return -1;
+            return s * SECTOR_SIZE;
         }
 
         outb(ATA_PRIMARY_CTRL, 0x00);
@@ -82,7 +82,7 @@ int ata_read(uint32_t lba, uint32_t count, void *buffer)
         {
             printf("[ATA] Busy Timeout!\n");
 
-            return -1;
+            return s * SECTOR_SIZE;
         }
 
         // Wait for DRQ = 1 (Data ready)
@@ -90,7 +90,7 @@ int ata_read(uint32_t lba, uint32_t count, void *buffer)
         {
             printf("[ATA] DRQ Timeout!\n");
 
-            return -1;
+            return SECTOR_SIZE;
         }
 
         // Read 512 bytes (256 words)
@@ -105,7 +105,7 @@ int ata_read(uint32_t lba, uint32_t count, void *buffer)
         lba++;
     }
 
-    return 0;
+    return count * SECTOR_SIZE;
 }
 
 int ata_write(uint32_t lba, uint32_t count, const void *buffer)
@@ -117,7 +117,7 @@ int ata_write(uint32_t lba, uint32_t count, const void *buffer)
         if (ata_wait_busy_clear() < 0)
         {
             printf("[ATA] Write Timeout Busy\n");
-            return -1;
+            return s * SECTOR_SIZE;
         }
 
         outb(ATA_PRIMARY_CTRL, 0x00);
@@ -135,14 +135,14 @@ int ata_write(uint32_t lba, uint32_t count, const void *buffer)
         {
             printf("[ATA] Write Data Timeout Busy\n");
             
-            return -1;
+            return s * SECTOR_SIZE;
         }
 
         if (ata_wait_drq_set() < 0)
         {
             printf("[ATA] Write Data Timeout DRQ\n");
             
-            return -1;
+            return s * SECTOR_SIZE;
         }
 
         // Skriv 256 ord (512 byte)
@@ -154,7 +154,7 @@ int ata_write(uint32_t lba, uint32_t count, const void *buffer)
         lba++;
     }
 
-    return 0;
+    return count * SECTOR_SIZE;
 }
 
 void ata_identify(void)

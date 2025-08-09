@@ -25,7 +25,7 @@ int read_superblock(SuperBlock *sb)
 int init_filesystem(void)
 {
     // Read SuperBlock
-    if(read_superblock(&superblock) != 0)
+    if(read_superblock(&superblock) <= 0)
     {
         printf("[Diff FS] ERROR: Unable to read superblock!\n");
 
@@ -50,14 +50,14 @@ int read_file_table(const SuperBlock *sb)
     size_t table_size_bytes = sb->file_table_size * SECTOR_SIZE;
     
     file_table = kmalloc(table_size_bytes);
-    if (disk_read(sb->file_table_sector, sb->file_table_size, file_table) != 0)
+    if (disk_read(sb->file_table_sector, sb->file_table_size, file_table) <= 0)
     {
         return -1;
     }
 
     size_t bitmap_size_bytes = sb->file_table_bitmap_size * SECTOR_SIZE;
     file_bitmap = kmalloc(bitmap_size_bytes);
-    if (disk_read(sb->file_table_bitmap_sector, sb->file_table_bitmap_size, file_bitmap) != 0)
+    if (disk_read(sb->file_table_bitmap_sector, sb->file_table_bitmap_size, file_bitmap) <= 0)
     {
         return -1;
     }
@@ -139,24 +139,31 @@ int find_entry_by_path(const FileTable *table, const char *path)
 }
 
 // Read file contents into buffer (buffer must be large enough)
-int read_file(const SuperBlock *sb, const FileTable *table, const char *path, void *buffer)
+int read_file(const FileTable *table, const char *path, void *buffer)
 {
-    (void)sb; // Not needed, could be used for sector size
     int index = find_entry_by_path(table, path);
-
     if (index == -1)
-    {
         return -1;
-    }
-
     const FileEntry *fe = &table->entries[index];
-
     if (fe->type != ENTRY_TYPE_FILE)
-    {
         return -1;
-    }
+    uint32_t alloc_bytes = fe->file_size_bytes;
+    uint32_t read_bytes = fe->sector_count * SECTOR_SIZE;
+    if (alloc_bytes > read_bytes) alloc_bytes = read_bytes; // Safety
+    uint8_t temp[SECTOR_SIZE];
 
-    return disk_read(fe->start_sector, fe->sector_count, buffer);
+    uint8_t *buf = buffer;
+    uint32_t bytes_left = fe->file_size_bytes;
+    for (uint32_t s = 0; s < fe->sector_count; ++s) {
+        int r = disk_read(fe->start_sector + s, 1, temp);
+        if (r < 0) return -2;
+        uint32_t to_copy = bytes_left > SECTOR_SIZE ? SECTOR_SIZE : bytes_left;
+        memcpy(buf, temp, to_copy);
+        buf += to_copy;
+        bytes_left -= to_copy;
+        if (bytes_left == 0) break;
+    }
+    return fe->file_size_bytes;
 }
 
 // Set a bit in a bitmap

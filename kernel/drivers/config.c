@@ -40,28 +40,18 @@ void load_drivers(const FileTable *table, const char *cfg_path)
         
         return;
     }
-
-    const FileEntry *fe = &table->entries[idx];
-    uint32_t syscfg_size = fe->file_size_bytes;
     
-    if (syscfg_size == 0 || syscfg_size > 4096)
+    const FileEntry *fe = &table->entries[idx];
+    char *syscfg_data = kmalloc(fe->sector_count * 512 + 1);
+    int bytes_read = read_file(table, cfg_path, syscfg_data);
+
+    if (bytes_read <= 0)
     {
-        printf("File is empty or too big!\n");
-        
+        printf("ERROR: File '%s' was empty!\n", cfg_path);
         return;
     }
 
-    uint32_t sector_bytes = fe->sector_count * 512;
-    char *syscfg_data = kmalloc(sector_bytes + 1);      // Null termination, +1
-    if (disk_read(fe->start_sector, fe->sector_count, syscfg_data) != 0)
-    {
-        printf("Failed to read sys.cfg!\n");
-        kfree(syscfg_data);
-        
-        return;
-    }
-
-    syscfg_data[syscfg_size] = 0;
+    syscfg_data[bytes_read] = 0;
 
     char driver_path[128] = "";
     char *lines = syscfg_data;
@@ -124,7 +114,6 @@ void load_drivers(const FileTable *table, const char *cfg_path)
             
             installed_modules[module->irq_number] = module;
             irq_install_handler(module->irq_number, module->driver_irq);
-
             /*
             printf("[MODULE DEBUG] driver_irq=%x irq_number=%x\n", (uint32_t)module->driver_irq, module->irq_number);
             printf("[MODULE DEBUG] irq_handlers[%d]=%x\n", module->irq_number, (uint32_t)irq_handlers[module->irq_number]);

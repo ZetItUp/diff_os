@@ -15,6 +15,7 @@
 #include "drivers/config.h"
 #include "drivers/driver.h"
 #include "drivers/ata.h"
+#include "dex/dex.h"
 
 __attribute__((naked, section(".text.start"))) 
 void _start(void)
@@ -92,7 +93,9 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
     display_sys_info();
 
     init_filesystem();
-    load_drivers(file_table, "/system/sys.cfg");
+    
+    load_drivers(file_table, "system/sys.cfg");
+    dex_run(file_table, "programs/hello/hello.dex");
     //test_ata_read();
     //do_tests();
 

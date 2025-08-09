@@ -1,5 +1,4 @@
-#include "string.h"
-#include "stddef.h"
+#include <string.h>
 
 int strcmp(const char *s1, const char *s2)
 {
@@ -8,78 +7,19 @@ int strcmp(const char *s1, const char *s2)
         s1++;
         s2++;
     }
-    
+
     return *(const unsigned char*)s1 - *(const unsigned char*)s2;
 }
-
-char *strrchr(const char *s, int c)
-{
-    const char *last = NULL;
-    unsigned char ch = (unsigned char)c;
-
-    while (*s)
-    {
-        if (*s == ch)
-            last = s;
-        s++;
-    }
-
-    if (ch == '\0')
-        return (char*)s;
-
-    return (char*)last;
-}
-
-char *strncat(char *dest, const char *src, size_t n)
-{
-    char *d = dest;
-
-    while (*d) d++;
-
-    while (n-- && *src)
-        *d++ = *src++;
-
-    *d = '\0';
-
-    return dest;
-}
-
-
-char *strstr(const char *haystack, const char *needle)
-{
-    if (!*needle)
-    {
-        return (char *)haystack; // Tom söksträng matchar direkt
-    }
-
-    for (const char *h = haystack; *h; h++)
-    {
-        const char *h_ptr = h;
-        const char *n_ptr = needle;
-
-        while (*h_ptr && *n_ptr && (*h_ptr == *n_ptr))
-        {
-            h_ptr++;
-            n_ptr++;
-        }
-
-        if (*n_ptr == '\0')
-        {
-            return (char *)h; // Hela needle matchade
-        }
-    }
-
-    return NULL; // Ingen matchning
-}
-
 
 size_t strspn(const char *s, const char *accept)
 {
     size_t count = 0;
+
     for (; *s; s++)
     {
         const char *a = accept;
         int found = 0;
+
         while (*a)
         {
             if (*s == *a)
@@ -89,47 +29,58 @@ size_t strspn(const char *s, const char *accept)
             }
             a++;
         }
+
         if (!found)
         {
             return count;
         }
+
         count++;
     }
+
     return count;
 }
 
 size_t strcspn(const char *s, const char *reject)
 {
     size_t count = 0;
+ 
     for (; *s; s++)
     {
         const char *r = reject;
+ 
         while (*r)
         {
             if (*s == *r)
             {
                 return count;
             }
+ 
             r++;
         }
+ 
         count++;
     }
+ 
     return count;
 }
 
 size_t strlen(const char *s)
 {
     size_t len = 0;
+ 
     while (s[len])
     {
         len++;
     }
+ 
     return len;
 }
 
 char *strtok_r(char *str, const char *delim, char **saveptr)
 {
     char *start;
+
     if (str)
     {
         start = str;
@@ -139,7 +90,6 @@ char *strtok_r(char *str, const char *delim, char **saveptr)
         start = *saveptr;
     }
 
-    // Skip leading delimiters
     start += strspn(start, delim);
     if (*start == '\0')
     {
@@ -147,7 +97,6 @@ char *strtok_r(char *str, const char *delim, char **saveptr)
         return NULL;
     }
 
-    // Find end of token
     char *end = start + strcspn(start, delim);
     if (*end)
     {
@@ -242,7 +191,6 @@ char *strtok(char *str, const char *delim)
     return token_start;
 }
 
-
 char *strchr(const char *str, char c)
 {
     while(*str)
@@ -258,129 +206,31 @@ char *strchr(const char *str, char c)
     return NULL;
 }
 
-void utoa(unsigned int val, char* buf, int base)
-{
-    char tmp[32];
-    int i = 0;
-    if (val == 0) tmp[i++] = '0';
-    else {
-        while (val > 0) {
-            int digit = val % base;
-            tmp[i++] = digit < 10 ? ('0' + digit) : ('a' + digit - 10);
-            val /= base;
-        }
-    }
-    int len = i;
-    for (int j = 0; j < len; j++)
-        buf[j] = tmp[len - j - 1];
-    buf[len] = 0;
-}
-
-void utohex(uintptr_t val, char* buf, int outlen)
-{
-    int digits = (outlen > 8) ? 8 : 2; // default till 8, men om outlen=3 -> 2 siffror
-    for (int i = digits-1; i >= 0; --i) {
-        int shift = 4*i;
-        buf[digits-1-i] = "0123456789ABCDEF"[(val >> shift) & 0xF];
-    }
-    buf[digits] = 0;
-}
-
-
-void itoa(int value, char *str, int base)
-{
-    char *p = str;
-    int is_negative = 0;
-
-    if(value == 0)
-    {
-        *p++ = '0';
-        *p = '\0';
-
-        return;
-    }
-
-    if(value < 0 && base == 10)
-    {
-        is_negative = 1;
-        value = -value;
-    }
-
-    while(value)
-    {
-        int digit = value % base;
-
-        *p++ = (digit < 10) ? '0' + digit : 'a' + (digit - 10);
-        value /= base;
-    }
-
-    if(is_negative)
-    {
-        *p++ = '-';
-    }
-
-    *p = '\0';
-
-    for(char *start = str, *end = p - 1; start < end; start++, end--)
-    {
-        char tmp = *start;
-        *start = *end;
-        *end = tmp;
-    }
-}
-
 char *strcpy(char *dst, const char *src)
 {
     char *ret = dst;
-    
+
     while ((*dst++ = *src++))
     {
         ; // Kopiera tills nullbyte
     }
-    
+
     return ret;
 }
 
 char *strcat(char *dst, const char *src)
 {
     char *ret = dst;
-    
+
     while (*dst)
     {
         dst++;
     }
-    
+
     while ((*dst++ = *src++))
     {
         ;
     }
-    
+
     return ret;
-}
-
-
-void *memset(void *dest, int value, size_t count)
-{
-    unsigned char *ptr = (unsigned char *)dest;
-    unsigned char val = (unsigned char)value;
-
-    for(size_t i = 0; i < count; i++)
-    {
-        ptr[i] = val;
-    }
-
-    return dest;
-}
-
-void *memcpy(void *dest, const void *src, unsigned int n)
-{
-    unsigned char *d = (unsigned char*)dest;
-    const unsigned char *s = (const unsigned char*)src;
-
-    while (n--)
-    {
-        *d++ = *s++;
-    }
-
-    return dest;
 }

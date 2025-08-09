@@ -25,6 +25,6 @@ extern struct IDTEntry idt[IDT_SIZE];
 void idt_set_entry(int num, uint32_t handler_addr, uint16_t selector, uint8_t type_attr);
 void idt_init();
 
-void fault_handler(struct err_stack_frame *frame);
+void fault_handler(struct stack_frame *frame);
 
 void dump_idt(void);

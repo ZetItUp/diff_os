@@ -49,6 +49,7 @@ typedef struct
 } FileTable;
 
 extern FileTable *file_table;
+extern SuperBlock superblock;
 
 // ATA driver must implement this (reads sectors)
 int disk_read(uint32_t sector, uint32_t count, void *buffer);
@@ -66,7 +67,7 @@ int find_entry_in_dir(const FileTable *table, uint32_t parent_id, const char *fi
 int find_entry_by_path(const FileTable *table, const char *path);
 
 // Read a file's contents into buffer, returns 0 on success, -1 on fail
-int read_file(const SuperBlock *sb, const FileTable *table, const char *path, void *buffer);
+int read_file(const FileTable *table, const char *path, void *buffer);
 
 // Initialize Filesyste
 int init_filesystem(void);

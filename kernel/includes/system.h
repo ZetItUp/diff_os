@@ -1,6 +1,6 @@
 #pragma once
 
-struct err_stack_frame
+struct stack_frame
 {
     uint32_t gs, fs, es, ds;
     uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax;

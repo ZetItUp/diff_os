@@ -1,32 +1,39 @@
 [BITS 32]
+global  system_call_stub
+extern  system_call_dispatch
+
 section .text
 
+; =========================
+; Helpers / Macros
+; =========================
 %macro ISR_NOERR 1
 global isr%1
 isr%1:
-    push dword 0        ; fake error code
-    push dword %1       ; exception number
-    jmp isr_common_stub
+    push dword 0            ; fake error code
+    push dword %1           ; exception number
+    jmp  isr_common_stub
 %endmacro
 
 %macro ISR_ERR 1
 global isr%1
 isr%1:
-    push dword %1       ; exception number (error code är redan pushad av CPU)
-    jmp isr_common_stub
+    push dword %1           ; exception number (CPU pushar error code före denna)
+    jmp  isr_common_stub
 %endmacro
 
 %macro MAKE_IRQ 2
 global irq%1
-
 irq%1:
-    push dword 0
-    push dword %2
-    jmp irq_common_stub
-
+    push dword 0            ; fake error code (håll stacklayouten konsekvent)
+    push dword %2           ; IRQ vector (0x20..0x2F)
+    jmp  irq_common_stub
 %endmacro
 
-; ----- Alla 0–31 -----
+
+; =========================
+; ISRs 0..31 + 127
+; =========================
 ISR_NOERR 0
 ISR_NOERR 1
 ISR_NOERR 2
@@ -61,35 +68,43 @@ ISR_NOERR 30
 ISR_NOERR 31
 ISR_NOERR 127
 
-; ---- Common handler ----
-extern fault_handler
+
+; =========================
+; Common ISR stub
+; =========================
+extern  fault_handler
 isr_common_stub:
     pusha
     push ds
     push es
     push fs
     push gs
-    
+
+    ; växla till kernel-data i ring0
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
-    
+
+    ; contextpekare = ESP efter våra save-pushes
     mov eax, esp
-    push eax
-    mov eax, fault_handler
-    call eax
-    pop eax
+    push eax                 ; arg: context
+    call fault_handler       ; cdecl
+    add  esp, 4
+
     pop gs
     pop fs
     pop es
     pop ds
     popa
-    add esp, 8
+    add  esp, 8              ; kasta (error_code, int_no)
     iret
 
 
+; =========================
+; IRQ stubs (PIC 0..15)
+; =========================
 MAKE_IRQ 0, 32
 MAKE_IRQ 1, 33
 MAKE_IRQ 2, 34
@@ -107,40 +122,79 @@ MAKE_IRQ 13, 45
 MAKE_IRQ 14, 46
 MAKE_IRQ 15, 47
 
-extern irq_handler_c
+extern  irq_handler_c
 irq_common_stub:
     pusha
-	
     push ds
-	push es
-	push fs
-	push gs
+    push es
+    push fs
+    push gs
 
-	mov ax, 0x10
-	mov ds, ax
-	mov es, ax
-	mov fs, ax
-	mov gs, ax
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
 
-    ; IRQ number is on the stack from MAKE_IRQ
-    ; This means that after pusha + segment-push
-    ; the correct offset is at 46 bytes
-	lea edx, [esp + 48]
-    mov eax, esp
-    push eax                ; Argument for irq_handler_c(int irq)
-    push edx
+    ; Stacklayout här (översta till nedersta):
+    ;   [esp+00] gs
+    ;   [esp+04] fs
+    ;   [esp+08] es
+    ;   [esp+0C] ds
+    ;   [esp+10..2C] pusha (edi..eax) = 32 bytes
+    ;   [esp+30] int_no (från MAKE_IRQ)
+    ;   [esp+34] error_code (0)
+    ; => IRQ-numret ligger på [esp+48] (0x30)
+    mov edx, [esp + 48]      ; EDX = IRQ NUMMER (VÄRDET)
+    mov eax, esp             ; EAX = context
 
-	call irq_handler_c
-    add esp, 8
+    ; cdecl: pusha höger→vänster => push ctx; push irq
+    push eax                 ; ctx
+    push edx                 ; irq
+    call irq_handler_c
+    add  esp, 8
 
-	pop gs
-	pop fs
-	pop es
-	pop ds
-	
+    pop gs
+    pop fs
+    pop es
+    pop ds
     popa
-	add esp, 8
-	iret
+    add  esp, 8              ; kasta (error_code, int_no)
+    iret
+
+
+; =========================
+; Syscall stub (t.ex. int 0x66/0x80)
+; DPL för denna gate ska vara 3 i IDT. Övriga gates DPL=0.
+; =========================
+system_call_stub:
+    push ds
+    push es
+    push fs
+    push gs
+    pushad
+    
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    mov eax, esp         
+    push eax
+    call system_call_dispatch
+    add  esp, 4
+
+    mov [esp+ 4*7], eax
+
+    popad
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    iretd
+
 
 section .bss
     resb 8192
+
