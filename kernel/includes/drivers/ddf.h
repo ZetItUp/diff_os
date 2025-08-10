@@ -2,6 +2,7 @@
 
 #include "stdint.h"
 #include "stdarg.h"
+#include "interfaces.h"
 
 #define DDF_MAGIC       0x00464444      // DDF (Different Driver File) Magic Number
 
@@ -35,18 +36,6 @@ typedef struct
     uint32_t value_offset;              // Offset from module start
     uint32_t type;                      // 0 = Function, 1 = Data
 } __attribute__((packed)) ddf_symbol_t;
-
-
-typedef struct kernel_exports
-{
-    uint32_t marker;
-    unsigned char (*inb)(unsigned short port);
-    void (*outb)(unsigned short port, unsigned char data);
-    void (*printf)(const char *fmt, ...);
-    void (*vprintf)(const char *fmt, va_list ap);
-    void (*pic_clear_mask)(uint8_t);
-    void (*pic_set_mask)(uint8_t);
-} __attribute__((packed)) kernel_exports_t;
 
 typedef struct
 {

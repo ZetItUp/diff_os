@@ -43,6 +43,7 @@ KERNEL_SRC = \
 	kernel/drivers/driver.c \
 	kernel/drivers/config.c \
 	kernel/drivers/module_loader.c \
+	kernel/system/system.c \
 	kernel/system/syscall.c \
 	kernel/dex/dex_loader.c \
 	kernel/dex/exl_loader.c \
@@ -51,6 +52,14 @@ KERNEL_SRC = \
     kernel/fs/diff.c \
     kernel/memory/paging.c \
 	kernel/memory/heap.c
+
+# Interfaces
+KERNEL_SRC += \
+	kernel/interfaces/intf_kernel.c \
+	kernel/interfaces/intf_keyboard.c
+
+# Helpers
+KERNEL_SRC += \
 
 ASM_OBJ = $(addprefix $(OBJ)/,$(notdir $(ASM_SRC:.asm=.o)))
 KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))
@@ -147,6 +156,11 @@ $(OBJ)/%.o: kernel/memory/%.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJ)/%.o: kernel/system/%.c
+	@mkdir -p $(OBJ)
+	@echo "[CC] Compiling $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJ)/%.o: kernel/interfaces/%.c
 	@mkdir -p $(OBJ)
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@

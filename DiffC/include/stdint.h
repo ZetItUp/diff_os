@@ -43,5 +43,7 @@ typedef int32_t           intptr_t;
 #define INT64_MAX  (9223372036854775807LL)
 #define UINT64_MAX (18446744073709551615ULL)
 
+#define SIZE_MAX ((size_t)-1)
+
 #endif
 

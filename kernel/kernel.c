@@ -11,6 +11,7 @@
 #include "stdint.h"
 #include "heap.h"
 #include "diff.h"
+#include "system.h"
 #include "drivers/module_loader.h"
 #include "drivers/config.h"
 #include "drivers/driver.h"
@@ -93,9 +94,22 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
     display_sys_info();
 
     init_filesystem();
+
+    char *sys_cfg_file = "system/sys.cfg";
+    load_drivers(file_table, sys_cfg_file);
     
-    load_drivers(file_table, "system/sys.cfg");
-    dex_run(file_table, "programs/hello/hello.dex");
+    char *shell_path = find_shell_path(file_table, sys_cfg_file);
+    if(shell_path)
+    {
+        printf("Found shell %s!\n", shell_path);
+        dex_run(file_table, shell_path);
+        kfree(shell_path);   
+    }
+    else
+    {
+        printf("[ERROR] No shell was set!\n");
+    }
+
     //test_ata_read();
     //do_tests();
 

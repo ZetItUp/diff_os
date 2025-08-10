@@ -10,6 +10,8 @@ enum
     SYSTEM_EXIT = 0,
     SYSTEM_PUTCHAR = 1,
     SYSTEM_PRINT = 2,
+    SYSTEM_GETCH = 3,
+    SYSTEM_TRYGETCH = 4,
 };
 
 struct syscall_frame 

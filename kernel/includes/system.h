@@ -1,5 +1,8 @@
 #pragma once
 
+#include "stdint.h"
+#include "diff.h"
+
 struct stack_frame
 {
     uint32_t gs, fs, es, ds;
@@ -12,3 +15,5 @@ typedef struct system_info
 {
     uint32_t ram_mb;
 } sys_info_t;
+
+char *find_shell_path(const FileTable *table, const char *cfg_path);

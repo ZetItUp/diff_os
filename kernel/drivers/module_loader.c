@@ -1,5 +1,6 @@
 #include "drivers/ddf.h"
 #include "drivers/module_loader.h"
+#include "interfaces.h"
 #include "paging.h"
 #include "diff.h"
 #include "stdint.h"
@@ -8,16 +9,6 @@
 #include "irq.h"
 
 #define DDF_MAGIC 0x00464444
-
-kernel_exports_t g_exports = {
-    .marker = 0xCAFEBABE,
-    .inb = inb,
-    .outb = outb,
-    .printf = printf,
-    .vprintf = vprintf,
-    .pic_clear_mask = pic_clear_mask,
-    .pic_set_mask = pic_set_mask
-};
 
 static ddf_header_t *find_ddf_header(uint8_t *module_base, uint32_t size, uint32_t *out_offset)
 {

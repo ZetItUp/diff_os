@@ -5,6 +5,8 @@
 *.img
 *.txt
 *.ddf
+*.dex
+*.exl
 build/
 cross/
 1token

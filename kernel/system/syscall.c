@@ -3,6 +3,7 @@
 #include "idt.h"
 #include "system/syscall.h"
 #include "stdio.h"
+#include "interfaces.h"
 
 extern void system_call_stub(void);
 
@@ -74,11 +75,35 @@ int system_call_dispatch(struct syscall_frame *f)
             ret = system_print((const char *)arg0);
 
             break;
+        case SYSTEM_GETCH:
+            {
+                if(!g_keyboard.keyboard_read_blocking)
+                {
+                    return -6;      // No driver
+                }
+
+                uint8_t b = g_keyboard.keyboard_read_blocking();
+                ret = (int)b;
+            }
+            break;
+        case SYSTEM_TRYGETCH:
+            {
+                if(!g_keyboard.keyboard_read)
+                {
+                    ret = -6;
+                    break;
+                }
+
+                uint8_t b;
+                ret = g_keyboard.keyboard_read(&b) ? (int)b : -1;
+            }   
+            break;
         default:
             puts("[System Call] Unknown number: ");
             puthex(num);
             puts("\n");
             ret = -1;
+
             break;
     }
 

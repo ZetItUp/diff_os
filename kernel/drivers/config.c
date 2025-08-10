@@ -34,91 +34,131 @@ void load_drivers(const FileTable *table, const char *cfg_path)
     memset(installed_modules, 0, sizeof(installed_modules));
 
     int idx = find_entry_by_path(table, cfg_path);
-    if (idx == -1)
-    {
+    if (idx == -1) {
         printf("ERROR: File '%s' was not found!\n", cfg_path);
-        
         return;
     }
-    
+
     const FileEntry *fe = &table->entries[idx];
     char *syscfg_data = kmalloc(fe->sector_count * 512 + 1);
     int bytes_read = read_file(table, cfg_path, syscfg_data);
-
-    if (bytes_read <= 0)
-    {
+    if (bytes_read <= 0) {
         printf("ERROR: File '%s' was empty!\n", cfg_path);
+        kfree(syscfg_data);
         return;
     }
-
     syscfg_data[bytes_read] = 0;
 
-    char driver_path[128] = "";
-    char *lines = syscfg_data;
-    char *saveptr;
+    char *saveptr = NULL;
+    char *line = NULL;
 
-    for (char *line = strtok_r(lines, "\r\n", &saveptr); line; line = strtok_r(NULL, "\r\n", &saveptr))
+    int in_drivers = 0;            // Är vi inne i [DRIVERS]-sektionen?
+    int done_drivers = 0;          // Har vi lämnat [DRIVERS]-sektionen?
+    char driver_path[128]; driver_path[0] = 0;
+
+    for (line = strtok_r(syscfg_data, "\r\n", &saveptr);
+         line && !done_drivers;
+         line = strtok_r(NULL, "\r\n", &saveptr))
     {
-        while (*line == ' ' || *line == '\t') 
-        { 
-            line++; 
-        }
+        // Trimma vänster
+        while (*line == ' ' || *line == '\t') line++;
+        // Tom eller kommentar
+        if (*line == 0 || *line == '#') continue;
 
-        if (*line == '#' || *line == 0) 
-        { 
-            continue; 
-        }
-
-        if (strncmp(line, "path=", 5) == 0)
-        {
-            strncpy(driver_path, line + 5, sizeof(driver_path)-1);
-            driver_path[sizeof(driver_path)-1] = 0;
-            
+        // Ny sektion?
+        if (*line == '[') {
+            // Hitta slut på sektionstagg
+            char *r = line;
+            while (*r && *r != ']') r++;
+            if (*r == ']') {
+                // Extrahera sektionens namn
+                size_t n = (size_t)(r - (line + 1));
+                // Är det [DRIVERS]?
+                if (n == 7 && strncmp(line + 1, "DRIVERS", 7) == 0) {
+                    in_drivers = 1;
+                    // Nollställ path när vi går in i sektionen
+                    driver_path[0] = 0;
+                } else {
+                    // Annan sektion
+                    if (in_drivers) {
+                        // Vi lämnar [DRIVERS] -> klart, sluta läsa
+                        done_drivers = 1;
+                    }
+                    // Om vi inte var i [DRIVERS] fortsätter vi bara
+                    in_drivers = 0;
+                }
+                continue;
+            }
+            // Rad börjar med '[' men saknar ']': ignorera
             continue;
         }
 
-        if (driver_path[0] && strlen(line) > 0)
-        {
-            char abs_path[256];
-            abs_path[0] = 0;
-
-            strcpy(abs_path, driver_path);
-
-            size_t plen = strlen(driver_path);
-            if (plen > 0 && driver_path[plen-1] != '/')
-            {
-                strcat(abs_path, "/");
-            }
-
-            strcat(abs_path, line);
-
-            ddf_module_t *module = load_driver(abs_path);
-
-            if(!module)
-            {
-                printf("[DRIVER] ERROR: Failed to load driver %s\n", abs_path);
-                continue;
-            }
-
-            if(installed_modules[module->irq_number])
-            {
-                printf("[DRIVER] ERROR: Another driver is already installed for that IRQ!\n");
-                continue;
-            }
-            
-            if(!module->driver_irq)
-            {
-                printf("[DRIVER] WARNING: No handler specified, ignoring!\n");
-                continue;
-            }
-            
-            installed_modules[module->irq_number] = module;
-            irq_install_handler(module->irq_number, module->driver_irq);
-            /*
-            printf("[MODULE DEBUG] driver_irq=%x irq_number=%x\n", (uint32_t)module->driver_irq, module->irq_number);
-            printf("[MODULE DEBUG] irq_handlers[%d]=%x\n", module->irq_number, (uint32_t)irq_handlers[module->irq_number]);
-            */
+        if (!in_drivers) {
+            // Inte i [DRIVERS], ignorera rader
+            continue;
         }
+
+        // Inne i [DRIVERS]
+        if (strncmp(line, "path=", 5) == 0) {
+            strncpy(driver_path, line + 5, sizeof(driver_path) - 1);
+            driver_path[sizeof(driver_path) - 1] = 0;
+            continue;
+        }
+
+        // Vanlig rad = filnamn, kräver att path är satt
+        if (!driver_path[0]) {
+            // Path saknas – hoppa över men var tydlig i logg
+            printf("[DRIVER] WARNING: 'path=' missing before '%s' in [DRIVERS]\n", line);
+            continue;
+        }
+
+        // Bygg absolut sökväg: <path>/<filnamn>
+        char abs_path[256];
+        size_t plen = strlen(driver_path);
+        if (plen >= sizeof(abs_path) - 2) {
+            printf("[DRIVER] ERROR: drivers path too long\n");
+            continue;
+        }
+        strcpy(abs_path, driver_path);
+        if (plen == 0 || abs_path[plen - 1] != '/')
+            strcat(abs_path, "/");
+        if (strlen(abs_path) + strlen(line) >= sizeof(abs_path)) {
+            printf("[DRIVER] ERROR: driver path+name too long: %s + %s\n", abs_path, line);
+            continue;
+        }
+        strcat(abs_path, line);
+
+        // Ladda modul
+        ddf_module_t *module = load_driver(abs_path);
+        if (!module) {
+            printf("[DRIVER] ERROR: Failed to load driver %s\n", abs_path);
+            continue;
+        }
+
+        if (module->irq_number >= MAX_MODULES) {
+            printf("[DRIVER] ERROR: IRQ %u out of range for %s\n", module->irq_number, abs_path);
+            kfree(module->module_base);
+            kfree(module);
+            continue;
+        }
+
+        if (installed_modules[module->irq_number]) {
+            printf("[DRIVER] ERROR: IRQ %u already has a driver\n", module->irq_number);
+            kfree(module->module_base);
+            kfree(module);
+            continue;
+        }
+
+        if (!module->driver_irq) {
+            printf("[DRIVER] WARNING: %s has no IRQ handler, ignoring\n", abs_path);
+            kfree(module->module_base);
+            kfree(module);
+            continue;
+        }
+
+        installed_modules[module->irq_number] = module;
+        irq_install_handler(module->irq_number, module->driver_irq);
+        // printf("[MODULE] Loaded %s on IRQ %u\n", abs_path, module->irq_number);
     }
 
     kfree(syscfg_data);
