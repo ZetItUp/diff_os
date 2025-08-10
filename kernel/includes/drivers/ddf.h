@@ -49,7 +49,7 @@ typedef struct
 
 void ddf_driver_init(kernel_exports_t *exports);
 void ddf_driver_exit(void);
-void ddf_driver_irq(void);
+void ddf_driver_irq(unsigned irq, void *context);
 extern ddf_symbol_t ddf_symbol_table[];
 extern const uint32_t ddf_symbol_table_count;
 void *ddf_find_symbol(void *module_base, ddf_header_t *header, const char *name);

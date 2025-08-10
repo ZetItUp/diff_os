@@ -21,24 +21,35 @@ static inline void buf_puts(char **p, size_t *rem, const char *s)
     }
 }
 
-static inline void buf_putu(char **p, size_t *rem, unsigned v, int base, int upper)
+static inline void buf_putu(char **p, size_t *rem, unsigned v, unsigned base, int upper)
 {
-    char tmp[32];
-    const char *d = upper ? "0123456789ABCDEF" : "0123456789abcdef";
-    int i = 0;
+    static const char digs_lo[] = "0123456789abcdef";
+    static const char digs_up[] = "0123456789ABCDEF";
+    const char *digs = upper ? digs_up : digs_lo;
 
-    if (v == 0)
+    if (base < 2 || base > 16)
+    {
+        base = 10;
+    }
+
+    char tmp[32];
+    unsigned i = 0;
+
+    if (v == 0) 
     {
         tmp[i++] = '0';
-    }
-    else
+    } 
+    else 
     {
-        while (v && i < (int)sizeof(tmp))
+        while (v) 
         {
-            tmp[i++] = d[v % base];
+            unsigned d = v % base;
+        
+            tmp[i++] = digs[d];
             v /= base;
         }
     }
+
     while (i)
     {
         buf_putc(p, rem, tmp[--i]);

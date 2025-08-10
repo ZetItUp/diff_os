@@ -12,6 +12,9 @@ enum
     SYSTEM_PRINT = 2,
     SYSTEM_GETCH = 3,
     SYSTEM_TRYGETCH = 4,
+    SYSTEM_CONSOLE_GETXY = 5,
+    SYSTEM_CONSOLE_FLOOR_SET = 6,
+    SYSTEM_CONSOLE_FLOOR_CLEAR = 7
 };
 
 struct syscall_frame 
@@ -19,7 +22,7 @@ struct syscall_frame
     uint32_t edi;
     uint32_t esi;
     uint32_t ebp;
-    uint32_t esp_dummy;
+    uint32_t esp;
     uint32_t ebx;
     uint32_t edx;
     uint32_t ecx;

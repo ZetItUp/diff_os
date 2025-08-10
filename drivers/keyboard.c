@@ -83,6 +83,8 @@ static inline uint8_t keyboard_fifo_pop(void)
     return b;
 }
 
+
+
 static void wait_input(void)
 {
     for(int i = 0; i < 10000; i++)
@@ -103,6 +105,22 @@ static void wait_output(void)
             return;
         }
     }
+}
+
+static uint8_t i8042_read_cmdbyte(void)
+{
+    wait_input();
+    kernel->outb(KEYBOARD_COMMAND, 0x20);   // Read Command Byte
+    wait_output();
+    return kernel->inb(KEYBOARD_DATA);
+}
+
+static void i8042_write_cmdbyte(uint8_t cb)
+{
+    wait_input();
+    kernel->outb(KEYBOARD_COMMAND, 0x60);   // Write Command Byte
+    wait_input();
+    kernel->outb(KEYBOARD_DATA, cb);
 }
 
 // Queue 
@@ -157,6 +175,55 @@ static int kbq_enqueue(uint8_t cmd, int has_data, uint8_t data)
     return 0;
 }
 
+static void i8042_service(void)
+{
+    while (kernel->inb(KEYBOARD_STATUS) & 0x01)
+    {
+        uint8_t val = kernel->inb(KEYBOARD_DATA);
+
+        if (kb_cmdq_state == KBQ_WAIT_ACK)
+        {
+            if (val == 0xFA) {
+                if (kb_cmdq[kb_q_head].command == 0xFF) {
+                    kb_cmdq_state = KBQ_WAIT_BAT;
+                } else {
+                    kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
+                    kb_q_count--;
+                    kb_cmdq_state = KBQ_IDLE;
+                    kbq_start_next();
+                }
+                continue;
+            } else if (val == 0xFE) {
+                kb_cmdq[kb_q_head].retries++;
+                if (kb_cmdq[kb_q_head].retries < kb_resend_limit) {
+                    kb_cmdq_state = KBQ_SEND;
+                    kbq_send_cmd(&kb_cmdq[kb_q_head]);
+                } else {
+                    kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
+                    kb_q_count--;
+                    kb_cmdq_state = KBQ_ERROR;
+                    kbq_start_next();
+                }
+                continue;
+            }
+        }
+
+        if (kb_cmdq_state == KBQ_WAIT_BAT) {
+            if (val == 0xAA) {
+                kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
+                kb_q_count--;
+                kb_cmdq_state = KBQ_IDLE;
+                kbq_start_next();
+                continue;
+            }
+        }
+
+        if (val != 0xFA && val != 0xFE && val != 0xAA) {
+            keyboard_fifo_push(val);
+        }
+    }
+}
+
 static void i8042_init(void)
 {
     // Disable keyboard
@@ -166,7 +233,7 @@ static void i8042_init(void)
     // Flush output
     while(kernel->inb(KEYBOARD_STATUS) & 0x01)
     {
-        kernel->inb(KEYBOARD_DATA);
+        (void)kernel->inb(KEYBOARD_DATA);
     }
 
     // Controller Self-Test
@@ -183,6 +250,15 @@ static void i8042_init(void)
     // Enable keyboard port
     wait_input();
     kernel->outb(KEYBOARD_COMMAND, 0xAE);
+
+    uint8_t cmd_byte = i8042_read_cmdbyte();
+    cmd_byte |= 0x01;             // Bit 0 = Enable keyboard IRQ
+    i8042_write_cmdbyte(cmd_byte);
+
+    while(kernel->inb(KEYBOARD_STATUS) & 0x01)
+    {
+        (void)kernel->inb(KEYBOARD_DATA);
+    }
 }
 
 // System call functions
@@ -220,6 +296,25 @@ uint8_t keyboard_read_byte_blocking(void)
     }
 }
 
+static int ps2_kbd_enable_scanning_sync(void)
+{
+    // (valfritt) Disable scanning först, vissa emus/hårdvaror beter sig bättre med F5->F4
+    wait_input();
+    kernel->outb(KEYBOARD_DATA, 0xF5);     // Disable scanning
+    wait_output();
+    (void)kernel->inb(KEYBOARD_DATA);      // Läs ACK (0xFA) – ignorera fel
+
+    // Enable scanning
+    wait_input();
+    kernel->outb(KEYBOARD_DATA, 0xF4);
+    wait_output();
+    uint8_t ack = kernel->inb(KEYBOARD_DATA);
+    if (ack != 0xFA) {
+        kernel->printf("[KB] WARN: expected ACK 0xFA, got 0x%02x\n", ack);
+    }
+    return 0;
+}
+
 // Driver specific functions
 __attribute__((section(".text")))
 void ddf_driver_init(kernel_exports_t *exports)
@@ -227,13 +322,11 @@ void ddf_driver_init(kernel_exports_t *exports)
     kernel = exports;
     i8042_init();
 
-    // TODO: This needs to be fixed, they can't be here...
-    kbq_enqueue(0xFF, 0, 0);    // Reset/disable scanning
-    kbq_enqueue(0xF4, 0, 0);    // Enable scanning
-    
-    kernel->pic_clear_mask(1);  // Unmask IRQ1
 
+    ps2_kbd_enable_scanning_sync();
+    i8042_service();
     kernel->keyboard_register(keyboard_read_byte, keyboard_read_byte_blocking);    
+    kernel->pic_clear_mask(1);  // Unmask IRQ1
     kernel->printf("[DRIVER] PS/2 Keyboard driver installed!\n");
 }
 
@@ -246,7 +339,7 @@ void ddf_driver_exit(void)
 }
 
 __attribute__((section(".text")))
-void ddf_driver_irq(void)
+void ddf_driver_irq(unsigned irq, void *context)
 {
     while (kernel->inb(KEYBOARD_STATUS) & 0x01) 
     {

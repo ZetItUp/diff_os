@@ -49,8 +49,12 @@ int keyboard_pop(void);
 
 static sys_info_t system;
 
+char bg = BG_BLACK;
+char fg = FG_GRAY;
+
 void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 {
+    set_color(MAKE_COLOR(fg, bg));   
     clear();
 
     uint32_t total_ram = 0;
@@ -87,9 +91,11 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
     pic_remap(0x20, 0x28);
     // Initialize IRQ
     irq_init(); 
-    // Install timer handler
-    asm volatile("sti");
+    
+    uint8_t h = vga_cell_height();
+    vga_cursor_enable(0, h-1);
 
+    asm volatile("sti");
     display_banner();
     display_sys_info();
 
@@ -101,7 +107,6 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
     char *shell_path = find_shell_path(file_table, sys_cfg_file);
     if(shell_path)
     {
-        printf("Found shell %s!\n", shell_path);
         dex_run(file_table, shell_path);
         kfree(shell_path);   
     }
@@ -121,9 +126,9 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 
 void display_sys_info()
 {
-    set_color(MAKE_COLOR(FG_YELLOW, BG_BLACK));
-    printf("\tS Y S T E M   I N F O\n");     
-    set_color(MAKE_COLOR(FG_GRAY, BG_BLACK));   
+    //set_color(MAKE_COLOR(FG_YELLOW, BG_BLACK));
+    //printf("\tS Y S T E M   I N F O\n");     
+    set_color(MAKE_COLOR(fg, bg));   
     printf("[RAM] Available Memory: %u MB\n", system.ram_mb);
 }
 
@@ -256,11 +261,15 @@ void print_time()
 
 void display_banner()
 {
-    set_color(MAKE_COLOR(FG_LIGHTGREEN, BG_BLACK));
-    printf("D");
-    set_color(MAKE_COLOR(FG_GREEN, BG_BLACK));
+    set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
+    printf(" D");
+    set_color(MAKE_COLOR(FG_CYAN, BG_BLACK));
     printf("ifferent ");
-    set_color(MAKE_COLOR(FG_LIGHTGREEN, BG_BLACK));
-    printf("OS\n");
-    set_color(MAKE_COLOR(FG_GRAY, BG_BLACK));
+    set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
+    printf("OS");
+
+    for(int i = 13; i < 80; i++)
+    {
+        printf(" ");
+    }
 }

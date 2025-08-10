@@ -24,9 +24,9 @@ MAX_IMP     = 256
 def align_up(x, a): return (x + (a - 1)) & ~(a - 1)
 
 def _to_int(s, base=0):
-    s = s.strip()
+    s = s.strip().rstrip(",")
     if s.startswith(("0x","0X")): return int(s, 16)
-    return int(s, base or 10)
+    return int(s or "0", base or 10)
 
 # ---- elfdump-parser -------------------------------------------------
 def parse_dump(path):
@@ -62,10 +62,18 @@ def parse_dump(path):
                 kv = dict(tok.split("=",1) for tok in line.split()[1:] if "=" in tok)
                 try: symidx = int(kv.get("symidx","-1"))
                 except ValueError: symidx = -1
+                # 'type' kan ibland vara t.ex. "R_386_PC32" – mappa
+                t = kv.get("type","0")
+                if t.startswith("R_386_PC32"):  et = R_386_PC32
+                elif t.startswith("R_386_PLT32"): et = R_386_PLT32
+                elif t.startswith("R_386_32"):    et = R_386_32
+                else:
+                    try: et = _to_int(t)
+                    except Exception: et = -1
                 relocs.append({
                     "relsec":  _to_int(kv.get("secidx","0")),
                     "offset":  _to_int(kv.get("offset","0"), 16),
-                    "type":    _to_int(kv.get("type","0")),
+                    "type":    et,
                     "symidx":  symidx,
                     "symname": kv.get("symname",""),
                 })
@@ -96,8 +104,9 @@ def build_dex(dumpfile, elffile, outfile, default_exl, verbose):
 
     # plocka ut bytes för sektionerna
     text = ro = dat = b""; bss_sz = 0
+    text_secidx = None
     for s in secs.values():
-        if   s["name"] == ".text":   text = read_bytes(elffile, s["off"], s["size"])
+        if   s["name"] == ".text":   text = read_bytes(elffile, s["off"], s["size"]); text_secidx = s["idx"]
         elif s["name"] == ".rodata": ro   = read_bytes(elffile, s["off"], s["size"])
         elif s["name"] == ".data":   dat  = read_bytes(elffile, s["off"], s["size"])
         elif s["name"] == ".bss":    bss_sz = s["size"]
@@ -116,6 +125,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, verbose):
         if nm == ".text":   return text_off, text_buf
         if nm == ".rodata": return ro_off,   ro_buf
         if nm == ".data":   return data_off, dat_buf
+        if nm == ".bss":    return data_off + len(dat_buf), None
         return None, None
 
     strtab = StrTab()
@@ -183,7 +193,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, verbose):
             A = struct.unpack_from("<I", tgt_buf, raw_off)[0]
 
             if sym and sym["shndx"] != 0:
-                # Lokal symbol: init = S + A; RELATIVE
+                # Lokal symbol: init = S + A; RELATIVE (+image_base i loadern)
                 src_base, _ = base_for_secidx(sym["shndx"])
                 if src_base is None:
                     if verbose: print(f"[SKIP] ABS32 rel to unknown shndx={sym['shndx']}")
@@ -194,9 +204,8 @@ def build_dex(dumpfile, elffile, outfile, default_exl, verbose):
                 if verbose:
                     print(f"[ABS32 rel] sect={sect_nm} site_off=0x{img_off:08x} "
                           f"A=0x{A:08x} S=0x{sym['value']:08x} -> old=0x{init:08x} DEX_REL")
-                # heuristisk varning: RELATIVE i .text med liten old
                 if verbose and sect_nm == ".text" and init < 0x2000:
-                    print(f"[WARN] RELATIVE in .text old=0x{init:x} looks small (ok om verkligen pekar in i .text)")
+                    print(f"[WARN] RELATIVE in .text old=0x{init:x} looks small (ok om verkligen pekar i .text)")
             elif sym and sym["shndx"] == 0:
                 # extern symbol med namn -> ABS32 import
                 idx = ensure_import(name or f"@{si}", False)
@@ -206,7 +215,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, verbose):
                           f"A=0x{A:08x} sym='{name}' -> DEX_ABS32 (idx={idx})")
             else:
                 # INGEN SYMBOL: anta att immediaten är ett .data-offset
-                # Sätt old = data_off + A så att DEX_REL ger base + data_off + A (skrivbar)
+                # old = data_off + A så DEX_REL -> base + data_off + A
                 init = (data_off + A) & 0xffffffff
                 struct.pack_into("<I", tgt_buf, raw_off, init)
                 reloc_table.append((img_off, 0, DEX_REL, 0))
@@ -218,6 +227,19 @@ def build_dex(dumpfile, elffile, outfile, default_exl, verbose):
         # okänd ELF-typ
         if verbose:
             print(f"[WARN] Unknown ELF reloc type {etype} at off=0x{raw_off:08x}")
+
+    # ---- välj entry (main default, fallback _dex_entry, _start) ----
+    entry_off = text_off
+    if text_secidx is not None:
+        for cand in ("main", "_dex_entry", "_start"):
+            found = next((s for s in syms if s["name"] == cand and s["shndx"] == text_secidx), None)
+            if found:
+                entry_off = text_off + (found["value"] or 0)
+                if verbose:
+                    print(f"[ENTRY] symbol='{cand}' at .text+0x{found['value']:x} -> entry_off=0x{entry_off:08x}")
+                break
+    if verbose and entry_off == text_off:
+        print(f"[ENTRY] fallback: start of .text -> 0x{entry_off:08x}")
 
     # slutliga bytes
     text = bytes(text_buf); ro = bytes(ro_buf); dat = bytes(dat_buf)
@@ -235,7 +257,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, verbose):
     def w32(o,v): struct.pack_into("<I", hdr, o, v & 0xffffffff)
     w32(0x00, DEX_MAGIC)
     w32(0x04, DEX_MAJ); w32(0x08, DEX_MIN)
-    w32(0x0C, text_off)                 # entry_offset
+    w32(0x0C, entry_off)             # <<< FIXAD ENTRY
     w32(0x10, text_off); w32(0x14, len(text))
     w32(0x18, ro_off);   w32(0x1C, len(ro))
     w32(0x20, data_off); w32(0x24, len(dat))
@@ -269,7 +291,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, verbose):
         print(f"import_off     = 0x{import_off:08x} (cnt={len(imports)})")
         print(f"reloc_off      = 0x{reloc_off:08x} (cnt={len(reloc_table)})")
         print(f"strtab_off     = 0x{strtab_off:08x} (sz={len(strtab_b)})")
-        print(f"entry_offset   = 0x{text_off:08x}")
+        print(f"entry_offset   = 0x{entry_off:08x}")
         print("---- Imports ----")
         for i,(e_off,s_off,t,_) in enumerate(imports):
             exl = next(k for k,v in strtab.map.items() if v==e_off)
@@ -285,8 +307,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, verbose):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="ELF->DEX (i386, elfdump-format). "
-                    "Fixar R_386_32 utan symbol till DEX_REL (data_off + A) och loggar detaljer."
+        description="ELF->DEX (i386, elfdump-format)."
     )
     ap.add_argument("dumpfile", help="txt från elfdump")
     ap.add_argument("elffile",  help="käll-ELF (för att läsa sektionsbytes)")

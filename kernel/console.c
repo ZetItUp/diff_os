@@ -10,8 +10,36 @@
 static int cursor_x = 0;
 static int cursor_y = 0;
 
+static int floor_enabled = 0;
+static int floor_x = 0;
+static int floor_y = 0;
+
 unsigned char current_attrib = MAKE_COLOR(FG_GRAY, BG_BLACK);
 
+uint8_t vga_cell_height(void) 
+{
+    outb(0x3D4, 0x09);                 // Maximum Scan Line
+
+    return (inb(0x3D5) & 0x1F) + 1;    // höjd i scanlines
+}
+
+void vga_cursor_enable(uint8_t start, uint8_t end) 
+{
+    outb(0x3D4, 0x0A);                 // Cursor Start
+    uint8_t cur = inb(0x3D5);
+    outb(0x3D5, (cur & 0xC0) | (start & 0x1F));  // bit5=0 => enable
+
+    outb(0x3D4, 0x0B);                 // Cursor End
+    cur = inb(0x3D5);
+    outb(0x3D5, (cur & 0xE0) | (end & 0x1F));
+}
+
+void vga_cursor_disable(void) 
+{
+    outb(0x3D4, 0x0A);
+    uint8_t cur = inb(0x3D5);
+    outb(0x3D5, cur | 0x20);           // bit5=1 => disable
+}
 
 // Print a character to the screen
 void putch(char c)
@@ -56,6 +84,19 @@ unsigned short get_cursor_pos(void)
     return pos;
 }
 
+void get_cursor(int *x, int *y)
+{
+    if(x)
+    {
+        *x = cursor_x;
+    }
+
+    if(y)
+    {
+        *y = cursor_y;
+    }
+}
+
 unsigned short get_row(void)
 {
     return get_cursor_pos() / SCREEN_WIDTH;
@@ -64,6 +105,58 @@ unsigned short get_row(void)
 unsigned short get_col(void)
 {
     return get_cursor_pos() % SCREEN_WIDTH;
+}
+
+static inline int at_floor(void)
+{
+    if(!floor_enabled)
+    {
+        return 0;
+    }
+
+    if(cursor_y < floor_y)
+    {
+        return 1;
+    }
+
+    if(cursor_y > floor_y)
+    {
+        return 0;
+    }
+
+    return cursor_x <= floor_x;
+}
+
+void set_input_floor(int x, int y)
+{
+    if(x < 0)
+    {
+        x = 0;
+    }
+
+    if(x >= SCREEN_WIDTH)
+    {
+        x = SCREEN_WIDTH - 1;
+    }
+
+    if(y < 0)
+    {
+        y = 0;
+    }
+
+    if(y >= SCREEN_WIDTH)
+    {
+        y = SCREEN_HEIGHT - 1;
+    }
+
+    floor_enabled = 1;
+    floor_x = x;
+    floor_y = y;
+}
+
+void clear_input_floor(void)
+{
+    floor_enabled = 0;
 }
 
 void putch_color(unsigned char attrib, char c)
@@ -83,6 +176,18 @@ void putch_color(unsigned char attrib, char c)
     {
         cursor_x += 4;
         set_x(cursor_x);
+    }
+    else if(c == '\b')
+    {
+        if(!at_floor() && cursor_x > 0)
+        {
+            cursor_x--;
+            putch(' ');
+            cursor_x--;            
+            set_x(cursor_x);
+            
+            return;
+        }
     }
     else
     {

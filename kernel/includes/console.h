@@ -1,5 +1,6 @@
-#ifndef CONSOLE_H
-#define CONSOLE_H
+#pragma once
+
+#include "stdint.h"
 
 // Foreground Colors
 #define FG_BLACK      0x0
@@ -43,8 +44,15 @@ void clear(void);
 void puthex(int value);
 void set_cursor_pos(unsigned short col, unsigned short row);
 
+void set_input_floor(int x, int y);
+void clear_input_floor(void);
+void get_cursor(int *x, int *y);
+
+void vga_cursor_enable(uint8_t start, uint8_t end);
+void vga_cursor_disable(void);
+extern uint8_t vga_cell_height(void);
+
 unsigned short get_cursor_pos(void);
 unsigned short get_row(void);
 unsigned short get_col(void);
 
-#endif

@@ -77,27 +77,42 @@ int system_call_dispatch(struct syscall_frame *f)
             break;
         case SYSTEM_GETCH:
             {
-                if(!g_keyboard.keyboard_read_blocking)
-                {
-                    return -6;      // No driver
-                }
-
-                uint8_t b = g_keyboard.keyboard_read_blocking();
-                ret = (int)b;
+                uint8_t ch = keyboard_getch();
+                ret = (int)ch;
             }
             break;
         case SYSTEM_TRYGETCH:
             {
-                if(!g_keyboard.keyboard_read)
-                {
-                    ret = -6;
-                    break;
-                }
-
-                uint8_t b;
-                ret = g_keyboard.keyboard_read(&b) ? (int)b : -1;
+                uint8_t ch;
+                ret = keyboard_trygetch(&ch) ? (int)ch : -1;
             }   
             break;
+        case SYSTEM_CONSOLE_GETXY:
+            {
+                int x, y;
+                get_cursor(&x, &y);
+
+                ret = ((uint32_t)(x & 0xFFFF) << 16) | (uint32_t)(y & 0xFFFF);
+                
+                break;
+            }
+        case SYSTEM_CONSOLE_FLOOR_SET:
+            {
+                int x = (f->ebx >> 16) & 0xFFFF;
+                int y = f->ebx & 0xFFFF;
+
+                set_input_floor(x, y);
+                ret = 0;
+                
+                break;
+            }
+        case SYSTEM_CONSOLE_FLOOR_CLEAR:
+            {
+                clear_input_floor();
+                ret = 0;
+
+                break;
+            }
         default:
             puts("[System Call] Unknown number: ");
             puthex(num);

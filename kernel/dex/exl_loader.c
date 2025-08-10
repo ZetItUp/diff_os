@@ -478,7 +478,24 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     uint32_t data_sz = hdr->data_size;
     uint32_t bss_sz = hdr->bss_size;
 
-    uint32_t total_sz = PAGE_ALIGN_UP(text_sz) + PAGE_ALIGN_UP(ro_sz) + PAGE_ALIGN_UP(data_sz + bss_sz);
+    uint32_t end_text = hdr->text_offset + text_sz;
+    uint32_t end_ro = hdr->rodata_offset + ro_sz;
+    uint32_t end_dat = hdr->data_offset + data_sz + bss_sz;
+
+    uint32_t max_end = end_text;
+    
+    if (end_ro > max_end)
+    {
+        max_end = end_ro;
+    }
+
+    if (end_dat > max_end)
+    {
+        max_end = end_dat;
+    }
+
+    uint32_t total_sz = PAGE_ALIGN_UP(max_end);
+
     uint8_t *image = umalloc(total_sz);
 
     if (!image) 
@@ -497,7 +514,10 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     memcpy(image + hdr->text_offset, filebuf + hdr->text_offset, text_sz);
     memcpy(image + hdr->rodata_offset, filebuf + hdr->rodata_offset, ro_sz);
     memcpy(image + hdr->data_offset, filebuf + hdr->data_offset, data_sz);
-    memset(image + hdr->data_offset + data_sz, 0, bss_sz);
+    if(bss_sz)
+    {
+        memset(image + hdr->data_offset + data_sz, 0, bss_sz);
+    }
 
     const dex_import_t *imp = (const dex_import_t*)(filebuf + hdr->import_table_offset);
     const dex_reloc_t *rel = (const dex_reloc_t *)(filebuf + hdr->reloc_table_offset);

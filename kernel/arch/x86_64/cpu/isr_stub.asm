@@ -168,6 +168,7 @@ irq_common_stub:
 ; DPL för denna gate ska vara 3 i IDT. Övriga gates DPL=0.
 ; =========================
 system_call_stub:
+    cld
     push ds
     push es
     push fs
@@ -185,7 +186,7 @@ system_call_stub:
     call system_call_dispatch
     add  esp, 4
 
-    mov [esp+ 4*7], eax
+    mov [esp + 4*7], eax
 
     popad
     pop gs

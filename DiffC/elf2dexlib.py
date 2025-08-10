@@ -25,7 +25,8 @@ R_386_32      = 1
 R_386_PC32    = 2
 R_386_PLT32   = 4
 
-def align_up(x, a): return (x + (a - 1)) & ~(a - 1)
+def align_up(x, a): 
+    return (x + (a - 1)) & ~(a - 1)
 
 def read_sec_bytes(elf, name):
     s = elf.get_section_by_name(name)
@@ -35,18 +36,44 @@ def read_bss_size(elf):
     s = elf.get_section_by_name(".bss")
     return s["sh_size"] if s else 0
 
-def sec_base_in_image(elf, sec_index, text_off, ro_off, data_off):
-    s = elf.get_section(sec_index)
-    if not s: return None
+# ---- NYTT: normalisera sektionsindex från pyelftools (kan vara 'SHN_UNDEF' m.m.)
+def _norm_sec_index(sec_index):
+    if isinstance(sec_index, int):
+        return sec_index
+    if isinstance(sec_index, str):
+        s = sec_index.strip()
+        if s == "SHN_UNDEF":
+            return 0
+        if s in ("SHN_ABS", "SHN_COMMON"):
+            return None  # behandlas ej som placerbar sektion i bilden
+        # ibland får man siffror som sträng
+        try:
+            return int(s, 0)
+        except Exception:
+            return None
+    return None
+
+def sec_base_in_image(elf, sec_index, text_off, ro_off, data_off, data_size):
+    idx = _norm_sec_index(sec_index)
+    if idx is None:
+        return None
+    s = elf.get_section(idx)
+    if not s: 
+        return None
     n = s.name
     if n == ".text":   return text_off
     if n == ".rodata": return ro_off
     if n == ".data":   return data_off
+    if n == ".bss":    return data_off + data_size
     return None
 
 def buf_for_target(elf, sec_index, text_buf, ro_buf, data_buf):
-    s = elf.get_section(sec_index)
-    if not s: return None
+    idx = _norm_sec_index(sec_index)
+    if idx is None:
+        return None
+    s = elf.get_section(idx)
+    if not s: 
+        return None
     n = s.name
     if n == ".text":   return text_buf
     if n == ".rodata": return ro_buf
@@ -131,26 +158,23 @@ def build_exl(input_elf, output_exl, libname, import_exl=None, diffc_elf=None, d
                 if not name:
                     continue
 
-                # (valfritt filter) hoppa över system_* om du lagt till det i din version
-                # if name.startswith("system_"):
-                #     continue
-
                 st_type  = sym['st_info']['type']
-                st_shndx = sym['st_shndx']  # 0 = UND
+                st_shndx = sym['st_shndx']  # 0 = UND eller "SHN_UNDEF"
                 is_func  = (st_type == 'STT_FUNC') or (st_type == 'STT_NOTYPE' and sym['st_value'] != 0)
                 is_obj   = (st_type == 'STT_OBJECT')
 
                 if st_type in ('STT_SECTION', 'STT_FILE'):
                     continue
 
-                if st_shndx == 0:
+                # undefined?
+                if _norm_sec_index(st_shndx) in (None, 0):
                     undef[name] = is_func
                     continue
 
                 if not is_func and not is_obj:
                     continue
 
-                base = sec_base_in_image(elf, st_shndx, text_off, ro_off, data_off)
+                base = sec_base_in_image(elf, st_shndx, text_off, ro_off, data_off, len(data_buf))
                 if base is None:
                     continue
 
@@ -189,7 +213,7 @@ def build_exl(input_elf, output_exl, libname, import_exl=None, diffc_elf=None, d
 
         for relsec in iter_reloc_sections(elf):
             tgt_secidx = relsec['sh_info']
-            tgt_base = sec_base_in_image(elf, tgt_secidx, text_off, ro_off, data_off)
+            tgt_base = sec_base_in_image(elf, tgt_secidx, text_off, ro_off, data_off, len(data_buf))
             tgt_buf  = buf_for_target(elf, tgt_secidx, text_buf, ro_buf, data_buf)
             if tgt_base is None or tgt_buf is None:
                 continue
@@ -208,9 +232,9 @@ def build_exl(input_elf, output_exl, libname, import_exl=None, diffc_elf=None, d
                     A = struct.unpack_from("<I", tgt_buf, r_off)[0]
 
                 if rtype in (R_386_PC32, R_386_PLT32):
-                    if sym and sym['st_shndx'] != 0:
+                    if sym and _norm_sec_index(sym['st_shndx']) not in (None, 0):
                         # Lokal symbol: patcha PC-relativt direkt: val = S + A - P
-                        src_base = sec_base_in_image(elf, sym['st_shndx'], text_off, ro_off, data_off)
+                        src_base = sec_base_in_image(elf, sym['st_shndx'], text_off, ro_off, data_off, len(data_buf))
                         if src_base is not None:
                             S = src_base + sym['st_value']
                             P = img_off
@@ -235,9 +259,9 @@ def build_exl(input_elf, output_exl, libname, import_exl=None, diffc_elf=None, d
                             print(f"[PC32 ext]  off=0x{img_off:08x} sym='{sname}' -> import '{target}' idx={imp_idx}")
 
                 elif rtype == R_386_32:
-                    if sym and sym['st_shndx'] != 0:
+                    if sym and _norm_sec_index(sym['st_shndx']) not in (None, 0):
                         # Lokal symbol i denna bild: initiera till S + A ; markera RELATIVE
-                        src_base = sec_base_in_image(elf, sym['st_shndx'], text_off, ro_off, data_off)
+                        src_base = sec_base_in_image(elf, sym['st_shndx'], text_off, ro_off, data_off, len(data_buf))
                         if src_base is None:
                             continue
                         S = src_base + sym['st_value']

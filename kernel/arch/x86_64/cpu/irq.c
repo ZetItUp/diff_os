@@ -10,8 +10,8 @@ irq_handler_t irq_handlers[NUM_IRQS];
 
 void irq_handler_c(unsigned irq_ptr, void *context)
 {
-    uint32_t *stack = (uint32_t*)irq_ptr;
-    uint32_t irq = stack[0]; 
+//    uint32_t *stack = (uint32_t*)irq_ptr;
+    uint32_t irq = irq_ptr; 
 
     uint32_t real_irq = irq - 32;
 
