@@ -49,7 +49,7 @@ int keyboard_pop(void);
 
 static sys_info_t system;
 
-char bg = BG_BLACK;
+char bg = BG_BLUE;
 char fg = FG_GRAY;
 
 void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)

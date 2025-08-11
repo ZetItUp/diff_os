@@ -1,10 +1,10 @@
-// DiffC EXL: printf.c
-// Minimal, robust printf/snprintf utan asm, för i386 freestanding.
-
+#include <diffc_internal.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
-#include "syscall.h"   // system_putchar/system_print om du vill, men vi kör teckenvis
+#include <string.h>
+#include <stdlib.h>
+#include <syscall.h>
 
 #ifndef va_copy
 #  ifdef __va_copy
@@ -14,23 +14,408 @@
 #  endif
 #endif
 
-// ---- små helpers ----
-static void putch_sink(int ch, void *ctx) {
+// File Handling
+static FILE _stdin =
+{
+    .file_descriptor = 0,
+    .flags = FILE_CAN_READ,
+    .error = 0,
+    .eof = 0,
+    .ungot = -1
+};
+
+static FILE _stdout = 
+{ 
+    .file_descriptor = 1, 
+    .flags = FILE_CAN_WRITE,
+    .error=0,
+    .eof=0,
+    .ungot=-1 
+};
+
+static FILE _stderr = 
+{ 
+    .file_descriptor = 2, 
+    .flags = FILE_CAN_WRITE,
+    .error=0,
+    .eof=0,
+    .ungot=-1 
+};
+
+FILE *stdin = &_stdin;
+FILE *stdout = &_stdout;
+FILE *stderr = &_stderr;
+
+// Parse mode
+static int mode_to_oflags(const char *mode, int *f_flags_out)
+{
+    // "r", "w", "a", "r+", "w+", "a+"
+    int of = 0;
+    int f  = 0;
+
+    if (!mode || !mode[0])
+    {
+        return -1;
+    }
+
+    char m0 = mode[0];
+    int plus = (strchr(mode, '+') != NULL);
+
+    switch (m0) 
+    {
+        case 'r':
+            of = plus ? O_RDWR : O_RDONLY;
+            f  = plus ? (FILE_CAN_READ | FILE_CAN_WRITE) : FILE_CAN_READ;
+            break;
+        case 'w':
+            of = plus ? (O_RDWR | O_CREAT | O_TRUNC) : (O_WRONLY | O_CREAT | O_TRUNC);
+            f  = plus ? (FILE_CAN_READ | FILE_CAN_WRITE) : FILE_CAN_WRITE;
+            break;
+        case 'a':
+            of = plus ? (O_RDWR | O_CREAT | O_APPEND) : (O_WRONLY | O_CREAT | O_APPEND);
+            f  = plus ? (FILE_CAN_READ | FILE_CAN_WRITE) : FILE_CAN_WRITE;
+            break;
+        default:
+            return -1;
+    }
+    
+    if (f_flags_out)
+    {
+        *f_flags_out = f;
+    }
+    
+    return of;
+}
+
+FILE *fopen(const char *path, const char *mode)
+{
+    int f_flags = 0;
+    int o_flags = mode_to_oflags(mode, &f_flags);
+
+    if(o_flags < 0)
+    {
+        return NULL;
+    }
+
+    int file_desc = system_open(path, o_flags, 0644);
+    if(file_desc < 0)
+    {
+        return NULL;
+    }
+
+    FILE *file = (FILE*)malloc(sizeof(FILE));
+
+    if(!file)
+    {
+        system_close(file_desc);
+
+        return NULL;
+    }
+
+    file->file_descriptor = file_desc;
+    file->flags = f_flags;
+    file->error = 0;
+    file->eof = 0;
+    file->ungot = -1;
+
+    return file;
+}
+
+int fclose(FILE *file)
+{
+    if(!file)
+    {
+        return -1;
+    }
+
+    int rc = 0;
+
+    if(system_close(file->file_descriptor) < 0)
+    {
+        rc = -1;
+    }
+
+    return rc;
+}
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *file)
+{
+    if(!file || !ptr || size == 0 || nmemb == 0)
+    {
+        return 0;
+    }
+
+    if(!(file->flags & FILE_CAN_READ))
+    {
+        file->error = 1;
+        
+        return 0;
+    }
+
+    unsigned char *dst = (unsigned char*)ptr;
+    size_t total = size * nmemb;
+    size_t done = 0;
+
+    if(file->ungot >= 0 && total > 0)
+    {
+        *dst++ = (unsigned char)file->ungot;
+        file->ungot = -1;
+        done = 1;
+    }
+
+    while(done < total)
+    {
+        long read = system_read(file->file_descriptor, dst + done, (unsigned long)(total - done));
+
+        if(read == 0)
+        {
+            file->eof = 1;
+            break;
+        }
+
+        if(read < 0)
+        {
+            file->error = 1;
+            break;
+        }
+
+        done += (size_t)read;
+    }
+
+    return size ? (done / size) : 0;
+}
+
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *file)
+{
+    if(!file || !ptr || size == 0 || nmemb == 0)
+    {
+        return 0;
+    }
+
+    if(!(file->flags & FILE_CAN_WRITE))
+    {
+        file->error = 1;
+
+        return 0;
+    }
+
+    const unsigned char *src = (const unsigned char*)ptr;
+    size_t total = size * nmemb;
+    size_t done = 0;
+
+    while(done < total)
+    {
+        long write = system_write(file->file_descriptor, src + done, (unsigned long)(total - done));
+
+        if(write <= 0)
+        {
+            file->error = 1;
+            break;
+        }
+
+        done += (size_t)write;
+    }
+
+    return size ? (done / size) : 0;
+}
+
+int fseek(FILE *file, long offset, int whence)
+{
+    if(!file)
+    {
+        return -1;
+    }
+
+    long read = system_lseek(file->file_descriptor, offset, whence);
+
+    if(read < 0)
+    {
+        file->error = 1;
+        
+        return -1;
+    }
+
+    file->eof = 0;
+    file->ungot = -1;
+
+    return 0;
+} 
+
+long ftell(FILE *file)
+{
+    if(!file)
+    {
+        return -1;
+    }
+
+    long read = system_lseek(file->file_descriptor, 0, SEEK_CUR);
+
+    if(read < 0)
+    {
+        file->error = 1;
+
+        return -1;
+    }
+
+    return read;
+}
+
+void rewind(FILE *file)
+{
+    if(!file)
+    {
+        return;
+    }
+
+    (void)fseek(file, 0, SEEK_SET);
+    file->error = 0;
+    file->eof = 0;
+}   
+
+int fflush(FILE *file)
+{
+    // TODO: Handle buffers
+    (void)file;
+
+    return 0;
+}
+
+int feof(FILE *file)
+{
+    return file ? file->eof : 0;
+}
+
+int ferror(FILE *file)
+{
+    return file ? file->error : 1;
+}
+
+void clearerr(FILE *file)
+{
+    if(file)
+    {
+        file->error = 0;
+        file->eof = 0;
+    }
+}
+
+int fgetc(FILE *file)
+{
+    if(!file)
+    {
+        return -1;
+    }
+
+    if(file->ungot >= 0)
+    {
+        int c = file->ungot;
+        file->ungot = -1;
+
+        return c;
+    }
+
+    unsigned char ch;
+    size_t read = fread(&ch, 1, 1, file);
+
+    return (read == 1) ? (int)ch : -1;
+}
+
+int ungetc(int ch, FILE *file)
+{
+    if(!file || ch < 0 || file->ungot >= 0)
+    {
+        return -1;
+    }
+
+    file->ungot = (unsigned char)ch;
+    file->eof = 0;
+
+    return ch;
+}
+
+int fputc(int ch, FILE *file)
+{
+    unsigned char c = (unsigned char)ch;
+
+    return (fwrite(&c, 1, 1, file) == 1) ? ch : -1;
+}
+
+char *fgets(char *str, int size, FILE *file)
+{
+    if(!str || size <= 0 || !file)
+    {
+        return NULL;
+    }
+
+    int i = 0;
+
+    for(;i < size - 1; ++i)
+    {
+        int c = fgetc(file);
+
+        if(c < 0)
+        {
+            break;
+        }
+
+        str[i] = (char)c;
+
+        if(c == '\n')
+        {
+            i++;
+            break;
+        }
+    }
+
+    if(i == 0)
+    {
+        return NULL;
+    }
+
+    str[i] = '\0';
+
+    return str;
+}
+
+int fputs(const char *str, FILE *file)
+{
+    size_t len = str ? strlen(str) : 0;
+
+    return (fwrite(str, 1, len, file) == len) ? (int)len : -1;
+}
+
+// Printing
+static void putch_sink(int ch, void *ctx) 
+{
     (void)ctx;
     system_putchar((char)ch);
 }
 
-struct bufctx { char *buf; size_t cap; size_t len; };
-static void buf_sink(int ch, void *ctx) {
+struct bufctx 
+{ 
+    char *buf; 
+    size_t cap; 
+    size_t len; 
+};
+
+static void buf_sink(int ch, void *ctx) 
+{
     struct bufctx *b = (struct bufctx*)ctx;
-    if (b->len + 1 < b->cap) {          // lämna plats för '\0'
+
+    if (b->len + 1 < b->cap) 
+    {
         b->buf[b->len] = (char)ch;
     }
+    
     b->len++;
 }
 
-static void out_repeat(void (*sink)(int,void*), void *ctx, char c, int n) {
-    for (int i=0;i<n;i++) sink(c, ctx);
+static void out_repeat(void (*sink)(int,void*), void *ctx, char c, int n) 
+{
+    for (int i=0;i<n;i++)
+    {
+        sink(c, ctx);
+    }
 }
 
 static int utoa_rev(uint32_t v, unsigned base, char *tmp, int upper) {

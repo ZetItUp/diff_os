@@ -1,6 +1,4 @@
-#ifndef DIFF_FS_H
-#define DIFF_FS_H
-
+#pragma once
 #include <stdint.h>
 
 #define MAX_FILENAME_LEN    64
@@ -92,5 +90,9 @@ int allocate_sectors(uint32_t count, uint32_t *first_sector, const SuperBlock *s
 // Free sectors (mark as unused)
 void free_sectors(uint32_t start, uint32_t count);
 
-#endif // DIFF_FS_H
+// Disk write
+int disk_write(uint32_t sector, uint32_t count, const void *buffer);
+int write_file_table(const SuperBlock *sb);
+int write_sector_bitmap(const SuperBlock *sb);
+
 

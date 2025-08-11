@@ -11,6 +11,34 @@ extern "C" {
 typedef long ssize_t;   // POSIX typedef
 #endif
 
+typedef struct FILE FILE;
+
+extern FILE *stdin;
+extern FILE *stdout;
+extern FILE *stderr;
+
+FILE *fopen(const char *path, const char *mode);
+int fclose(FILE *fp);
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *fp);
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *fp);
+
+int fseek(FILE *fp, long offset, int whence);
+long ftell(FILE *fp);
+void rewind(FILE *fp);
+
+int fflush(FILE *fp);           
+int feof(FILE *fp);
+int ferror(FILE *fp);
+void clearerr(FILE *fp);
+
+int fgetc(FILE *fp);
+int ungetc(int c, FILE *fp);
+int fputc(int c, FILE *fp);
+
+char *fgets(char *s, int size, FILE *fp);
+int fputs(const char *s, FILE *fp);
+
 int putchar(int c);
 int puts(const char *s);
 

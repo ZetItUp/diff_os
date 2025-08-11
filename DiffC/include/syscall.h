@@ -15,7 +15,12 @@ enum
     SYSTEM_TRYGETCH = 4,
     SYSTEM_CONSOLE_GETXY = 5,
     SYSTEM_CONSOLE_FLOOR_SET = 6,
-    SYSTEM_CONSOLE_FLOOR_CLEAR = 7
+    SYSTEM_CONSOLE_FLOOR_CLEAR = 7,
+    SYSTEM_FILE_OPEN = 8,
+    SYSTEM_FILE_CLOSE = 9,
+    SYSTEM_FILE_SEEK = 10,
+    SYSTEM_FILE_READ = 11,
+    SYSTEM_FILE_WRITE = 12,
 };
 
 static inline __attribute__((always_inline))
@@ -96,5 +101,31 @@ static inline __attribute__((always_inline)) int console_floor_set(int x,int y)
 static inline __attribute__((always_inline)) int console_floor_clear(void)
 {
     return do_sys(SYSTEM_CONSOLE_FLOOR_CLEAR, 0, 0, 0, 0); 
+}
+
+static inline int system_open (const char *path, int oflags, int mode)
+{
+    return do_sys(SYSTEM_FILE_OPEN, (int)(uintptr_t)path, oflags, mode, 0);
+}
+
+static inline int system_close(int file_descriptor)
+{
+    return do_sys(SYSTEM_FILE_CLOSE, file_descriptor, 0, 0, 0);
+}
+
+static inline long system_lseek(int file_descriptor, long off, int whence)
+{
+    return (long)do_sys(SYSTEM_FILE_SEEK, file_descriptor, (int)off, whence, 0);
+}
+
+static inline long system_read (int file_descriptor, void *buf, unsigned long count)
+{
+
+    return (long)do_sys(SYSTEM_FILE_READ, file_descriptor, (int)(uintptr_t)buf, (int)count, 0);
+}
+
+static inline long system_write(int file_descriptor, const void *buf, unsigned long count)
+{
+    return (long)do_sys(SYSTEM_FILE_WRITE, file_descriptor, (int)(uintptr_t)buf, (int)count, 0);
 }
 
