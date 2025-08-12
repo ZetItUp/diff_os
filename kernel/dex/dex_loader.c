@@ -67,6 +67,69 @@ static uint8_t* build_user_exit_stub(uint32_t entry_va)
     return stub;
 }
 
+static uint32_t build_user_stack(const char *prog_path, int argc_in, char *const argv_in[])
+{
+    const uint32_t STK_SZ = 64 * 1024;
+    uint8_t *stk = umalloc(STK_SZ);
+    if (!stk) return 0;
+
+    // Gör stacken tillgänglig i userland
+    paging_update_flags((uint32_t)stk, STK_SZ, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
+
+    // Bestäm argc/argv-källa
+    int argc = (argc_in > 0 && argv_in) ? argc_in : 1;
+
+    // Temporär plats för pekare till strängarna
+    uint32_t *argv_ptrs = (uint32_t*)kmalloc(sizeof(uint32_t) * (size_t)argc);
+    if (!argv_ptrs) return 0;
+
+    uint32_t sp = (uint32_t)stk + STK_SZ;
+    uint32_t stack_base = (uint32_t)stk;
+
+    // 1) Lägg argumentsträngar högst upp, baklänges
+    for (int i = argc - 1; i >= 0; --i) {
+        const char *src = (argc_in > 0 && argv_in) ? argv_in[i]
+                                                   : (i == 0 ? prog_path : "");
+        size_t len = strlen(src) + 1;
+
+        if (sp < stack_base + len + 64) { // lite marginal för metadata
+            kfree(argv_ptrs);
+            return 0;
+        }
+        sp -= (uint32_t)len;
+        memcpy((void*)sp, src, len);
+        argv_ptrs[i] = sp;
+    }
+
+    // 16-byte align
+    sp &= ~0xFu;
+
+    // 2) envp = NULL
+    if (sp < stack_base + 4) { kfree(argv_ptrs); return 0; }
+    sp -= 4; *(uint32_t*)sp = 0;
+
+    // 3) argv[0..argc-1] + NULL direkt under envp
+    uint32_t argv_array_size = (uint32_t)((argc + 1) * sizeof(uint32_t));
+    if (sp < stack_base + argv_array_size) { kfree(argv_ptrs); return 0; }
+    sp -= argv_array_size;
+    uint32_t argv_array_addr = sp;
+    for (int i = 0; i < argc; ++i) {
+        ((uint32_t*)argv_array_addr)[i] = argv_ptrs[i];
+    }
+    ((uint32_t*)argv_array_addr)[argc] = 0; // NULL-terminator
+
+    // 4) push argv (pekare till arrayen)
+    if (sp < stack_base + 4) { kfree(argv_ptrs); return 0; }
+    sp -= 4; *(uint32_t*)sp = argv_array_addr;
+
+    // 5) push argc
+    if (sp < stack_base + 4) { kfree(argv_ptrs); return 0; }
+    sp -= 4; *(uint32_t*)sp = (uint32_t)argc;
+
+    kfree(argv_ptrs);
+    return sp;
+}
+
 // Load a DEX program 
 int dex_load(const void *file_data, size_t file_size, dex_executable_t *out) 
 {
@@ -230,7 +293,7 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
 }
 
 // Start the program
-void dex_run(const FileTable *ft, const char *path) 
+void dex_run(const FileTable *ft, const char *path, int argc, char **argv) 
 {
     int idx = find_entry_by_path(ft, path);
 
@@ -262,16 +325,12 @@ void dex_run(const FileTable *ft, const char *path)
     dex_executable_t dex;
     if (dex_load(buf, fe->file_size_bytes, &dex) == 0) 
     {
-        uint32_t ustk_base = (uint32_t)umalloc(16 * 1024);
-        
-        if (!ustk_base) 
-        { 
-            printf("[DEX] ERROR: Unable to allocate stack for program!\n"); 
-            kfree(buf); 
-            
-            return; 
+        uint32_t user_sp = build_user_stack(path, argc, argv);
+
+        if(!user_sp)
+        {
+            return;
         }
-        uint32_t user_sp = ustk_base + 16*1024 - 16;
 
         // Build C stub
         uint8_t *stub = build_user_exit_stub((uint32_t)dex.dex_entry);
@@ -290,7 +349,7 @@ void dex_run(const FileTable *ft, const char *path)
         paging_check_user_range(user_sp - 64, 128);
         DDBG("[DEX] jump to stub=%p, entry=%p, esp=%08x\n", stub, dex.dex_entry, user_sp);
 #endif
-
+        paging_update_flags((uint32_t)stub, 64, PAGE_PRESENT | PAGE_USER, 0);
         enter_user_mode((uint32_t)stub, user_sp);
     }
 

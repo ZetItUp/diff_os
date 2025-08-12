@@ -45,5 +45,7 @@ typedef int32_t           intptr_t;
 
 #define SIZE_MAX ((size_t)-1)
 
+typedef int ssize_t;
+
 #endif
 

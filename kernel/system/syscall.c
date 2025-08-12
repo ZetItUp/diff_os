@@ -8,6 +8,11 @@
 #include "diff.h"
 #include "string.h"
 #include "heap.h"
+#include "dex/dex.h"
+#include "paging.h"
+#include "dirent.h"
+
+#define MAX_DIR_HANDLES                     32
 
 #define KERNEL_FILE_DESCRIPTOR_BASE         3       // 0 = stdin, 1 = stdout, 2 = stderr
 #define KERNEL_FILE_DESCRIPTOR_MAX          32
@@ -27,6 +32,15 @@
 #define SEEK_END 2
 #endif
 
+#define MAX_EXEC_NEST       8
+
+typedef struct
+{
+    int used;
+    uint32_t parent_id;
+    uint32_t cursor;
+} dir_handle_t;
+
 typedef struct
 {
     uint8_t used;
@@ -38,6 +52,11 @@ typedef struct
 } file_descriptor_t;
 
 extern void system_call_stub(void);
+
+static struct syscall_frame s_parent_stack[MAX_EXEC_NEST];
+static int s_parent_sp = 0;
+
+static dir_handle_t g_dir[MAX_DIR_HANDLES];
 
 static uint8_t s_exit_kstack[4096];
 
@@ -62,9 +81,22 @@ static int system_putchar(int ch)
 
 static int system_print(const char *s)
 {
-    if(s)
+    printf("SYSTEM_PRINTF\n");
+    if (!s) 
+        return 0;
+
+    printf("S EXISTS\n");    
+    for (int i=0; i<256; ++i) 
     {
-        puts(s);
+        putch(i);
+        // kolla varje byte ligger i user-range innan läsning
+        if (paging_check_user_range((uint32_t)(s+i), 1) != 0) {
+            printf("[SYSTEM] bad user ptr at %p\n", s+i);
+            return -1;
+        }
+        char c = s[i];
+        if (!c) break;
+        putch(c);
     }
 
     return 0;
@@ -126,6 +158,132 @@ static int flush_metadata(void)
     return 0;
 }
 
+static int dir_handle_alloc(void)
+{
+    for(int i = 0; i < MAX_DIR_HANDLES; i++)
+    {
+        if(!g_dir[i].used)
+        {
+            g_dir[i].used = 1;
+            g_dir[i].parent_id = 0;
+            g_dir[i].cursor = 0;
+
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+static void dir_handle_free(int handle)
+{
+    if(handle >= 0 && handle < MAX_DIR_HANDLES)
+    {
+        g_dir[handle].used = 0;
+        g_dir[handle].parent_id = 0;
+        g_dir[handle].cursor = 0;
+    }
+}
+
+int system_open_dir(const char *path)
+{
+    if(!path)
+    {
+        return -1;
+    }
+
+    int idx = find_entry_by_path(file_table, path);
+    if(idx < 0)
+    {
+        return -1;
+    }
+
+    const FileEntry *fe = &file_table->entries[idx];
+    if(fe->type != ENTRY_TYPE_DIR)
+    {
+        return -1;
+    }
+
+    int handle = dir_handle_alloc();
+    if(handle < 0)
+    {
+        return -1;
+    }
+
+    g_dir[handle].parent_id = fe->entry_id;
+    g_dir[handle].cursor = 0;
+
+    return handle;
+}
+
+int system_read_dir(int handle, struct dirent *out)
+{
+    if(handle < 0 || handle >= MAX_DIR_HANDLES)
+    {
+        return -1;
+    }
+
+    if(!g_dir[handle].used || !out)
+    {
+        return -1;
+    }
+
+    uint32_t parent = g_dir[handle].parent_id;
+
+    for(uint32_t i = g_dir[handle].cursor; i < (uint32_t)MAX_FILES; i++)
+    {
+        const FileEntry *fe = &file_table->entries[i];
+
+        if(fe->entry_id == 0)
+        {
+            continue;
+        }
+
+        if(fe->parent_id != parent)
+        {
+            continue;
+        }
+
+        out->d_id = fe->entry_id;
+        out->d_type = (fe->type == ENTRY_TYPE_DIR) ? DT_DIR :
+                      (fe->type == ENTRY_TYPE_FILE) ? DT_REG : DT_UNKNOWN;
+        out->d_size = fe->file_size_bytes;
+
+        size_t n = MAX_FILENAME_LEN;
+
+        if(n > NAME_MAX - 1)
+        {
+            n = NAME_MAX - 1;
+        }
+
+        memcpy(out->d_name, fe->filename, n);
+        out->d_name[n] = '\0';
+
+        g_dir[handle].cursor = i + 1;
+
+        return 0;
+    }
+
+    return 1;
+}
+
+int system_close_dir(int handle)
+{
+    if(handle < 0 || handle >= MAX_DIR_HANDLES)
+    {
+        return -1;
+    }
+
+    if(!g_dir[handle].used)
+    {
+        return -1;
+    }
+
+    dir_handle_free(handle);
+
+    return 0;
+}
+
 static int system_open_file(const char *abs_path, int oflags, int mode)
 {
     (void)mode;
@@ -138,6 +296,7 @@ static int system_open_file(const char *abs_path, int oflags, int mode)
     int idx = find_entry_by_path(file_table, abs_path);
     if(idx < 0)
     {
+        printf("[OPEN] not found '%s'\n", abs_path);
         // TODO: Impl O_CREAT
         return -1;
     }
@@ -167,7 +326,7 @@ static int system_open_file(const char *abs_path, int oflags, int mode)
 
     for(int i = 0; i < KERNEL_FILE_DESCRIPTOR_MAX; ++i)
     {
-        if(s_file_descriptor[i].used)
+        if(!s_file_descriptor[i].used)
         {
             s_file_descriptor[i].used = 1;
             s_file_descriptor[i].data = buf;
@@ -292,7 +451,7 @@ static long system_lseek_file(int file, long offset, int whence)
 
     int i = file - KERNEL_FILE_DESCRIPTOR_BASE;
 
-    if(i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || s_file_descriptor[i].used)
+    if(i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !s_file_descriptor[i].used)
     {
         return -1;
     }
@@ -415,6 +574,40 @@ static int system_write_file_to_disk(FileEntry *fe, const uint8_t *data, uint32_
     return flush_metadata();
 }
 
+static int system_exec_dex(struct syscall_frame *f, const char *path, int argc, char **argv)
+{
+    if(!path)
+    {
+        return -1;
+    }
+
+    if(verify_fs_ready() != 0)
+    {
+        return -1;
+    }
+
+    if(s_parent_sp >= MAX_EXEC_NEST)
+    {
+        return -1;
+    }
+
+    if(argc < 0)
+    {
+        argc = 0;
+    }
+
+    if(argc > 64)
+    {
+        argc = 64;
+    }
+
+    s_parent_stack[s_parent_sp++] = *f;
+
+    dex_run(file_table, path, argc, argv);
+
+    return 0;
+}
+
 static long system_write_file(int file, const void *buf, unsigned long count)
 {
     if(file == 1 || file == 2)
@@ -495,7 +688,14 @@ static long system_write_file(int file, const void *buf, unsigned long count)
 static int system_exit(struct syscall_frame *f, int code)
 {
     (void)code;
-    
+   
+    if(s_parent_sp > 0)
+    {
+        *f = s_parent_stack[--s_parent_sp];
+
+        return 0;
+    }
+
     f->eip = (uint32_t)user_exit_trampoline;
     f->cs = KERNEL_CS;
     f->eflags |= 0x200;
@@ -507,7 +707,6 @@ static int system_exit(struct syscall_frame *f, int code)
 
 }
 
-
 int system_call_dispatch(struct syscall_frame *f)
 {
     int num = (int)f->eax;
@@ -516,12 +715,9 @@ int system_call_dispatch(struct syscall_frame *f)
     int arg2 = (int)f->edx;
     int arg3 = (int)f->esi;
 
-    int ret = -1;
-
-    // Unused for now
-    (void)arg1;
-    (void)arg2;
     (void)arg3;
+
+    int ret = -1;
 
     switch(num)
     {
@@ -598,6 +794,31 @@ int system_call_dispatch(struct syscall_frame *f)
         case SYSTEM_FILE_WRITE:
             {
                 ret = (int)system_write_file(arg0, (const void*)arg1, (unsigned long)(uint32_t)arg2);
+                break;
+            }
+        case SYSTEM_EXEC_DEX:
+            {
+                const char *path = (const char*)arg0;
+                int argc = arg1;
+                char **argv = (char**)arg2;
+
+                ret = system_exec_dex(f, path, argc, argv);
+                
+                break;
+            }
+        case SYSTEM_DIR_OPEN:
+            {
+                ret = system_open_dir((const char*)arg0);
+                break;
+            }
+        case SYSTEM_DIR_READ:
+            {
+                ret = system_read_dir(arg0, (struct dirent*)arg1);
+                break;
+            }
+        case SYSTEM_DIR_CLOSE:
+            {
+                ret = system_close_dir(arg0);
                 break;
             }
         default:

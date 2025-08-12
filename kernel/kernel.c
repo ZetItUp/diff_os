@@ -3,6 +3,7 @@
 #include "string.h"
 #include "paging.h"
 #include "console.h"
+#include "serial.h"
 #include "idt.h"
 #include "irq.h"
 #include "pic.h"
@@ -54,6 +55,7 @@ char fg = FG_GRAY;
 
 void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 {
+    serial_init();
     set_color(MAKE_COLOR(fg, bg));   
     clear();
 
@@ -107,7 +109,7 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
     char *shell_path = find_shell_path(file_table, sys_cfg_file);
     if(shell_path)
     {
-        dex_run(file_table, shell_path);
+        dex_run(file_table, shell_path, 0, 0);
         kfree(shell_path);   
     }
     else

@@ -6,7 +6,6 @@ global enter_user_mode
 section .text
 enter_user_mode:
     cli
-
     mov eax, [esp+4]    ; user EIP
     mov edx, [esp+8]    ; user ESP
 

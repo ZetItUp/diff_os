@@ -20,6 +20,10 @@ enum
     SYSTEM_FILE_SEEK = 10,
     SYSTEM_FILE_READ = 11,
     SYSTEM_FILE_WRITE = 12,
+    SYSTEM_EXEC_DEX = 13,
+    SYSTEM_DIR_OPEN = 14,
+    SYSTEM_DIR_READ = 15,
+    SYSTEM_DIR_CLOSE = 16,
 };
 
 struct syscall_frame 

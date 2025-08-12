@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <dirent.h>
 
 #define SYSCALL_VECTOR      0x66        // Different OS Specific
                                         
@@ -21,20 +22,37 @@ enum
     SYSTEM_FILE_SEEK = 10,
     SYSTEM_FILE_READ = 11,
     SYSTEM_FILE_WRITE = 12,
+    SYSTEM_EXEC_DEX = 13,
+    SYSTEM_DIR_OPEN = 14,
+    SYSTEM_DIR_READ = 15,
+    SYSTEM_DIR_CLOSE = 16,
 };
 
 static inline __attribute__((always_inline))
-int do_sys(int n, int a0, int a1, int a2, int a3) {
-    int r;
+int do_sys(int n, int a0, int a1, int a2, int a3)
+{
+    register int r_eax asm("eax") = n;
+    register int r_ebx asm("ebx") = a0;
+    register int r_ecx asm("ecx") = a1;
+    register int r_edx asm("edx") = a2;
+    register int r_esi asm("esi") = a3;
+    register int r_edi asm("edi"); // bara deklarerad; sparas av asm-blocket
+
     asm volatile(
-        "push %%ebx; push %%ecx; push %%edx; push %%esi;"
-        "mov %1,%%eax; mov %2,%%ebx; mov %3,%%ecx; mov %4,%%edx; mov %5,%%esi;"
-        "int $0x66;"
-        "pop %%esi; pop %%edx; pop %%ecx; pop %%ebx;"
-        : "=a"(r) : "r"(n),"r"(a0),"r"(a1),"r"(a2),"r"(a3) : "memory","cc"
+        "push %%ebx\n\t"
+        "push %%esi\n\t"
+        "push %%edi\n\t"
+        "int $0x66\n\t"
+        "pop %%edi\n\t"
+        "pop %%esi\n\t"
+        "pop %%ebx\n\t"
+        : "+a"(r_eax), "+b"(r_ebx), "+c"(r_ecx), "+d"(r_edx), "+S"(r_esi), "+D"(r_edi)
+        :
+        : "memory", "cc"
     );
-    return r;
+    return r_eax;
 }
+
 
 static inline __attribute__((always_inline)) void system_exit(int code) 
 {
@@ -47,9 +65,9 @@ static inline __attribute__((always_inline)) void system_putchar(char c)
     (void)do_sys(SYSTEM_PUTCHAR, (unsigned char)c, 0, 0, 0);
 }
 
-static inline __attribute__((always_inline)) void system_print(const char *str) 
+static inline __attribute__((always_inline)) int system_print(const char *str) 
 {
-    (void)do_sys(SYSTEM_PRINT, (uintptr_t)str, 0, 0, 0);
+    return do_sys(SYSTEM_PRINT, (int)(uintptr_t)str, 0, 0, 0);
 }
 
 static inline __attribute__((always_inline)) uint8_t system_getch(void)
@@ -129,3 +147,22 @@ static inline long system_write(int file_descriptor, const void *buf, unsigned l
     return (long)do_sys(SYSTEM_FILE_WRITE, file_descriptor, (int)(uintptr_t)buf, (int)count, 0);
 }
 
+static inline int system_exec_dex(const char *path, int argc, char **argv)
+{
+    return do_sys(SYSTEM_EXEC_DEX, (int)(uintptr_t)path, argc, (int)(uintptr_t)argv, 0);
+}
+
+static inline int system_open_dir(const char *path)
+{
+    return do_sys(SYSTEM_DIR_OPEN, (int)(uintptr_t)path, 0, 0, 0);
+}
+
+static inline int system_read_dir(int handle, struct dirent *entry)
+{
+    return do_sys(SYSTEM_DIR_READ, handle, (int)(uintptr_t)entry, 0, 0);
+}
+
+static inline int system_close_dir(int handle)
+{
+    return do_sys(SYSTEM_DIR_CLOSE, handle, 0, 0, 0);
+}

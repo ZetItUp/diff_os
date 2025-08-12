@@ -2,6 +2,7 @@
 #include "console.h"
 #include "stdint.h"
 #include "stdio.h"
+#include "serial.h"
 
 #define SCREEN_WIDTH    80
 #define SCREEN_HEIGHT   25
@@ -44,6 +45,9 @@ void vga_cursor_disable(void)
 // Print a character to the screen
 void putch(char c)
 {
+#ifdef DIFF_DEBUG
+    serial_putc(c);
+#endif
     putch_color(current_attrib, c);
 }
 

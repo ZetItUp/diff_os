@@ -20,6 +20,10 @@ TOOLS_DIR = tools
 DRIVERS_DIR = drivers
 IMAGE = $(TARGET)
 
+DEBUG ?= 0
+ifeq ($(DEBUG),1)
+CFLAGS += -DDIFF_DEBUG
+endif
 
 .PRECIOUS: %.o %.elf %.bin %.patched
 
@@ -48,9 +52,10 @@ KERNEL_SRC = \
 	kernel/dex/dex_loader.c \
 	kernel/dex/exl_loader.c \
 	kernel/kernel.c \
+	kernel/serial.c \
     kernel/console.c \
     kernel/fs/diff.c \
-    kernel/memory/paging.c \
+	kernel/memory/paging.c \
 	kernel/memory/heap.c
 
 # Interfaces

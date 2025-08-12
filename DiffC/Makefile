@@ -12,19 +12,22 @@ EXLDIR    := exls
 IMAGE_EXL := ../image/system/exls
 
 LIBNAME   := diffc.exl
-VERBOSE   ?= 1
+VERBOSE   = 1
 IMPORT_EXL ?=
 
 # --- Rekursiv wildcard för alla .c under source/
 rwildcard = $(foreach d,$(wildcard $(1)/*),$(call rwildcard,$(d),$(2))) $(wildcard $(1)/$(2))
 SRCS      := $(call rwildcard,$(SRCDIR),*.c)
 
-# Mappar t.ex. source/system/io/foo.c -> build/system/io/foo.o
 OBJS      := $(SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
 
 .PHONY: all clean exldir image_exl
 
 all: $(EXLDIR)/$(LIBNAME) image_exl
+
+print:
+	@echo SRCS=$(SRCS)
+	@echo OBJS=$(OBJS)
 
 # Byggregel som funkar för undermappar
 $(OBJDIR)/%.o: $(SRCDIR)/%.c
