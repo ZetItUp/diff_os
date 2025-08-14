@@ -7,6 +7,7 @@
 *.ddf
 *.dex
 *.exl
+*.zip
 build/
 cross/
 1token
