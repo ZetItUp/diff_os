@@ -1,0 +1,4 @@
+# Default command map for dterm
+
+hello=/programs/hello/hello.dex
+ls=/programs/ls/ls.dex

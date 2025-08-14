@@ -49,6 +49,8 @@ KERNEL_SRC = \
 	kernel/drivers/module_loader.c \
 	kernel/system/system.c \
 	kernel/system/syscall.c \
+	kernel/system/syscall_dir.c \
+	kernel/system/syscall_file.c \
 	kernel/dex/dex_loader.c \
 	kernel/dex/exl_loader.c \
 	kernel/kernel.c \
@@ -56,7 +58,8 @@ KERNEL_SRC = \
     kernel/console.c \
     kernel/fs/diff.c \
 	kernel/memory/paging.c \
-	kernel/memory/heap.c
+	kernel/memory/heap.c \
+	kernel/memory/usercopy.c
 
 # Interfaces
 KERNEL_SRC += \
@@ -156,6 +159,11 @@ $(OBJ)/%.o: kernel/drivers/%.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJ)/%.o: kernel/memory/%.c
+	@mkdir -p $(OBJ)
+	@echo "[CC] Compiling $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJ)/%.o: kernel/system/syscall/%.c
 	@mkdir -p $(OBJ)
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@

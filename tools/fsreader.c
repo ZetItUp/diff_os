@@ -66,7 +66,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // Read superblock
+
     SuperBlock sb;
     fseek(f, 2048 * SECTOR_SIZE, SEEK_SET);
     fread(&sb, sizeof(sb), 1, f);
@@ -79,7 +79,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // Read FileTable
+
     FileTable ft;
     fseek(f, sb.file_table_sector * SECTOR_SIZE, SEEK_SET);
     fread(&ft, sizeof(ft), 1, f);
@@ -104,6 +104,7 @@ int main(int argc, char *argv[])
     }
 
     fclose(f);
+    
     return 0;
 }
 

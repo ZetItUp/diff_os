@@ -370,8 +370,9 @@ def build_exl(input_path: Path, output_path: Path, libname: str, verbose: bool) 
         return None, -1
 
     # Strtab
-    strtab = bytearray()
-    strmap = {}
+    strtab = bytearray(b"\x00")
+    strmap = {"": 0}
+
     def add_str(s: str) -> int:
         if s in strmap:
             return strmap[s]

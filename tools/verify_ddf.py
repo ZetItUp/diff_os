@@ -4,8 +4,10 @@ import struct
 def main(filename):
     with open(filename, "rb") as f:
         data = f.read()
+
     if data[:4] != b'DDF\x00':
         print("Not a valid DDF file (missing magic)")
+    
         return 1
 
     header = struct.unpack("<11I", data[:44])
@@ -24,6 +26,7 @@ def main(filename):
 
     symtab_offset = header[4]
     symcount = header[5]
+    
     for i in range(symcount):
         entry = struct.unpack_from('<III', data, symtab_offset + i*12)
         print(f"  Symbol[{i}] name_off={entry[0]} value_off={entry[1]} type={entry[2]}")

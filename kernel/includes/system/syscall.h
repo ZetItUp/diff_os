@@ -51,3 +51,17 @@ struct syscall_frame
 
 int system_call_dispatch(struct syscall_frame *f);
 void system_call_init(void);
+
+struct dirent;
+extern void system_call_stub(void);
+extern FileTable *file_table;
+
+int system_open_dir(const char *path);
+int system_read_dir(int handle, struct dirent *out);
+int system_close_dir(int handle);
+
+int system_file_open(const char *abs_path, int oflags, int mode);
+int system_file_close(int file_descriptor);
+long system_file_seek(int file, long offset, int whence);
+long system_file_read(int file, void *buf, unsigned long count);
+long system_file_write(int file, const void *buf, unsigned long count);

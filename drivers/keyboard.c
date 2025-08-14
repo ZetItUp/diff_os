@@ -6,16 +6,13 @@
 #include "console.h"
 #include "pic.h"
 
-#define KEYBOARD_DATA       0x60
-#define KEYBOARD_COMMAND    0x64
-#define KEYBOARD_STATUS     0x64
+#define KEYBOARD_DATA 0x60
+#define KEYBOARD_COMMAND 0x64
+#define KEYBOARD_STATUS 0x64
 
-#define KB_CMD_QUEUE_SIZE   9
+#define KB_CMD_QUEUE_SIZE 9
+#define KB_FIFO_SIZE 256
 
-#define KB_FIFO_SIZE        256
-
-// Driver Meta Data
-// Assign which IRQ number it uses.
 __attribute__((section(".ddf_meta"), used))
 volatile unsigned int ddf_irq_number = 1;
 
@@ -63,7 +60,7 @@ static inline void keyboard_fifo_push(uint8_t b)
 {
     unsigned tail = (kb_tail + 1) & (KB_FIFO_SIZE - 1);
 
-    if(tail != kb_head)
+    if (tail != kb_head)
     {
         kb_fifo[kb_tail] = b;
         kb_tail = tail;
@@ -74,7 +71,7 @@ static inline uint8_t keyboard_fifo_pop(void)
 {
     uint8_t b = 0;
 
-    if(!keyboard_fifo_empty())
+    if (!keyboard_fifo_empty())
     {
         b = kb_fifo[kb_head];
         kb_head = (kb_head + 1) & (KB_FIFO_SIZE - 1);
@@ -83,11 +80,9 @@ static inline uint8_t keyboard_fifo_pop(void)
     return b;
 }
 
-
-
 static void wait_input(void)
 {
-    for(int i = 0; i < 10000; i++)
+    for (int i = 0; i < 10000; i++)
     {
         if (!(kernel->inb(KEYBOARD_STATUS) & 0x02))
         {
@@ -98,7 +93,7 @@ static void wait_input(void)
 
 static void wait_output(void)
 {
-    for(int i = 0; i < 10000; i++)
+    for (int i = 0; i < 10000; i++)
     {
         if (kernel->inb(KEYBOARD_STATUS) & 0x01)
         {
@@ -110,28 +105,29 @@ static void wait_output(void)
 static uint8_t i8042_read_cmdbyte(void)
 {
     wait_input();
-    kernel->outb(KEYBOARD_COMMAND, 0x20);   // Read Command Byte
+    kernel->outb(KEYBOARD_COMMAND, 0x20); // Read command byte
     wait_output();
+
     return kernel->inb(KEYBOARD_DATA);
 }
 
 static void i8042_write_cmdbyte(uint8_t cb)
 {
     wait_input();
-    kernel->outb(KEYBOARD_COMMAND, 0x60);   // Write Command Byte
+    kernel->outb(KEYBOARD_COMMAND, 0x60); // Write command byte
     wait_input();
     kernel->outb(KEYBOARD_DATA, cb);
 }
 
-// Queue 
+// Command queue
 static void kbq_send_cmd(kb_cmd_t *cmd)
 {
     wait_input();
-    
+
     kb_cmdq_state = KBQ_WAIT_ACK;
     kernel->outb(KEYBOARD_DATA, cmd->command);
 
-    if(cmd->has_data)
+    if (cmd->has_data)
     {
         wait_input();
         kernel->outb(KEYBOARD_DATA, cmd->data);
@@ -140,7 +136,7 @@ static void kbq_send_cmd(kb_cmd_t *cmd)
 
 static void kbq_start_next(void)
 {
-    if(kb_q_count == 0)
+    if (kb_q_count == 0)
     {
         kb_cmdq_state = KBQ_IDLE;
 
@@ -153,7 +149,7 @@ static void kbq_start_next(void)
 
 static int kbq_enqueue(uint8_t cmd, int has_data, uint8_t data)
 {
-    if(kb_q_count >= KB_CMD_QUEUE_SIZE)
+    if (kb_q_count >= KB_CMD_QUEUE_SIZE)
     {
         return -1;
     }
@@ -167,7 +163,7 @@ static int kbq_enqueue(uint8_t cmd, int has_data, uint8_t data)
     kb_q_tail = (kb_q_tail + 1) % KB_CMD_QUEUE_SIZE;
     kb_q_count++;
 
-    if(kb_cmdq_state == KBQ_IDLE)
+    if (kb_cmdq_state == KBQ_IDLE)
     {
         kbq_start_next();
     }
@@ -183,42 +179,58 @@ static void i8042_service(void)
 
         if (kb_cmdq_state == KBQ_WAIT_ACK)
         {
-            if (val == 0xFA) {
-                if (kb_cmdq[kb_q_head].command == 0xFF) {
+            if (val == 0xFA)
+            {
+                if (kb_cmdq[kb_q_head].command == 0xFF)
+                {
                     kb_cmdq_state = KBQ_WAIT_BAT;
-                } else {
+                }
+                else
+                {
                     kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
                     kb_q_count--;
                     kb_cmdq_state = KBQ_IDLE;
                     kbq_start_next();
                 }
+
                 continue;
-            } else if (val == 0xFE) {
+            }
+            else if (val == 0xFE)
+            {
                 kb_cmdq[kb_q_head].retries++;
-                if (kb_cmdq[kb_q_head].retries < kb_resend_limit) {
+
+                if (kb_cmdq[kb_q_head].retries < kb_resend_limit)
+                {
                     kb_cmdq_state = KBQ_SEND;
                     kbq_send_cmd(&kb_cmdq[kb_q_head]);
-                } else {
+                }
+                else
+                {
                     kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
                     kb_q_count--;
                     kb_cmdq_state = KBQ_ERROR;
                     kbq_start_next();
                 }
+
                 continue;
             }
         }
 
-        if (kb_cmdq_state == KBQ_WAIT_BAT) {
-            if (val == 0xAA) {
+        if (kb_cmdq_state == KBQ_WAIT_BAT)
+        {
+            if (val == 0xAA)
+            {
                 kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
                 kb_q_count--;
                 kb_cmdq_state = KBQ_IDLE;
                 kbq_start_next();
+
                 continue;
             }
         }
 
-        if (val != 0xFA && val != 0xFE && val != 0xAA) {
+        if (val != 0xFA && val != 0xFE && val != 0xAA)
+        {
             keyboard_fifo_push(val);
         }
     }
@@ -231,18 +243,19 @@ static void i8042_init(void)
     kernel->outb(KEYBOARD_COMMAND, 0xAD);
 
     // Flush output
-    while(kernel->inb(KEYBOARD_STATUS) & 0x01)
+    while (kernel->inb(KEYBOARD_STATUS) & 0x01)
     {
         (void)kernel->inb(KEYBOARD_DATA);
     }
 
-    // Controller Self-Test
+    // Controller self-test
     wait_input();
     kernel->outb(KEYBOARD_COMMAND, 0xAA);
     wait_output();
 
     uint8_t res = kernel->inb(KEYBOARD_DATA);
-    if(res != 0x55)
+
+    if (res != 0x55)
     {
         kernel->printf("[DRIVER] Keyboard self-test failed: %x\n", res);
     }
@@ -252,27 +265,27 @@ static void i8042_init(void)
     kernel->outb(KEYBOARD_COMMAND, 0xAE);
 
     uint8_t cmd_byte = i8042_read_cmdbyte();
-    cmd_byte |= 0x01;             // Bit 0 = Enable keyboard IRQ
+    cmd_byte |= 0x01;                           // Bit 0 = enable keyboard IRQ
     i8042_write_cmdbyte(cmd_byte);
 
-    while(kernel->inb(KEYBOARD_STATUS) & 0x01)
+    while (kernel->inb(KEYBOARD_STATUS) & 0x01)
     {
         (void)kernel->inb(KEYBOARD_DATA);
     }
 }
 
-// System call functions
+// Syscall helpers
 int keyboard_read_byte(uint8_t *out)
 {
     int res = 0;
     asm volatile("cli");
 
-    if(!keyboard_fifo_empty())
+    if (!keyboard_fifo_empty())
     {
         *out = keyboard_fifo_pop();
-        
         res = 1;
     }
+
     asm volatile("sti");
 
     return res;
@@ -280,11 +293,11 @@ int keyboard_read_byte(uint8_t *out)
 
 uint8_t keyboard_read_byte_blocking(void)
 {
-    for(;;)
+    for (;;)
     {
         asm volatile("cli");
 
-        if(!keyboard_fifo_empty())
+        if (!keyboard_fifo_empty())
         {
             uint8_t b = keyboard_fifo_pop();
             asm volatile("sti");
@@ -296,37 +309,39 @@ uint8_t keyboard_read_byte_blocking(void)
     }
 }
 
-static int ps2_kbd_enable_scanning_sync(void)
+static int ps2_keyboard_enable_scanning_sync(void)
 {
-    // (valfritt) Disable scanning först, vissa emus/hårdvaror beter sig bättre med F5->F4
     wait_input();
-    kernel->outb(KEYBOARD_DATA, 0xF5);     // Disable scanning
+    kernel->outb(KEYBOARD_DATA, 0xF5); // Disable scanning
     wait_output();
-    (void)kernel->inb(KEYBOARD_DATA);      // Läs ACK (0xFA) – ignorera fel
+    (void)kernel->inb(KEYBOARD_DATA);  // Read ACK (0xFA)
 
     // Enable scanning
     wait_input();
     kernel->outb(KEYBOARD_DATA, 0xF4);
     wait_output();
+
     uint8_t ack = kernel->inb(KEYBOARD_DATA);
-    if (ack != 0xFA) {
+
+    if (ack != 0xFA)
+    {
         kernel->printf("[KB] WARN: expected ACK 0xFA, got 0x%02x\n", ack);
     }
+
     return 0;
 }
 
-// Driver specific functions
+// Driver entry points
 __attribute__((section(".text")))
 void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
     i8042_init();
 
-
-    ps2_kbd_enable_scanning_sync();
+    ps2_keyboard_enable_scanning_sync();
     i8042_service();
-    kernel->keyboard_register(keyboard_read_byte, keyboard_read_byte_blocking);    
-    kernel->pic_clear_mask(1);  // Unmask IRQ1
+    kernel->keyboard_register(keyboard_read_byte, keyboard_read_byte_blocking);
+    kernel->pic_clear_mask(1);                  // Unmask IRQ1
     kernel->printf("[DRIVER] PS/2 Keyboard driver installed!\n");
 }
 
@@ -334,24 +349,25 @@ __attribute__((section(".text")))
 void ddf_driver_exit(void)
 {
     // Disable keyboard IRQ
-    kernel->pic_set_mask(1);            // Mask IRQ1 in PIC
+    kernel->pic_set_mask(1);
     kernel->printf("[DRIVER] PS/2 Keyboard driver removed successfully!\n");
 }
 
 __attribute__((section(".text")))
 void ddf_driver_irq(unsigned irq, void *context)
 {
-    while (kernel->inb(KEYBOARD_STATUS) & 0x01) 
+    while (kernel->inb(KEYBOARD_STATUS) & 0x01)
     {
         uint8_t val = kernel->inb(KEYBOARD_DATA);
 
-        if(kb_cmdq_state == KBQ_WAIT_ACK)
+        if (kb_cmdq_state == KBQ_WAIT_ACK)
         {
-            if(val == 0xFA)
+            if (val == 0xFA)
             {
-                if(kb_cmdq[kb_q_head].command == 0xFF)
+                if (kb_cmdq[kb_q_head].command == 0xFF)
                 {
                     kb_cmdq_state = KBQ_WAIT_BAT;
+
                     continue;
                 }
                 else
@@ -360,15 +376,15 @@ void ddf_driver_irq(unsigned irq, void *context)
                     kb_q_count--;
                     kb_cmdq_state = KBQ_IDLE;
                     kbq_start_next();
-                    
+
                     continue;
                 }
             }
-            else if(val == 0xFE)
+            else if (val == 0xFE)
             {
                 kb_cmdq[kb_q_head].retries++;
-                
-                if(kb_cmdq[kb_q_head].retries < kb_resend_limit)
+
+                if (kb_cmdq[kb_q_head].retries < kb_resend_limit)
                 {
                     kb_cmdq_state = KBQ_SEND;
                     kbq_send_cmd(&kb_cmdq[kb_q_head]);
@@ -380,27 +396,27 @@ void ddf_driver_irq(unsigned irq, void *context)
                     kb_cmdq_state = KBQ_ERROR;
                     kbq_start_next();
                 }
-                
+
                 continue;
             }
-            
+
             continue;
         }
 
-        if(kb_cmdq_state == KBQ_WAIT_BAT)
+        if (kb_cmdq_state == KBQ_WAIT_BAT)
         {
-            if(val == 0xAA)
+            if (val == 0xAA)
             {
                 kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
                 kb_q_count--;
                 kb_cmdq_state = KBQ_IDLE;
-                
-                for(int i = 0; i < 2; i++)
+
+                for (int i = 0; i < 2; i++)
                 {
-                    if(kernel->inb(KEYBOARD_STATUS) & 0x01)
+                    if (kernel->inb(KEYBOARD_STATUS) & 0x01)
                     {
                         uint8_t idb = kernel->inb(KEYBOARD_DATA);
-                        (void)idb;  // Drop this for now
+                        (void)idb;              // Drop this for now
                     }
                 }
 
@@ -409,7 +425,7 @@ void ddf_driver_irq(unsigned irq, void *context)
                 continue;
             }
         }
-        
+
         keyboard_fifo_push(val);
     }
 }

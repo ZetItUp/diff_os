@@ -174,7 +174,6 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *file)
     return done / size;
 }
 
-/* ====== printf family (32-bit optimized) ====== */
 struct bufctx {
     char *buf;
     size_t cap;
@@ -196,206 +195,234 @@ static void buf_sink(int ch, void *ctx) {
 
 static int vcbprintf(void (*sink)(int, void*), void *ctx, const char *fmt, va_list ap)
 {
-    if (!is_valid_userspace_ptr(fmt, 1)) return -1;
+    if (!is_valid_userspace_ptr(fmt, 1))
+    {
+        return -1;
+    }
 
     int out = 0;
     const char *p = fmt;
-    
-    while (*p) {
-        if (*p != '%') {
+
+    while (*p)
+    {
+        if (*p != '%')
+        {
             sink(*p++, ctx);
             out++;
             continue;
         }
 
-        p++; // Skip '%'
-        int pad0 = 0, width = 0, alternate = 0;
-        
-        // Parse flags
-        while (*p == '0' || *p == '#') {
-            if (*p == '0') pad0 = 1;
-            else alternate = 1;
+        p++; /* skip '%' */
+
+        /* ---- parse flags ---- */
+        int left = 0;
+        int pad0 = 0;
+        int alternate = 0;
+
+        while (*p == '-' || *p == '0' || *p == '#')
+        {
+            if (*p == '-') { left = 1; }
+            else if (*p == '0') { pad0 = 1; }
+            else { alternate = 1; }
             p++;
         }
-        
-        // Parse width
-        while (*p >= '0' && *p <= '9') {
+        if (left) { pad0 = 0; } /* '-' disables '0' */
+
+        /* ---- parse width ---- */
+        int width = 0;
+        while (*p >= '0' && *p <= '9')
+        {
             width = width * 10 + (*p++ - '0');
         }
-        
-        // Parse length (32-bit specific)
+
+        /* ---- length (only 'l' for 32-bit) ---- */
         int is_long = 0;
-        if (*p == 'l') {
+        if (*p == 'l')
+        {
             is_long = 1;
             p++;
         }
-        
-        if (!*p) break;
-        
-        // Handle specifiers
-        switch (*p++) {
+
+        if (!*p)
+        {
+            break;
+        }
+
+        /* ---- specifier ---- */
+        char spec = *p++;
+        switch (spec)
+        {
             case '%':
+            {
                 sink('%', ctx);
                 out++;
+
                 break;
-                
-            case 'c': {
+            }
+
+            case 'c':
+            {
                 int c = va_arg(ap, int);
                 sink(c, ctx);
                 out++;
+
                 break;
             }
-            
-            case 's': {
+
+            case 's':
+            {
                 const char *s = va_arg(ap, const char*);
                 s = safe_str(s);
-                
+
                 int slen = 0;
-                const char *tmp = s;
-                while (*tmp++) slen++;
-                
-                if (width > slen) {
-                    for (int i = 0; i < width - slen; i++) {
-                        sink(' ', ctx);
-                        out++;
-                    }
+                const char *q = s;
+                while (*q++) { slen++; }
+
+                int pad = (width > slen) ? (width - slen) : 0;
+
+                if (!left)
+                {
+                    while (pad--) { sink(' ', ctx); out++; }
+                    while (*s) { sink(*s++, ctx); out++; }
                 }
-                
-                while (*s) {
-                    sink(*s++, ctx);
-                    out++;
+                else
+                {
+                    while (*s) { sink(*s++, ctx); out++; }
+                    while (pad--) { sink(' ', ctx); out++; }
                 }
+
                 break;
             }
-            
+
             case 'd':
-            case 'i': {
+            case 'i':
+            {
                 int32_t val = is_long ? va_arg(ap, int32_t) : va_arg(ap, int);
                 char buf[12];
-                int neg = val < 0;
-                uint32_t uval = neg ? -val : val;
-                
+                int neg = (val < 0);
+                uint32_t u = neg ? (uint32_t)(-val) : (uint32_t)val;
+
                 int i = 0;
-                do {
-                    buf[i++] = '0' + (uval % 10);
-                    uval /= 10;
-                } while (uval);
-                
-                int pad = width > (i + neg) ? width - (i + neg) : 0;
-                
-                if (!pad0) {
-                    while (pad--) {
-                        sink(' ', ctx);
-                        out++;
-                    }
+                do
+                {
+                    buf[i++] = (char)('0' + (u % 10));
+                    u /= 10;
                 }
-                
-                if (neg) {
-                    sink('-', ctx);
-                    out++;
+                while (u);
+
+                int need = i + (neg ? 1 : 0);
+                int pad = (width > need) ? (width - need) : 0;
+
+                if (!left)
+                {
+                    if (!pad0) { while (pad--) { sink(' ', ctx); out++; } }
+                    if (neg) { sink('-', ctx); out++; }
+                    if (pad0) { while (pad--) { sink('0', ctx); out++; } }
+                    while (--i >= 0) { sink(buf[i], ctx); out++; }
                 }
-                
-                if (pad0) {
-                    while (pad--) {
-                        sink('0', ctx);
-                        out++;
-                    }
+                else
+                {
+                    if (neg) { sink('-', ctx); out++; }
+                    while (--i >= 0) { sink(buf[i], ctx); out++; }
+                    while (pad--) { sink(' ', ctx); out++; }
                 }
-                
-                while (--i >= 0) {
-                    sink(buf[i], ctx);
-                    out++;
-                }
+
                 break;
             }
-            
+
             case 'u':
             case 'x':
             case 'X':
-            case 'o': {
+            case 'o':
+            {
                 uint32_t val = is_long ? va_arg(ap, uint32_t) : va_arg(ap, unsigned int);
-                const char *digits = (*(p-1) == 'X') ? "0123456789ABCDEF" : "0123456789abcdef";
-                unsigned base = (*(p-1) == 'o') ? 8 : (*(p-1) == 'u') ? 10 : 16;
-                
+                unsigned base = (spec == 'o') ? 8 : (spec == 'u') ? 10 : 16;
+                const char *digits = (spec == 'X') ? "0123456789ABCDEF" : "0123456789abcdef";
+
                 char buf[12];
                 int i = 0;
-                
-                do {
+
+                do
+                {
                     buf[i++] = digits[val % base];
                     val /= base;
-                } while (val);
-                
-                int prefix = (alternate && base == 16) ? 2 : 0;
-                int pad = width > (i + prefix) ? width - (i + prefix) : 0;
-                
-                if (!pad0) {
-                    while (pad--) {
-                        sink(' ', ctx);
-                        out++;
-                    }
                 }
-                
-                if (alternate && base == 16) {
-                    sink('0', ctx);
-                    sink(*(p-1), ctx);
-                    out += 2;
-                }
-                
-                if (pad0) {
-                    while (pad--) {
+                while (val);
+
+                int prefix_len = (alternate && base == 16) ? 2 : 0; /* "0x" / "0X" */
+                int need = i + prefix_len;
+                int pad = (width > need) ? (width - need) : 0;
+
+                if (!left)
+                {
+                    if (!pad0) { while (pad--) { sink(' ', ctx); out++; } }
+                    if (prefix_len)
+                    {
                         sink('0', ctx);
-                        out++;
+                        sink(spec, ctx); /* 'x' or 'X' */
+                        out += 2;
                     }
+                    if (pad0) { while (pad--) { sink('0', ctx); out++; } }
+                    while (--i >= 0) { sink(buf[i], ctx); out++; }
                 }
-                
-                while (--i >= 0) {
-                    sink(buf[i], ctx);
-                    out++;
+                else
+                {
+                    if (prefix_len)
+                    {
+                        sink('0', ctx);
+                        sink(spec, ctx);
+                        out += 2;
+                    }
+                    while (--i >= 0) { sink(buf[i], ctx); out++; }
+                    while (pad--) { sink(' ', ctx); out++; }
                 }
+
                 break;
             }
-            
-            case 'p': {
-                void *ptr = va_arg(ap, void*);
-                uint32_t val = (uint32_t)ptr;
-                
+
+            case 'p':
+            {
+                /* print as 0x + lowercase hex, width pads the hex digits (not the 0x) with zeros */
+                uint32_t v = (uint32_t)va_arg(ap, void*);
+                char buf[8];
+                int i = 0;
+
+                do
+                {
+                    buf[i++] = "0123456789abcdef"[v & 0xF];
+                    v >>= 4;
+                }
+                while (v);
+
+                /* minimum 1 nibble, pad with zeros to requested width (width counts digits only) */
+                int pad = (width > i) ? (width - i) : 0;
+
                 sink('0', ctx);
                 sink('x', ctx);
                 out += 2;
-                
-                char buf[8];
-                int i = 0;
-                
-                do {
-                    buf[i++] = "0123456789abcdef"[val % 16];
-                    val /= 16;
-                } while (val);
-                
-                int pad = width > (i + 2) ? width - (i + 2) : 0;
-                while (pad--) {
-                    sink('0', ctx);
-                    out++;
-                }
-                
-                while (--i >= 0) {
-                    sink(buf[i], ctx);
-                    out++;
-                }
+
+                while (pad--) { sink('0', ctx); out++; }
+                while (--i >= 0) { sink(buf[i], ctx); out++; }
+
                 break;
             }
-            
+
             default:
+            {
+                /* unknown specifier: print it verbatim */
                 sink('%', ctx);
-                sink(*(p-1), ctx);
+                sink(spec, ctx);
                 out += 2;
+
                 break;
+            }
         }
     }
-    
+
     return out;
 }
 
-/* ====== Standard I/O Functions ====== */
+
 int printf(const char *fmt, ...)
 {
     va_list ap;
