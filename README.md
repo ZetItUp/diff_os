@@ -1,7 +1,8 @@
 # Different OS
 A different OS
 
-<img width="719" height="455" alt="Skärmbild 2025-08-09 185901" src="https://github.com/user-attachments/assets/2f6836a8-35c3-4905-ac47-54de5e44dbdf" />
+<img width="716" height="462" alt="Skärmbild 2025-08-14 200627" src="https://github.com/user-attachments/assets/e1784ca2-528d-4ac1-839d-1f50ff55694b" />
+
 
 The goal for this was to load a kernel from a bootloader. However i kept building on it.
 Features for now:
@@ -12,8 +13,17 @@ Features for now:
 * Module loader to load drivers
 * Custom tools to create drivers
 * It's own Executable format, DEX
-* It's own Executable Linking forma, EXL
+* It's own Executable Linking format, EXL
 * Custom tools to create the files from ELF to DEX and/or EXL
+* Supports some basic syscalls
+
+## Shell
+* Shell is called dterm
+* Commands cd, ver, help, exit
+
+## Software
+* ls     - list directory
+* hello  - prints Hello World!
 
 This is my first serious attempt at making my own OS.
 The ways i've done some stuff in it may seem weird, but im learning.
