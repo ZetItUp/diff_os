@@ -1,10 +1,14 @@
 #pragma once
 
+#include "stddef.h"
 #include "stdint.h"
 
 #define PAGE_PRESENT    0x1
 #define PAGE_RW         0x2
 #define PAGE_USER       0x4
+#define PAGE_PWT        0x8
+#define PAGE_PCD        0x10
+
 #define PAGE_SIZE       0x80                // Page Size (4 MB)
 #define BLOCK_SIZE      0x400000            // 4MB
 #define MAX_BLOCKS      1024

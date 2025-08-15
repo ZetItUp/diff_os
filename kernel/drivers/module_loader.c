@@ -8,7 +8,30 @@
 #include "heap.h"
 #include "irq.h"
 
-#define DDF_MAGIC 0x00464444
+static int ddf_irq_is_valid(const ddf_header_t *hdr, void (*irq_fn)(unsigned, void*))
+{
+    if (hdr == NULL)
+    {
+        return 0;
+    }
+
+    if (hdr->irq_offset == 0)
+    {
+        return 0;
+    }
+
+    if (irq_fn == NULL)
+    {
+        return 0;
+    }
+
+    if (hdr->irq_number >= 16)
+    {
+        return 0;
+    }
+
+    return 1;
+}
 
 static ddf_header_t* find_ddf_header(uint8_t* module_base, uint32_t size, uint32_t* out_offset)
 {
@@ -181,7 +204,18 @@ ddf_module_t* load_driver(const char* path)
     module->driver_init = init_fn;
     module->driver_irq = irq_fn;
     module->driver_exit = exit_fn;
-    module->irq_number = header->irq_number;
+    
+        
+    module->irq_number = IRQ_INVALID;
+
+    if(ddf_irq_is_valid(header, irq_fn))
+    {
+        module->irq_number = header->irq_number;
+    }
+    else
+    {
+        module->driver_irq = NULL;
+    }
 
     if (module->driver_init)
     {

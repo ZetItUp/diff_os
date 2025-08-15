@@ -20,8 +20,14 @@ LDFLAGS = -T driver.ld --gc-section \
 # Source files
 ALL_DRIVER_CS := $(wildcard $(DRIVERS_PATH)/*.c)
 
-DRIVER_HELPER := $(DRIVERS_PATH)/driver.c
-DRIVERS_CS := $(filter-out $(DRIVER_HELPER),$(ALL_DRIVER_CS))
+BUILD_DRIVER_HELPER ?= 0
+
+ifeq ($(BUILD_DRIVER_HELPER),0)
+    DRIVER_HELPER := $(DRIVERS_PATH)/driver.c
+    DRIVERS_CS := $(filter-out $(DRIVER_HELPER),$(ALL_DRIVER_CS))
+else
+    DRIVERS_CS := $(ALL_DRIVER_CS)
+endif
 
 DRIVERS_OBJ := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%.o,$(DRIVERS_CS))
 DRIVERS_NOSYM_ELF := $(patsubst $(DRIVERS_PATH)/%.c,$(DRIVERS_PATH)/obj/%_nosym.ddf.elf,$(DRIVERS_CS))
@@ -54,12 +60,12 @@ $(DRIVERS_PATH)/obj/%.o: $(DRIVERS_PATH)/%.c | $(DRIVERS_PATH)/obj
 	@echo "[DRIVERS CC] Compiling $<"
 	@$(CC) $(CFLAGS) $< -o $@
 
-$(DRIVERS_PATH)/obj/driver.o: $(DRIVERS_PATH)/driver.c | $(DRIVERS_PATH)/obj
+$(DRIVERS_PATH)/obj/driver.o: $(DRIVERS_PATH)/obj
 	@echo "[DRIVERS CC] Compiling driver.c"
 	@$(CC) $(CFLAGS) $< -o $@
 
 .SECONDARY:
-$(DRIVERS_PATH)/obj/%_nosym.ddf.elf: $(DRIVERS_PATH)/obj/%.o $(DRIVERS_PATH)/obj/driver.o | $(DRIVERS_PATH)/obj
+$(DRIVERS_PATH)/obj/%_nosym.ddf.elf: $(DRIVERS_PATH)/obj/%.o | $(DRIVERS_PATH)/obj
 	@echo "[DRIVERS LD] Linking ELF without symbols $*"
 	@$(LD) $(LDFLAGS) $@ $^ 2>/dev/null
 
@@ -82,9 +88,9 @@ $(DRIVERS_PATH)/obj/%_symbols.o: $(DRIVERS_PATH)/obj/%_symbols.c
 
 # Link final ELF
 .SECONDARY:
-$(DRIVERS_PATH)/obj/%.ddf.elf: $(DRIVERS_PATH)/obj/%.o $(DRIVERS_PATH)/obj/%_symbols.o $(DRIVERS_PATH)/obj/driver.o | $(DRIVERS_PATH)/obj
+$(DRIVERS_PATH)/obj/%.ddf.elf: $(DRIVERS_PATH)/obj/%.o $(DRIVERS_PATH)/obj/%_symbols.o | $(DRIVERS_PATH)/obj
 	@echo "[DRIVERS LD] Linking final ELF $*"
-	@$(LD) $(LDFLAGS) $@ $^ 2>/dev/null
+	@$(LD) $(LDFLAGS) $@ $^
 
 .SECONDARY:
 $(IMAGE_DRIVERS_PATH)/%.ddf: $(DRIVERS_PATH)/obj/%.ddf.elf | $(IMAGE_DRIVERS_PATH)

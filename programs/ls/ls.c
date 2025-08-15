@@ -78,7 +78,7 @@ int main(int argc, char *argv[])
         }
         else if(ent.d_type == DT_REG)
         {
-            printf(" %-12s %10u  %s/\n", "<FILE>", (unsigned)ent.d_size, ent.d_name);
+            printf(" %-12s %10u  %s\n", "<FILE>", (unsigned)ent.d_size, ent.d_name);
         }
     }
 

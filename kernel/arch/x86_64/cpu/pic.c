@@ -2,12 +2,6 @@
 #include "io.h"
 #include "stdio.h"
 
-// Wait for I/O to let the PIC settle
-static inline void io_wait(void)
-{
-    outb(0x80, 0);
-}
-
 /*
  * Remap the PICs to the given interrupt offsets-
  * "Standard" values:

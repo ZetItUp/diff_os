@@ -1,3 +1,6 @@
+// All comments are written in English.
+// Allman brace style is used consistently.
+
 #include "stdio.h"
 #include "string.h"
 #include "drivers/ata.h"
@@ -8,36 +11,174 @@
 #include "heap.h"
 #include "irq.h"
 
-#define MAX_MODULES 16
+#define MAX_DRIVERS   32
 
-static ddf_module_t* installed_modules[MAX_MODULES];
-
-void remove_driver(uint32_t irq_num)
+typedef struct driver_record
 {
-    if (irq_num >= MAX_MODULES)
+    ddf_module_t *module;       
+    char          name[64];    
+    char          path[256];  
+} driver_record_t;
+
+static driver_record_t g_drivers[MAX_DRIVERS];
+static unsigned g_driver_count = 0;
+
+static const char *basename_ptr(const char *path)
+{
+    const char *p = path;
+    const char *slash = p;
+
+    if (!p)
+    {
+        return "";
+    }
+
+    while (*p)
+    {
+        if (*p == '/' || *p == '\\')
+        {
+            slash = p + 1;
+        }
+        p++;
+    }
+
+    return slash;
+}
+
+static void basename_no_ext(const char *path, char *out, size_t out_sz)
+{
+    const char *base = basename_ptr(path);
+    size_t n = 0;
+
+    if (out_sz == 0)
     {
         return;
     }
 
-    if (installed_modules[irq_num] && installed_modules[irq_num]->driver_exit)
+    while (base[n] && base[n] != '.' && n + 1 < out_sz)
     {
-        installed_modules[irq_num]->driver_exit();
-        kfree(installed_modules[irq_num]->module_base);
-        kfree(installed_modules[irq_num]);
-        installed_modules[irq_num] = NULL;
-        irq_uninstall_handler(irq_num);
+        out[n] = base[n];
+        n++;
+    }
+
+    out[n] = '\0';
+}
+
+static int find_driver_index_by_name(const char *name)
+{
+    for (unsigned i = 0; i < g_driver_count; i++)
+    {
+        if (strcmp(g_drivers[i].name, name) == 0)
+        {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+static int find_driver_index_by_irq(uint32_t irq_num)
+{
+    if (irq_num >= 16u)
+    {
+        return -1;
+    }
+
+    for (unsigned i = 0; i < g_driver_count; i++)
+    {
+        ddf_module_t *m = g_drivers[i].module;
+
+        if (m && m->irq_number == irq_num)
+        {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+static void unload_at_index(unsigned idx)
+{
+    if (idx >= g_driver_count)
+    {
+        return;
+    }
+
+    ddf_module_t *mod = g_drivers[idx].module;
+
+    if (mod)
+    {
+        if (mod->irq_number != IRQ_INVALID && mod->irq_number < 16u && mod->driver_irq)
+        {
+            irq_uninstall_handler((uint8_t)mod->irq_number);
+        }
+
+        if (mod->driver_exit)
+        {
+            mod->driver_exit();
+        }
+
+        if (mod->module_base)
+        {
+            kfree(mod->module_base);
+        }
+
+        kfree(mod);
+    }
+
+    for (unsigned j = idx + 1; j < g_driver_count; j++)
+    {
+        g_drivers[j - 1] = g_drivers[j];
+    }
+
+    g_driver_count--;
+    memset(&g_drivers[g_driver_count], 0, sizeof(g_drivers[g_driver_count]));
+}
+
+void remove_driver(uint32_t irq_num)
+{
+    int idx = find_driver_index_by_irq(irq_num);
+
+    if (idx >= 0)
+    {
+        unload_at_index((unsigned)idx);
+    }
+}
+
+void remove_driver_by_name(const char *name)
+{
+    if (!name)
+    {
+        return;
+    }
+
+    int idx = find_driver_index_by_name(name);
+
+    if (idx >= 0)
+    {
+        unload_at_index((unsigned)idx);
+    }
+}
+
+void remove_all_drivers(void)
+{
+    while (g_driver_count > 0)
+    {
+        unload_at_index(g_driver_count - 1);
     }
 }
 
 void load_drivers(const FileTable* table, const char* cfg_path)
 {
-    memset(installed_modules, 0, sizeof(installed_modules));
+    remove_all_drivers();
+    memset(g_drivers, 0, sizeof(g_drivers));
+    g_driver_count = 0;
 
     int idx = find_entry_by_path(table, cfg_path);
+
     if (idx == -1)
     {
         printf("ERROR: File '%s' was not found!\n", cfg_path);
-
         return;
     }
 
@@ -49,7 +190,6 @@ void load_drivers(const FileTable* table, const char* cfg_path)
     {
         printf("ERROR: File '%s' was empty!\n", cfg_path);
         kfree(syscfg_data);
-
         return;
     }
 
@@ -120,28 +260,27 @@ void load_drivers(const FileTable* table, const char* cfg_path)
         {
             strncpy(driver_path, line + 5, sizeof(driver_path) - 1);
             driver_path[sizeof(driver_path) - 1] = 0;
-
             continue;
         }
 
         if (!driver_path[0])
         {
             printf("[DRIVER] WARNING: 'path=' missing before '%s' in [DRIVERS]\n", line);
-
             continue;
         }
 
+        // Build absolute path
         char abs_path[256];
-
         size_t plen = strlen(driver_path);
+
         if (plen >= sizeof(abs_path) - 2)
         {
             printf("[DRIVER] ERROR: drivers path too long\n");
-
             continue;
         }
 
         strcpy(abs_path, driver_path);
+
         if (plen == 0 || abs_path[plen - 1] != '/')
         {
             strcat(abs_path, "/");
@@ -150,50 +289,54 @@ void load_drivers(const FileTable* table, const char* cfg_path)
         if (strlen(abs_path) + strlen(line) >= sizeof(abs_path))
         {
             printf("[DRIVER] ERROR: driver path+name too long: %s + %s\n", abs_path, line);
-
             continue;
         }
 
         strcat(abs_path, line);
 
+        char drv_name[64];
+        basename_no_ext(line, drv_name, sizeof(drv_name));
+
+        if (drv_name[0] == '\0')
+        {
+            printf("[DRIVER] ERROR: invalid driver name from '%s'\n", line);
+            continue;
+        }
+
+        int existing = find_driver_index_by_name(drv_name);
+        if (existing >= 0)
+        {
+            unload_at_index((unsigned)existing);
+        }
+
+        if (g_driver_count >= MAX_DRIVERS)
+        {
+            printf("[DRIVER] ERROR: driver registry full, skipping %s\n", abs_path);
+            continue;
+        }
+
         ddf_module_t* module = load_driver(abs_path);
         if (!module)
         {
             printf("[DRIVER] ERROR: Failed to load driver %s\n", abs_path);
-
             continue;
         }
 
-        if (module->irq_number >= MAX_MODULES)
+        if (module->irq_number != IRQ_INVALID && module->irq_number < 16u && module->driver_irq)
         {
-            printf("[DRIVER] ERROR: IRQ %u out of range for %s\n", module->irq_number, abs_path);
-            kfree(module->module_base);
-            kfree(module);
-
-            continue;
+            irq_install_handler((uint8_t)module->irq_number, module->driver_irq);
         }
 
-        if (installed_modules[module->irq_number])
-        {
-            printf("[DRIVER] ERROR: IRQ %u already has a driver\n", module->irq_number);
-            kfree(module->module_base);
-            kfree(module);
+        driver_record_t *slot = &g_drivers[g_driver_count++];
+        memset(slot, 0, sizeof(*slot));
+        slot->module = module;
+        strncpy(slot->name, drv_name, sizeof(slot->name) - 1);
+        strncpy(slot->path, abs_path, sizeof(slot->path) - 1);
 
-            continue;
-        }
-
-        if (!module->driver_irq)
-        {
-            printf("[DRIVER] WARNING: %s has no IRQ handler, ignoring\n", abs_path);
-            kfree(module->module_base);
-            kfree(module);
-
-            continue;
-        }
-
-        installed_modules[module->irq_number] = module;
-        irq_install_handler(module->irq_number, module->driver_irq);
-        // printf("[MODULE] Loaded %s on IRQ %u\n", abs_path, module->irq_number);
+        // Optional log
+        // printf("[MODULE] Loaded %s (name=%s)%s\n",
+        //        abs_path, slot->name,
+        //        (module->irq_number != IRQ_INVALID && module->driver_irq) ? " [IRQ registered]" : "");
     }
 
     kfree(syscfg_data);

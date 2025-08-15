@@ -94,12 +94,32 @@ static void alloc_page_table_with_flags(uint32_t dir_index, uint32_t *table, uin
         pd_flags |= PAGE_USER;
     }
 
+    if (flags & PAGE_PCD)
+    {
+        pd_flags |= PAGE_PCD;
+    }
+
+    if (flags & PAGE_PWT)
+    {
+        pd_flags |= PAGE_PWT;
+    }
+
     page_directory[dir_index] = ((uint32_t)table & 0xFFFFF000u) | pd_flags;
 }
 
 static void alloc_page_table(uint32_t dir_index, uint32_t *table)
 {
     alloc_page_table_with_flags(dir_index, table, 0);
+}
+
+static void identity_map_range(uint32_t start, uint32_t size)
+{
+    uint32_t end = start + size;
+
+    for (uint32_t va = start; va < end; va += 0x1000u)
+    {
+        map_4kb_page_flags(va, va, PAGE_PRESENT | PAGE_RW);
+    }
 }
 
 static void init_phys_bitmap(void)
@@ -142,13 +162,10 @@ void init_paging(uint32_t ram_mb)
 
     alloc_page_table(0, kernel_page_tables[0]);
 
-    for (int i = 0; i < 1024; i++)
-    {
-        kernel_page_tables[0][i] = (i * 0x1000u) | PAGE_PRESENT | PAGE_RW;
-    }
-
-    pt_next = 1;
-    set_block(0);  
+    identity_map_range(0x00000000, 0x00800000);
+    pt_next = 2;
+    set_block(0);
+    set_block(1);  
 
     // Load CR3 with the address of the page directory
     asm volatile("mov %0, %%cr3" :: "r"(&page_directory));
@@ -219,46 +236,45 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
         if (pt_next >= (int)(sizeof(kernel_page_tables) / sizeof(kernel_page_tables[0])))
         {
             printf("[PAGING] ERROR: Out of page tables (dir=%u)\n", dir_index);
-
             return -1;
         }
 
         table = kernel_page_tables[pt_next++];
-
         alloc_page_table_with_flags(dir_index, table, flags);
     }
     else
     {
         table = (uint32_t *)(page_directory[dir_index] & 0xFFFFF000u);
 
+        // Upgrade PDE bits if needed: USER + cache attributes
         if (flags & PAGE_USER)
         {
             page_directory[dir_index] |= PAGE_USER;
+        }
+        if (flags & PAGE_PCD)
+        {
+            page_directory[dir_index] |= PAGE_PCD;
+        }
+        if (flags & PAGE_PWT)
+        {
+            page_directory[dir_index] |= PAGE_PWT;
         }
     }
 
     uint32_t pte = table[table_index];
 
-    uint32_t desired = (phys_addr & 0xFFFFF000u) | (flags & (PAGE_RW | PAGE_USER)) | PAGE_PRESENT;
+    uint32_t desired = (phys_addr & 0xFFFFF000u) | (flags & (PAGE_RW | PAGE_USER | PAGE_PCD | PAGE_PWT)) | PAGE_PRESENT;
 
     if (pte & PAGE_PRESENT)
     {
         uint32_t cur_addr = pte & 0xFFFFF000u;
         uint32_t cur_flags = pte & 0x00000FFFu;
 
-#ifdef DIFF_DEBUG
-        if (cur_addr != (phys_addr & 0xFFFFF000u))
-        {
-            DDBG("[PAGING] WARN: VA 0x%08x already -> PA 0x%08x, requested 0x%08x. Keeping existing PA, upgrading flags.\n", virt_addr, cur_addr, (phys_addr & 0xFFFFF000u));
-        }
-#endif
-
         uint32_t new_flags = cur_flags | (desired & 0x00000FFFu);
 
         if (new_flags != cur_flags)
         {
             table[table_index] = cur_addr | new_flags;
-
             invlpg(virt_addr);
         }
 
@@ -267,7 +283,6 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
     else
     {
         table[table_index] = desired;
-
         return 0;
     }
 }

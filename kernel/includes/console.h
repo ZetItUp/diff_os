@@ -52,6 +52,12 @@ void vga_cursor_enable(uint8_t start, uint8_t end);
 void vga_cursor_disable(void);
 extern uint8_t vga_cell_height(void);
 
+void console_use_vbe(int active);
+void console_flush_log(void);
+void console_flush_from_vga_text(void);
+int console_is_vbe_active(void); 
+void console_set_background_color(uint32_t bg_argb);
+
 unsigned short get_cursor_pos(void);
 unsigned short get_row(void);
 unsigned short get_col(void);

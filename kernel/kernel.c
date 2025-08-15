@@ -13,6 +13,7 @@
 #include "heap.h"
 #include "diff.h"
 #include "system.h"
+#include "graphics/vbe_text.h"
 #include "drivers/module_loader.h"
 #include "drivers/config.h"
 #include "drivers/driver.h"
@@ -56,9 +57,10 @@ char fg = FG_GRAY;
 void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 {
     serial_init();
+    
     set_color(MAKE_COLOR(fg, bg));
     clear();
-
+    
     uint32_t total_ram = 0;
 
     for (uint32_t i = 0; i < mem_entry_count; i++)
@@ -97,18 +99,16 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
     // Initialize IRQ
     irq_init();
 
+    vga_capture_rom_font_early();
     uint8_t h = vga_cell_height();
     vga_cursor_enable(0, h - 1);
-
     asm volatile("sti");
-    display_banner();
-    display_sys_info();
-
     init_filesystem();
-
+    printf("\n");
     char *sys_cfg_file = "system/sys.cfg";
     load_drivers(file_table, sys_cfg_file);
-
+    display_banner();
+    display_sys_info();
     char *shell_path = find_shell_path(file_table, sys_cfg_file);
 
     if (shell_path)
@@ -134,7 +134,7 @@ void display_sys_info()
 {
     // set_color(MAKE_COLOR(FG_YELLOW, BG_BLACK));
     // printf("\tS Y S T E M   I N F O\n");
-    set_color(MAKE_COLOR(fg, bg));
+    //set_color(MAKE_COLOR(fg, bg));
     printf("[RAM] Available Memory: %u MB\n", system.ram_mb);
 }
 
@@ -282,16 +282,26 @@ void print_time()
 
 void display_banner()
 {
-    set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
+    int x, y;
+    get_cursor(&x, &y);
+    set_pos(0, 0);
+    uint32_t background = 0xFF11427D;
+    vbe_text_set_colors(0xFFF7C61B, bg);
+    //set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
     printf(" D");
-    set_color(MAKE_COLOR(FG_CYAN, BG_BLACK));
+    //set_color(MAKE_COLOR(FG_CYAN, BG_BLACK));
+    vbe_text_set_colors(0xFFC98E27, bg);
     printf("ifferent ");
-    set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
+    //set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
+    vbe_text_set_colors(0xFFF7C61B, bg);
     printf("OS");
-
-    for (int i = 13; i < 80; i++)
+    
+    for(int i = 14; i < 129; i++)
     {
         printf(" ");
     }
+
+    vbe_text_set_colors(0xFFDDDDDD, background);
+    set_pos(x, y);
 }
 

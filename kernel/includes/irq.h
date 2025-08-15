@@ -3,6 +3,7 @@
 #include "stdint.h"
 
 #define NUM_IRQS    16
+#define IRQ_INVALID 0xFFFFFFFFu
 
 typedef void (*irq_handler_t)(unsigned irq, void* context);
 extern irq_handler_t irq_handlers[NUM_IRQS];

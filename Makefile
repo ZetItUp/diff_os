@@ -38,6 +38,7 @@ ASM_SRC = \
 KERNEL_SRC = \
     kernel/library/string.c \
 	kernel/library/printf.c \
+	kernel/library/graphics/vbe_text.c \
 	kernel/arch/x86_64/cpu/idt.c \
 	kernel/arch/x86_64/cpu/irq.c \
 	kernel/arch/x86_64/cpu/io.c \
@@ -64,7 +65,9 @@ KERNEL_SRC = \
 # Interfaces
 KERNEL_SRC += \
 	kernel/interfaces/intf_kernel.c \
-	kernel/interfaces/intf_keyboard.c
+	kernel/interfaces/intf_keyboard.c \
+	kernel/interfaces/intf_memory.c \
+	kernel/interfaces/intf_vbe.c
 
 # Helpers
 KERNEL_SRC += \
@@ -153,6 +156,11 @@ $(OBJ)/%.o: kernel/library/%.c
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
+$(OBJ)/%.o: kernel/library/graphics/%.c
+	@mkdir -p $(OBJ)
+	@echo "[CC] Compiling $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
 $(OBJ)/%.o: kernel/drivers/%.c
 	@mkdir -p $(OBJ)
 	@echo "[CC] Compiling $<"
@@ -188,7 +196,7 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 run: all
 	@echo "[QEMU] Starting OS"
 	@# @VBoxManage convertfromraw --format VDI build/diffos.img build/diffos.vdi
-	@qemu-system-i386 -monitor stdio -m 64M -drive id=disk,file=build/diffos.img,if=ide,format=raw
+	@qemu-system-i386 -monitor stdio -serial file:serial.log -m 64M -vga std -drive id=disk,file=build/diffos.img,if=ide,format=raw
 
 # Debug in QEMU with GDB
 debug: all

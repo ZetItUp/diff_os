@@ -28,3 +28,25 @@ void outw(unsigned short port, unsigned short data)
     __asm__ volatile("outw %0, %1" : : "a"(data), "Nd"(port));
 }
 
+void outl(uint16_t port, uint32_t value)
+{
+    __asm__ __volatile__("outl %0, %1"
+                         :
+                         : "a"(value), "dN"(port));
+}
+
+uint32_t inl(uint16_t port)
+{
+    uint32_t value;
+
+    __asm__ __volatile__("inl %1, %0"
+                         : "=a"(value)
+                         : "dN"(port));
+
+    return value;
+}
+
+void io_wait(void)
+{
+    __asm__ __volatile__("outb %0, $0x80" : : "a"((uint8_t)0));
+}
