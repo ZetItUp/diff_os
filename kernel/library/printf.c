@@ -1,29 +1,38 @@
 #include "stdarg.h"
 #include "stdio.h"
 #include "string.h"
+#include "stdint.h"
+#include "stddef.h"
 #include "console.h"
 
+/* Low-level output from your console */
 extern void putch(char c);
 
-static void append_char(char **buf, size_t *remaining, char c)
+/* ========= Internal helpers (counted output) ========= */
+
+static inline void out_char(char c, int *count)
 {
-    if (*remaining > 1) // lämna plats för '\0'
+    putch(c);
+    if (count)
     {
-        **buf = c;
-        (*buf)++;
-        (*remaining)--;
+        (*count)++;
     }
 }
 
-static void append_str(char **buf, size_t *remaining, const char *s)
+static void out_cstr(const char *s, int *count)
 {
+    if (!s)
+    {
+        s = "(null)";
+    }
+
     while (*s)
     {
-        append_char(buf, remaining, *s++);
+        out_char(*s++, count);
     }
 }
 
-static void append_uint(char **buf, size_t *remaining, unsigned int val, int base, int uppercase)
+static void out_uint(unsigned int val, int base, int uppercase, int pad, int *count)
 {
     char tmp[32];
     const char *digits = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
@@ -37,215 +46,400 @@ static void append_uint(char **buf, size_t *remaining, unsigned int val, int bas
     {
         while (val > 0 && i < (int)sizeof(tmp))
         {
-            tmp[i++] = digits[val % base];
-            val /= base;
+            tmp[i++] = digits[val % (unsigned)base];
+            val /= (unsigned)base;
         }
     }
 
-    // vänd ordningen
+    /* zero padding */
+    if (pad > i)
+    {
+        int need = pad - i;
+        while (need-- > 0)
+        {
+            out_char('0', count);
+        }
+    }
+
     while (i > 0)
     {
-        append_char(buf, remaining, tmp[--i]);
+        out_char(tmp[--i], count);
     }
 }
 
-static void append_int(char **buf, size_t *remaining, int val, int base)
+static void out_int(int val, int base, int pad, int *count)
 {
     if (val < 0)
     {
-        append_char(buf, remaining, '-');
-        append_uint(buf, remaining, (unsigned int)(-val), base, 0);
+        out_char('-', count);
+        out_uint((unsigned int)(-val), base, 0, pad, count);
     }
     else
     {
-        append_uint(buf, remaining, (unsigned int)val, base, 0);
+        out_uint((unsigned int)val, base, 0, pad, count);
     }
 }
 
-void printf(const char *fmt, ...)
+static void out_hex_ptr(uintptr_t p, int nibbles, int *count)
 {
-    va_list args;
-    va_start(args, fmt);
-    vprintf(fmt, args);
-    va_end(args);
+    /* Print as 0x + zero-padded hex of fixed nibble width */
+    out_char('0', count);
+    out_char('x', count);
+
+    for (int i = (nibbles - 1); i >= 0; --i)
+    {
+        int shift = i * 4;
+        int v = (int)((p >> shift) & 0xF);
+        out_char("0123456789abcdef"[v], count);
+    }
 }
 
-void vprintf(const char *fmt, va_list args)
+/* ========= Public API ========= */
+
+int putchar(int c)
 {
-    char buffer[32];
+    putch((char)c);
+    return (unsigned char)c;
+}
+
+int puts(const char *str)
+{
+    int n = 0;
+
+    if (str)
+    {
+        while (*str)
+        {
+            out_char(*str++, &n);
+        }
+    }
+
+    out_char('\n', &n);
+
+    return n;
+}
+
+int vprintf(const char *fmt, va_list args)
+{
+    int written = 0;
 
     while (*fmt)
     {
-        if (*fmt == '%')
+        if (*fmt != '%')
         {
-            fmt++;
-
-            // Hantera padding (t.ex. %02x, %08x)
-            int pad = 0;
-            if (*fmt == '0')
-            {
-                fmt++;
-                if (*fmt >= '0' && *fmt <= '9')
-                {
-                    pad = *fmt - '0';
-                    fmt++;
-                    if (*fmt >= '0' && *fmt <= '9')
-                    {
-                        pad = pad * 10 + (*fmt - '0');
-                        fmt++;
-                    }
-                }
-            }
-
-            switch (*fmt)
-            {
-                case 'd':
-                {
-                    int val = va_arg(args, int);
-                    itoa(val, buffer, 10);
-                    for (char *s = buffer; *s; s++) putch(*s);
-                }
-                break;
-
-                case 'u':
-                {
-                    unsigned int val = va_arg(args, unsigned int);
-                    utoa(val, buffer, 10);
-                    for (char *s = buffer; *s; s++) putch(*s);
-                }
-                break;
-
-                case 'z':
-                    if (*(fmt + 1) == 'u') 
-                    {
-                        fmt++;
-                        size_t val = va_arg(args, size_t);
-                        itoa(val, buffer, 10);  
-                        for (char *s = buffer; *s; s++) 
-                        {
-                            putch(*s);
-                        }
-                        
-                        break;
-                    }
-                    
-                    putch('%');
-                    putch('z');
-                    break;
-
-                case 'x':
-                {
-                    unsigned int val = va_arg(args, unsigned int);
-                    utoa(val, buffer, 16);
-
-                    // Print with padding if specified
-                    int len = strlen(buffer);
-                    for (int i = len; i < pad; i++)
-                        putch('0');
-                    for (char *s = buffer; *s; s++) putch(*s);
-                }
-                break;
-
-                case 'p':
-                {
-                    uintptr_t ptr = (uintptr_t)va_arg(args, void*);
-                    putch('0'); putch('x');
-                    char hexbuf[sizeof(uintptr_t)*2 + 1];
-                    utohex(ptr, hexbuf, sizeof(hexbuf));
-                    for (char *s = hexbuf; *s; s++) putch(*s);
-                }
-                break;
-
-                case 's':
-                {
-                    char *s = va_arg(args, char*);
-                    while (*s) putch(*s++);
-                }
-                break;
-
-                case 'c':
-                {
-                    char c = (char)va_arg(args, int);
-                    putch(c);
-                }
-                break;
-
-                case '%':
-                    putch('%');
-                    break;
-
-                default:
-                    putch('%');
-                    putch(*fmt);
-                    break;
-            }
-        }
-        else
-        {
-            putch(*fmt);
-        }
-        fmt++;
-    }
-    va_end(args);
-}
-
-int snprintf(char *str, size_t size, const char *format, ...)
-{
-    va_list args;
-    va_start(args, format);
-
-    char *buf_ptr = str;
-    size_t remaining = size;
-
-    for (const char *p = format; *p; p++)
-    {
-        if (*p != '%')
-        {
-            append_char(&buf_ptr, &remaining, *p);
+            out_char(*fmt++, &written);
             continue;
         }
 
-        p++; // hoppa över '%'
-        switch (*p)
+        fmt++; /* skip '%' */
+
+        /* Optional zero padding: %0NNx */
+        int pad = 0;
+        if (*fmt == '0')
         {
-            case 's':
-                append_str(&buf_ptr, &remaining, va_arg(args, const char *));
-                break;
-            case 'c':
-                append_char(&buf_ptr, &remaining, (char)va_arg(args, int));
-                break;
+            fmt++;
+            while (*fmt >= '0' && *fmt <= '9')
+            {
+                pad = pad * 10 + (*fmt - '0');
+                fmt++;
+            }
+        }
+
+        switch (*fmt)
+        {
             case 'd':
-                append_int(&buf_ptr, &remaining, va_arg(args, int), 10);
-                break;
+            {
+                int v = va_arg(args, int);
+                out_int(v, 10, pad, &written);
+            }
+            break;
+
             case 'u':
-                append_uint(&buf_ptr, &remaining, va_arg(args, unsigned int), 10, 0);
-                break;
+            {
+                unsigned int v = va_arg(args, unsigned int);
+                out_uint(v, 10, 0, pad, &written);
+            }
+            break;
+
             case 'x':
-                append_uint(&buf_ptr, &remaining, va_arg(args, unsigned int), 16, 0);
-                break;
+            {
+                unsigned int v = va_arg(args, unsigned int);
+                out_uint(v, 16, 0, pad, &written);
+            }
+            break;
+
             case 'X':
-                append_uint(&buf_ptr, &remaining, va_arg(args, unsigned int), 16, 1);
-                break;
+            {
+                unsigned int v = va_arg(args, unsigned int);
+                out_uint(v, 16, 1, pad, &written);
+            }
+            break;
+
+            case 'p':
+            {
+                uintptr_t p = (uintptr_t)va_arg(args, void *);
+                out_hex_ptr(p, (int)(sizeof(uintptr_t) * 2), &written);
+            }
+            break;
+
+            case 's':
+            {
+                const char *s = va_arg(args, const char *);
+                out_cstr(s, &written);
+            }
+            break;
+
+            case 'c':
+            {
+                char c = (char)va_arg(args, int);
+                out_char(c, &written);
+            }
+            break;
+
+            case 'z': /* handle %zu (size_t as unsigned) */
+            {
+                if (*(fmt + 1) == 'u')
+                {
+                    fmt++;
+                    size_t v = va_arg(args, size_t);
+                    out_uint((unsigned int)v, 10, 0, pad, &written);
+                }
+                else
+                {
+                    out_char('%', &written);
+                    out_char('z', &written);
+                }
+            }
+            break;
+
             case '%':
-                append_char(&buf_ptr, &remaining, '%');
+                out_char('%', &written);
                 break;
+
             default:
-                append_char(&buf_ptr, &remaining, '%');
-                append_char(&buf_ptr, &remaining, *p);
+                /* Unknown specifier: print literally */
+                out_char('%', &written);
+                out_char(*fmt, &written);
                 break;
+        }
+
+        fmt++;
+    }
+
+    return written;
+}
+
+int printf(const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    int n = vprintf(fmt, args);
+    va_end(args);
+    return n;
+}
+
+/* ======= snprintf-family (buffered) ======= */
+
+static void sbuf_putc(char **buf, size_t *rem, int *count, char c)
+{
+    if (*rem > 1)
+    {
+        **buf = c;
+        (*buf)++;
+        (*rem)--;
+    }
+    if (count)
+    {
+        (*count)++;
+    }
+}
+
+static void sbuf_puts(char **buf, size_t *rem, int *count, const char *s)
+{
+    if (!s)
+    {
+        s = "(null)";
+    }
+
+    while (*s)
+    {
+        sbuf_putc(buf, rem, count, *s++);
+    }
+}
+
+static void sbuf_uint(char **buf, size_t *rem, int *count, unsigned int v, int base, int upper, int pad)
+{
+    char tmp[32];
+    const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+    int i = 0;
+
+    if (v == 0)
+    {
+        tmp[i++] = '0';
+    }
+    else
+    {
+        while (v > 0 && i < (int)sizeof(tmp))
+        {
+            tmp[i++] = digits[v % (unsigned)base];
+            v /= (unsigned)base;
         }
     }
 
-    if (remaining > 0)
+    if (pad > i)
     {
-        *buf_ptr = '\0';
+        int need = pad - i;
+        while (need-- > 0)
+        {
+            sbuf_putc(buf, rem, count, '0');
+        }
+    }
+
+    while (i > 0)
+    {
+        sbuf_putc(buf, rem, count, tmp[--i]);
+    }
+}
+
+static void sbuf_int(char **buf, size_t *rem, int *count, int v, int base, int pad)
+{
+    if (v < 0)
+    {
+        sbuf_putc(buf, rem, count, '-');
+        sbuf_uint(buf, rem, count, (unsigned int)(-v), base, 0, pad);
+    }
+    else
+    {
+        sbuf_uint(buf, rem, count, (unsigned int)v, base, 0, pad);
+    }
+}
+
+int vsnprintf(char *str, size_t size, const char *fmt, va_list ap)
+{
+    char *bp = str;
+    size_t rem = size;
+    int written = 0;
+
+    while (*fmt)
+    {
+        if (*fmt != '%')
+        {
+            sbuf_putc(&bp, &rem, &written, *fmt++);
+            continue;
+        }
+
+        fmt++; /* skip '%' */
+
+        int pad = 0;
+        if (*fmt == '0')
+        {
+            fmt++;
+            while (*fmt >= '0' && *fmt <= '9')
+            {
+                pad = pad * 10 + (*fmt - '0');
+                fmt++;
+            }
+        }
+
+        switch (*fmt)
+        {
+            case 'd':
+                sbuf_int(&bp, &rem, &written, va_arg(ap, int), 10, pad);
+                break;
+
+            case 'u':
+                sbuf_uint(&bp, &rem, &written, va_arg(ap, unsigned int), 10, 0, pad);
+                break;
+
+            case 'x':
+                sbuf_uint(&bp, &rem, &written, va_arg(ap, unsigned int), 16, 0, pad);
+                break;
+
+            case 'X':
+                sbuf_uint(&bp, &rem, &written, va_arg(ap, unsigned int), 16, 1, pad);
+                break;
+
+            case 'p':
+            {
+                uintptr_t p = (uintptr_t)va_arg(ap, void *);
+                /* 0x + fixed width */
+                sbuf_putc(&bp, &rem, &written, '0');
+                sbuf_putc(&bp, &rem, &written, 'x');
+                int nibbles = (int)(sizeof(uintptr_t) * 2);
+                for (int i = nibbles - 1; i >= 0; --i)
+                {
+                    int v = (int)((p >> (i * 4)) & 0xF);
+                    sbuf_putc(&bp, &rem, &written, "0123456789abcdef"[v]);
+                }
+            }
+            break;
+
+            case 's':
+                sbuf_puts(&bp, &rem, &written, va_arg(ap, const char *));
+                break;
+
+            case 'c':
+                sbuf_putc(&bp, &rem, &written, (char)va_arg(ap, int));
+                break;
+
+            case 'z': /* %zu */
+                if (*(fmt + 1) == 'u')
+                {
+                    fmt++;
+                    sbuf_uint(&bp, &rem, &written, (unsigned int)va_arg(ap, size_t), 10, 0, pad);
+                }
+                else
+                {
+                    sbuf_putc(&bp, &rem, &written, '%');
+                    sbuf_putc(&bp, &rem, &written, 'z');
+                }
+                break;
+
+            case '%':
+                sbuf_putc(&bp, &rem, &written, '%');
+                break;
+
+            default:
+                sbuf_putc(&bp, &rem, &written, '%');
+                sbuf_putc(&bp, &rem, &written, *fmt);
+                break;
+        }
+
+        fmt++;
+    }
+
+    if (rem > 0)
+    {
+        *bp = '\0';
     }
     else if (size > 0)
     {
         str[size - 1] = '\0';
     }
 
-    va_end(args);
-
-    return (int)(buf_ptr - str); // antal tecken skrivna, ej inklusive null
+    return written;
 }
+
+int snprintf(char *str, size_t size, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(str, size, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+int vsprintf(char *str, const char *fmt, va_list ap)
+{
+    return vsnprintf(str, (size_t)-1, fmt, ap);
+}
+
+int sprintf(char *str, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(str, (size_t)-1, fmt, ap);
+    va_end(ap);
+    return n;
+}
+

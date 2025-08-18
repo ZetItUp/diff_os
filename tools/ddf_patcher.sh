@@ -1,72 +1,42 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-DRIVERS_DIR="../drivers/obj"
-TOOLS_DIR="../tools"
+# In-/ut-kataloger (kan override: bash tools/ddf_patcher.sh obj ../image/system/drivers)
+IN_DIR="${1:-obj}"
+OUT_DIR="${2:-../image/system/drivers}"
 
-patch_file()
-{
-    local elf="$1"
+mkdir -p "$OUT_DIR"
+
+shopt -s nullglob
+
+for elf in "$IN_DIR"/*.ddf.elf; do
+    # Skippa *_nosym.ddf.elf om du genererar sådana
+    if [[ "$elf" == *"_nosym.ddf.elf" ]]; then
+        echo "Skipping nosym file: $(basename "$elf")"
+        continue
+    fi
+
+    base="$(basename "$elf" .ddf.elf)"
+    out="$OUT_DIR/$base.ddf"
+
     echo "Processing: $(basename "$elf")"
 
-    # Get offsets without spaces
-    local init_off
-    init_off=$(nm -n "$elf" | awk '/ ddf_driver_init$/ {printf "0x%08x", strtonum("0x"$1); exit}')
-
-    local exit_off
-    exit_off=$(nm -n "$elf" | awk '/ ddf_driver_exit$/ {printf "0x%08x", strtonum("0x"$1); exit}')
-
-    local irq_off
-    irq_off=$(nm -n "$elf" | awk '/ ddf_driver_irq$/ {printf "0x%08x", strtonum("0x"$1); exit}')
-
-    local symtab_off
-    symtab_off=$(nm -n "$elf" | awk '/ ddf_symbol_table$/ {printf "0x%08x", strtonum("0x"$1); exit}')
-
-    # Make sure we have at least init, exit and irq offsets
-    if [[ -z "$init_off" || -z "$exit_off" || -z "$irq_off" ]]
-    then
-        echo "ERROR: Missing critical symbols in $(basename "$elf")"
-
-        return 1
+    # Valfri utskrift (lämna kvar om du vill se offsets före patch):
+    if command -v readelf >/dev/null 2>&1; then
+        init_off=$(readelf -sW "$elf" | awk '/ ddf_driver_init$/{print $2}' | head -n1)
+        exit_off=$(readelf -sW "$elf" | awk '/ ddf_driver_exit$/{print $2}' | head -n1)
+        irq_off=$(readelf -sW "$elf"  | awk '/ ddf_driver_irq$/{print  $2}' | head -n1)
+        symcnt=$(readelf -S "$elf" | awk '/\.ddf_symtab/{print $6}' | head -n1)
+        printf "Offsets:\n  init:    0x%08s\n  exit:    0x%08s\n  irq:     0x%08s\n  symtab:  %s\n" \
+            "${init_off:-0}" "${exit_off:-0}" "${irq_off:-0}" "${symcnt:-0}"
     fi
 
-    # Count symbols
-    local sym_count=0
-    local nm_file="${elf%.ddf.elf}_nosym.nm.txt"
-
-    if [[ -f "$nm_file" ]]
-    then
-        sym_count=$(grep -c '^[0-9a-fA-F]' "$nm_file")
-    fi
-
-    if [[ -z "$symtab_off" ]]
-    then
-        symtab_off="0x00000000"
-    fi
-
-    echo "Offsets:"
-    echo "  init:    $init_off"
-    echo "  exit:    $exit_off"
-    echo "  irq:     $irq_off"
-    echo "  symtab:  $symtab_off"
-    echo "  count:   $sym_count"
-
-    # Patch the DDF file
-    python3 "$TOOLS_DIR/patch_ddf.py" "$elf" "$init_off" "$exit_off" "$irq_off" "$symtab_off" "$sym_count"
-    if [[ $? -ne 0 ]]
-    then
+    # KÖR PATCHERN KORREKT: in-ELF och ut-DDF
+    if ! python3 ../tools/patch_ddf.py "$elf" "$out"; then
         echo "ERROR: Patching failed for $(basename "$elf")"
-
-        return 1
-    fi
-}
-
-for elf in "$DRIVERS_DIR"/*.ddf.elf
-do
-    if [[ "$elf" != *_nosym.ddf.elf ]]
-    then
-        patch_file "$elf"
-    else
-        echo "Skipping nosym file: $(basename "$elf")"
+        exit 1
     fi
 done
+
+echo "[DRIVERS] Patch complete -> $OUT_DIR"
 

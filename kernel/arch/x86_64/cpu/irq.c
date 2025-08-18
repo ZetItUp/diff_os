@@ -8,8 +8,11 @@
 
 irq_handler_t irq_handlers[NUM_IRQS];
 
+volatile int g_in_irq = 0;
+
 void irq_handler_c(unsigned irq_ptr, void *context)
 {
+    g_in_irq = 1;
 //    uint32_t *stack = (uint32_t*)irq_ptr;
     uint32_t irq = irq_ptr; 
 
@@ -33,6 +36,8 @@ void irq_handler_c(unsigned irq_ptr, void *context)
     {
         pic_send_eoi((unsigned char)irq);
     }
+
+    g_in_irq = 0;
 }
 
 void irq_install_handler(uint8_t irq, irq_handler_t handler)

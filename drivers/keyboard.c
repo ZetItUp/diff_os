@@ -33,7 +33,7 @@ typedef enum
     KBQ_ERROR
 } kb_cmdq_state_t;
 
-static kernel_exports_t *kernel = 0;
+static volatile kernel_exports_t *kernel = 0;
 
 static kb_cmd_t kb_cmdq[KB_CMD_QUEUE_SIZE] = {0};
 static int kb_q_head = 0;
@@ -45,6 +45,18 @@ static int kb_resend_limit = 3;
 static volatile uint8_t kb_fifo[KB_FIFO_SIZE];
 static volatile unsigned kb_head = 0;
 static volatile unsigned kb_tail = 0;
+
+static void reset_keyboard_controller(void) 
+{
+    kernel->outb(KEYBOARD_COMMAND, 0xAD); // Disable keyboard
+    kernel->outb(KEYBOARD_COMMAND, 0xAE); // Re-enable keyboard
+
+    // Flush any pending data
+    while (kernel->inb(KEYBOARD_STATUS) & 0x01) 
+    {
+        (void)kernel->inb(KEYBOARD_DATA);
+    }
+}
 
 static inline int keyboard_fifo_empty(void)
 {
@@ -337,7 +349,6 @@ void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
     i8042_init();
-
     ps2_keyboard_enable_scanning_sync();
     i8042_service();
     kernel->keyboard_register(keyboard_read_byte, keyboard_read_byte_blocking);

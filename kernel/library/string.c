@@ -1,386 +1,314 @@
-#include "string.h"
-#include "stddef.h"
+#include <stddef.h>
+#include <stdint.h>
 
-int strcmp(const char *s1, const char *s2)
+/*
+ * Safe-ish string/memory utilities for kernel / libc.
+ * All code follows Allman brace style. All comments in English.
+ *
+ * Notes:
+ * - memcpy does NOT support overlapping regions (per C standard). Use memmove.
+ * - Prefer strlcpy/strlcat (with capacity) over strcpy/strcat.
+ * - utoa_s/itoa_s write with explicit capacity to avoid overflows.
+ * - utohex respects the provided output buffer length (including NUL).
+ */
+
+void *memset(void *dst, int c, size_t n)
 {
-    while (*s1 && (*s1 == *s2))
-    {
-        s1++;
-        s2++;
-    }
-    
-    return *(const unsigned char*)s1 - *(const unsigned char*)s2;
-}
+    unsigned char *p = (unsigned char *)dst;
 
-char *strrchr(const char *s, int c)
-{
-    const char *last = NULL;
-    unsigned char ch = (unsigned char)c;
-
-    while (*s)
+    for (size_t i = 0; i < n; i++)
     {
-        if (*s == ch)
-            last = s;
-        s++;
+        p[i] = (unsigned char)c;
     }
 
-    if (ch == '\0')
-        return (char*)s;
-
-    return (char*)last;
+    return dst;
 }
 
-char *strncat(char *dest, const char *src, size_t n)
+void *memcpy(void *dst, const void *src, size_t n)
 {
-    char *d = dest;
+    /* Undefined if regions overlap. Use memmove if unsure. */
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
 
-    while (*d) d++;
-
-    while (n-- && *src)
-        *d++ = *src++;
-
-    *d = '\0';
-
-    return dest;
-}
-
-
-char *strstr(const char *haystack, const char *needle)
-{
-    if (!*needle)
+    for (size_t i = 0; i < n; i++)
     {
-        return (char *)haystack; // Tom söksträng matchar direkt
+        d[i] = s[i];
     }
 
-    for (const char *h = haystack; *h; h++)
-    {
-        const char *h_ptr = h;
-        const char *n_ptr = needle;
+    return dst;
+}
 
-        while (*h_ptr && *n_ptr && (*h_ptr == *n_ptr))
+void *memmove(void *dst, const void *src, size_t n)
+{
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+
+    if (d == s || n == 0)
+    {
+        return dst;
+    }
+
+    if (d < s)
+    {
+        for (size_t i = 0; i < n; i++)
         {
-            h_ptr++;
-            n_ptr++;
+            d[i] = s[i];
         }
-
-        if (*n_ptr == '\0')
-        {
-            return (char *)h; // Hela needle matchade
-        }
-    }
-
-    return NULL; // Ingen matchning
-}
-
-
-size_t strspn(const char *s, const char *accept)
-{
-    size_t count = 0;
-    for (; *s; s++)
-    {
-        const char *a = accept;
-        int found = 0;
-        while (*a)
-        {
-            if (*s == *a)
-            {
-                found = 1;
-                break;
-            }
-            a++;
-        }
-        if (!found)
-        {
-            return count;
-        }
-        count++;
-    }
-    return count;
-}
-
-size_t strcspn(const char *s, const char *reject)
-{
-    size_t count = 0;
-    for (; *s; s++)
-    {
-        const char *r = reject;
-        while (*r)
-        {
-            if (*s == *r)
-            {
-                return count;
-            }
-            r++;
-        }
-        count++;
-    }
-    return count;
-}
-
-size_t strlen(const char *s)
-{
-    size_t len = 0;
-    while (s[len])
-    {
-        len++;
-    }
-    return len;
-}
-
-char *strtok_r(char *str, const char *delim, char **saveptr)
-{
-    char *start;
-    if (str)
-    {
-        start = str;
     }
     else
     {
-        start = *saveptr;
+        for (size_t i = n; i > 0; i--)
+        {
+            d[i - 1] = s[i - 1];
+        }
     }
 
-    // Skip leading delimiters
-    start += strspn(start, delim);
-    if (*start == '\0')
-    {
-        *saveptr = start;
-        return NULL;
-    }
-
-    // Find end of token
-    char *end = start + strcspn(start, delim);
-    if (*end)
-    {
-        *end = '\0';
-        *saveptr = end + 1;
-    }
-    else
-    {
-        *saveptr = end;
-    }
-
-    return start;
+    return dst;
 }
 
-int strncmp(const char *s1, const char *s2, unsigned int n)
+int memcmp(const void *a, const void *b, size_t n)
 {
-    for(unsigned int i = 0; i < n; i++)
-    {
-        if(s1[i] != s2[i])
-        {
-            return (unsigned char)s1[i] - (unsigned char)s2[i];
-        }
+    const unsigned char *x = (const unsigned char *)a;
+    const unsigned char *y = (const unsigned char *)b;
 
-        if(s1[i] == '\0')
+    for (size_t i = 0; i < n; i++)
+    {
+        if (x[i] != y[i])
         {
-            return 0;
+            return (int)x[i] - (int)y[i];
         }
     }
 
     return 0;
 }
 
-char *strncpy(char *dest, const char *src, unsigned int n)
+size_t strlen(const char *s)
 {
-    unsigned int i;
+    size_t i = 0;
 
-    for(i = 0; i < n && src[i] != '\0'; i++)
+    while (s[i] != '\0')
     {
-        dest[i] = src[i];
+        i++;
     }
 
-    for(; i < n; i++)
-    {
-        dest[i] = '\0';
-    }
-
-    return dest;
+    return i;
 }
 
-char *strtok(char *str, const char *delim)
+int strcmp(const char *a, const char *b)
 {
-    static char *last;
-
-    if(str == NULL)
+    while (*a && (*a == *b))
     {
-        str = last;
+        a++;
+        b++;
     }
 
-    if(str == NULL)
-    {
-        return NULL;
-    }
-
-    while(*str && strchr(delim, *str))
-    {
-        str++;
-    }
-
-    if(*str == '\0')
-    {
-        last = NULL;
-        return NULL;
-    }
-
-    char *token_start = str;
-
-    while(*str && !strchr(delim, *str))
-    {
-        str++;
-    }
-
-    if(*str)
-    {
-        *str = '\0';
-        last = str + 1;
-    }
-    else
-    {
-        last = NULL;
-    }
-
-    return token_start;
+    return (unsigned char)*a - (unsigned char)*b;
 }
 
-
-char *strchr(const char *str, char c)
+int strncmp(const char *a, const char *b, size_t n)
 {
-    while(*str)
+    for (size_t i = 0; i < n; i++)
     {
-        if(*str == c)
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+
+        if (ca != cb || ca == '\0' || cb == '\0')
         {
-            return (char*)str;
-        }
-
-        str++;
-    }
-
-    return NULL;
-}
-
-void utoa(unsigned int val, char* buf, int base)
-{
-    char tmp[32];
-    int i = 0;
-    if (val == 0) tmp[i++] = '0';
-    else {
-        while (val > 0) {
-            int digit = val % base;
-            tmp[i++] = digit < 10 ? ('0' + digit) : ('a' + digit - 10);
-            val /= base;
+            return (int)ca - (int)cb;
         }
     }
-    int len = i;
-    for (int j = 0; j < len; j++)
-        buf[j] = tmp[len - j - 1];
-    buf[len] = 0;
+
+    return 0;
 }
 
-void utohex(uintptr_t val, char* buf, int outlen)
+/* Safer copy/concat with capacity. Prefer these over strcpy/strcat. */
+size_t strlcpy(char *dst, const char *src, size_t size)
 {
-    int digits = (outlen > 8) ? 8 : 2; // default till 8, men om outlen=3 -> 2 siffror
-    for (int i = digits-1; i >= 0; --i) {
-        int shift = 4*i;
-        buf[digits-1-i] = "0123456789ABCDEF"[(val >> shift) & 0xF];
+    size_t slen = strlen(src);
+
+    if (size != 0)
+    {
+        size_t n = (slen >= size) ? (size - 1) : slen;
+        if (n > 0)
+        {
+            memcpy(dst, src, n);
+        }
+        dst[(size == 0) ? 0 : n] = '\0';
     }
-    buf[digits] = 0;
+
+    return slen; /* Always returns length of src */
 }
 
-
-void itoa(int value, char *str, int base)
+size_t strlcat(char *dst, const char *src, size_t size)
 {
-    char *p = str;
-    int is_negative = 0;
+    size_t dlen = 0;
 
-    if(value == 0)
+    while (dlen < size && dst[dlen] != '\0')
     {
-        *p++ = '0';
-        *p = '\0';
-
-        return;
+        dlen++;
     }
 
-    if(value < 0 && base == 10)
+    size_t slen = strlen(src);
+
+    if (dlen == size)
     {
-        is_negative = 1;
-        value = -value;
+        return size + slen; /* No space to append */
     }
 
-    while(value)
-    {
-        int digit = value % base;
+    size_t space = size - dlen - 1; /* space for new chars (reserve 1 for NUL) */
+    size_t n = (slen > space) ? space : slen;
 
-        *p++ = (digit < 10) ? '0' + digit : 'a' + (digit - 10);
-        value /= base;
+    if (n > 0)
+    {
+        memcpy(dst + dlen, src, n);
     }
 
-    if(is_negative)
-    {
-        *p++ = '-';
-    }
+    dst[dlen + n] = '\0';
 
-    *p = '\0';
-
-    for(char *start = str, *end = p - 1; start < end; start++, end--)
-    {
-        char tmp = *start;
-        *start = *end;
-        *end = tmp;
-    }
+    return dlen + slen; /* Length we tried to create */
 }
 
+/* Dangerous legacy APIs kept for compatibility. Prefer strlcpy/strlcat. */
 char *strcpy(char *dst, const char *src)
 {
-    char *ret = dst;
-    
-    while ((*dst++ = *src++))
+    (void)strlcpy(dst, src, (size_t)-1); /* Best effort; caller must ensure room */
+    return dst;
+}
+
+char *strncpy(char *dst, const char *src, size_t n)
+{
+    size_t i = 0;
+
+    for (; i < n && src[i] != '\0'; i++)
     {
-        ; // Kopiera tills nullbyte
+        dst[i] = src[i];
     }
-    
-    return ret;
+
+    for (; i < n; i++)
+    {
+        dst[i] = '\0';
+    }
+
+    return dst;
 }
 
 char *strcat(char *dst, const char *src)
 {
-    char *ret = dst;
-    
-    while (*dst)
-    {
-        dst++;
-    }
-    
-    while ((*dst++ = *src++))
-    {
-        ;
-    }
-    
-    return ret;
+    (void)strlcat(dst, src, (size_t)-1); /* Best effort; caller must ensure room */
+    return dst;
 }
 
-
-void *memset(void *dest, int value, size_t count)
+char *strncat(char *dst, const char *src, size_t n)
 {
-    unsigned char *ptr = (unsigned char *)dest;
-    unsigned char val = (unsigned char)value;
+    /* Classic semantics: append up to n chars from src. Risky without capacity. */
+    size_t dlen = strlen(dst);
 
-    for(size_t i = 0; i < count; i++)
+    size_t i = 0;
+    for (; i < n && src[i] != '\0'; i++)
     {
-        ptr[i] = val;
+        dst[dlen + i] = src[i];
     }
 
-    return dest;
+    dst[dlen + i] = '\0';
+    return dst;
 }
 
-void *memcpy(void *dest, const void *src, unsigned int n)
+/* Numeric conversions with explicit capacity. Return 0 on success, -1 on error. */
+int utoa_s(unsigned int val, char *buf, size_t size, int base)
 {
-    unsigned char *d = (unsigned char*)dest;
-    const unsigned char *s = (const unsigned char*)src;
-
-    while (n--)
+    if (size == 0 || base < 2 || base > 16)
     {
-        *d++ = *s++;
+        return -1;
     }
 
-    return dest;
+    char tmp[32];
+    int i = 0;
+
+    if (val == 0)
+    {
+        tmp[i++] = '0';
+    }
+    else
+    {
+        while (val > 0 && i < (int)sizeof(tmp))
+        {
+            int d = (int)(val % (unsigned)base);
+            tmp[i++] = (d < 10) ? (char)('0' + d) : (char)('a' + d - 10);
+            val /= (unsigned)base;
+        }
+    }
+
+    if ((size_t)(i + 1) > size)
+    {
+        return -1; /* Not enough room for digits + NUL */
+    }
+
+    for (int j = 0; j < i; j++)
+    {
+        buf[j] = tmp[i - 1 - j];
+    }
+
+    buf[i] = '\0';
+    return 0;
 }
+
+int itoa_s(int value, char *str, size_t size, int base)
+{
+    if (size == 0 || base < 2 || base > 16)
+    {
+        return -1;
+    }
+
+    unsigned int u = (unsigned int)value;
+
+    if (value < 0 && base == 10)
+    {
+        u = (unsigned int)(-value);
+
+        if (size < 2)
+        {
+            return -1;
+        }
+        *str++ = '-';
+        size--;
+    }
+
+    if (utoa_s(u, str, size, base) != 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Hex printer that respects output length (including NUL). */
+void utohex(uintptr_t val, char *buf, int outlen)
+{
+    if (outlen <= 0)
+    {
+        return;
+    }
+
+    int max_digits = (int)(sizeof(uintptr_t) * 2); /* 8 on 32-bit, 16 on 64-bit */
+    int digits = outlen - 1; /* leave space for NUL */
+
+    if (digits > max_digits)
+    {
+        digits = max_digits;
+    }
+
+    if (digits < 1)
+    {
+        buf[0] = '\0';
+        return;
+    }
+
+    for (int i = digits - 1; i >= 0; --i)
+    {
+        int shift = 4 * i;
+        buf[digits - 1 - i] = "0123456789ABCDEF"[(val >> shift) & 0xF];
+    }
+
+    buf[digits] = '\0';
+}
+

@@ -76,18 +76,6 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 
     // Initialize paging and heap
     init_paging(ram_mb);
-
-    // Get the heap start and end to calculate the heap size
-    uint32_t heap_start = (uint32_t)&__heap_start;
-    uint32_t heap_end = (uint32_t)&__heap_end;
-    // uint32_t heap_size = heap_end - heap_start;
-
-    // Map the heap to 4KB pages
-    for (uint32_t addr = heap_start & ~0xFFF; addr < heap_end; addr += 0x1000)
-    {
-        map_page(addr, 0x1000); // 4KB per page
-    }
-
     init_heap(&__heap_start, &__heap_end);
 
     // Initialize IDT
@@ -102,15 +90,17 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
     vga_capture_rom_font_early();
     uint8_t h = vga_cell_height();
     vga_cursor_enable(0, h - 1);
-    asm volatile("sti");
     init_filesystem();
-    printf("\n");
-    char *sys_cfg_file = "system/sys.cfg";
-    load_drivers(file_table, sys_cfg_file);
+
+
     display_banner();
     display_sys_info();
-    char *shell_path = find_shell_path(file_table, sys_cfg_file);
+    
+    asm volatile("sti");
+    char *sys_cfg_file = "system/sys.cfg";
+    load_drivers(file_table, sys_cfg_file);
 
+    char *shell_path = find_shell_path(file_table, sys_cfg_file);
     if (shell_path)
     {
         dex_run(file_table, shell_path, 0, 0);
@@ -135,7 +125,7 @@ void display_sys_info()
     // set_color(MAKE_COLOR(FG_YELLOW, BG_BLACK));
     // printf("\tS Y S T E M   I N F O\n");
     //set_color(MAKE_COLOR(fg, bg));
-    printf("[RAM] Available Memory: %u MB\n", system.ram_mb);
+    printf("\n[RAM] Available Memory: %u MB\n", system.ram_mb);
 }
 
 void do_tests()
@@ -275,7 +265,7 @@ void print_time()
 
         char buffer[12];
 
-        itoa(timer_ticks, buffer, 10);
+        //itoa(timer_ticks, buffer, 10);
         printf("%s", buffer);
     }
 }
@@ -300,8 +290,6 @@ void display_banner()
     {
         printf(" ");
     }
-
     vbe_text_set_colors(0xFFDDDDDD, background);
     set_pos(x, y);
 }
-

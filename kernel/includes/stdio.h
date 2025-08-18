@@ -4,10 +4,14 @@
 #include "stdarg.h"
 #include "stddef.h"
 
-char *strstr(const char *haystack, const char *needle);
-void vprintf(const char *fmt, va_list args);
-void printf(const char *fmt, ...);
-int snprintf(char *str, size_t size, const char *format, ...);
+int putchar(int c);
+int puts(const char *str);
+int printf(const char *fmt, ...);
+int vprintf(const char *fmt, va_list ap);
+int sprintf(char *buf, const char *fmt, ...);
+int snprintf(char *buf, size_t size, const char *fmt, ...);
+int vsprintf(char *buf, const char *fmt, va_list ap);
+int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 
 
 #endif

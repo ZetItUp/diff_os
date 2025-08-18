@@ -4,25 +4,27 @@
 #include "stdint.h"
 #include "stddef.h"
 
+void *memcpy(void *dest, const void *src, size_t n);
+void *memmove(void *dest, const void *src, size_t n);
+void *memset(void *dest, int c, size_t n);
 size_t strlen(const char *s);
-size_t strcspn(const char *s, const char *reject);
-size_t strspn(const char *s, const char *accept);
-char *strtok_r(char *str, const char *delim, char **saveptr);
-int strncmp(const char *s1, const char *s2, unsigned int n);
+size_t strnlen(const char *s, size_t maxlen);
+char *strcpy(char *dest, const char *src);                  // legacy, unsafe
+char *strncpy(char *dest, const char *src, size_t n);
+char *strcat(char *dest, const char *src);                  // legacy, unsafe
+char *strncat(char *dest, const char *src, size_t n);        // legacy, unsafe
 int strcmp(const char *s1, const char *s2);
-char *strcat(char *dst, const char *src);
-char *strncat(char *dest, const char *src, size_t n);
+int strncmp(const char *s1, const char *s2, size_t n);
+char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
-char *strcpy(char *dst, const char *src);
-char *strncpy(char *dest, const char *src, unsigned int n);
+char *strdup(const char *s);
+char *strtok_r(char *str, const char *delim, char **saveptr);
 char *strtok(char *str, const char *delim);
-char *strchr(const char *str, char c);
+size_t strlcpy(char *dst, const char *src, size_t siz);
+size_t strlcat(char *dst, const char *src, size_t siz);
+char *utoa_s(unsigned int value, char *str, size_t size, int base);
+char *itoa_s(int value, char *str, size_t size, int base);
+char *utohex(unsigned int value, char *str, size_t size, int uppercase);
 
-void itoa(int value, char *str, int base);
-void utoa(unsigned int val, char* buf, int base);
-void utohex(uintptr_t val, char* buf, int outlen);
-
-void *memset(void *dest, int value, size_t count);
-void *memcpy(void *dest, const void *src, unsigned int n);
 
 #endif

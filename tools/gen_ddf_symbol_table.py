@@ -8,79 +8,62 @@ def main(nm_file, out_file):
         'ddf_driver_exit',
         'ddf_driver_irq'
     }
-    
-    # Store collected symbols
+
     symbols = []
     found_required = set()
-    symbol_count = 0
 
-    # Regex to match nm output
     NM_REGEX = re.compile(r'^([0-9a-fA-F]+)\s+([TtDdBbRr])\s+(.+)$')
 
-    # Read nm output and collect symbols
     with open(nm_file, 'r') as f:
         for line in f:
             line = line.strip()
-            match = NM_REGEX.match(line)
-            if not match:
+            m = NM_REGEX.match(line)
+            if not m:
                 continue
 
-            addr, typ, name = match.groups()
-            
-            # Ignore unwanted symbols
-            if not name:
-                continue
-            if name.startswith('.'):
-                continue
-            if name.startswith('$'):
-                continue
-            if name == 'ddf_header':
+            addr_hex, typ, name = m.groups()
+            if not name or name.startswith('.') or name.startswith('$') or name == 'ddf_header':
                 continue
 
-            # Determine symbol type
-            if typ.upper() in ['T', 't']:
-                sym_type = 0  # Code/text
-            elif typ.upper() in ['D', 'd', 'B', 'b', 'R', 'r']:
+            if typ.upper() in ('T',):
+                sym_type = 0  # Function
+            elif typ.upper() in ('D', 'B', 'R'):
                 sym_type = 1  # Data
             else:
                 continue
 
-            addr_int = int(addr, 16)
-            symbols.append((name, addr_int, sym_type))
-            
+            # Vi skriver INTE in några absoluta adresser här.
+            # value_offset ska vara "offset från modulstart" enligt ddf.h.
+            # Det fastställs i patch-steget från ELF -> DDF.
+            symbols.append((name, sym_type))
+
             if name in REQUIRED_SYMBOLS:
                 found_required.add(name)
 
-    # Verify required symbols are present
     missing = REQUIRED_SYMBOLS - found_required
     if missing:
-        print(f"ERROR: Missing required symbols: {missing}")
-        
-        return sys.exit(1)
+        print(f"ERROR: Missing required symbols: {sorted(missing)}")
+        sys.exit(1)
 
-    # Build string table
-    string_table = bytearray(b'\x00')  # Null byte at the start
+    # Bygg stringtabellen (börjar med NUL)
+    string_table = bytearray(b'\x00')
     name_offsets = {}
-    
-    for name, _, _ in symbols:
+
+    for name, _ in symbols:
         if name not in name_offsets:
-            # 4-byte alignment for each string
-            padding = (4 - (len(string_table) % 4) % 4)
-            string_table.extend(b'\x00' * padding)
-            
-            # Save offset and store the string
+            # 4-byte alignment
+            pad = (-len(string_table)) & 3
+            if pad:
+                string_table.extend(b'\x00' * pad)
             name_offsets[name] = len(string_table)
             string_table.extend(name.encode('utf-8') + b'\x00')
 
-    # Generate C code for symbol table
     with open(out_file, 'w') as out:
         out.write('/* Automatically generated DDF symbol table - DO NOT EDIT */\n')
         out.write('#include "drivers/ddf.h"\n\n')
-        
-        # String table
+
         out.write('__attribute__((section(".ddf_strtab"), aligned(4), used))\n')
-        out.write('static const char ddf_string_table[] = \n{\n    ')
-        
+        out.write('static const unsigned char ddf_string_table[] = {\n    ')
         for i in range(0, len(string_table), 16):
             chunk = string_table[i:i+16]
             out.write(', '.join(f'0x{b:02x}' for b in chunk))
@@ -88,25 +71,21 @@ def main(nm_file, out_file):
                 out.write(',\n    ')
             else:
                 out.write('\n')
-        
         out.write('};\n\n')
-        
-        # Symbol table
+
         out.write('__attribute__((section(".ddf_symtab"), aligned(4), used))\n')
-        out.write('ddf_symbol_t ddf_symbol_table[] = \n{\n')
-        
-        for name, addr, typ in symbols:
-            out.write(f'    {{\n        .name_offset = {name_offsets[name]},\n')
-            out.write(f'        .value_offset = 0x{addr:x},\n')
-            out.write(f'        .type = {typ}\n    }}, // {name}\n')
-        
+        out.write('ddf_symbol_t ddf_symbol_table[] = {\n')
+        for name, sym_type in symbols:
+            out.write('    {\n')
+            out.write(f'        .name_offset = {name_offsets[name]},\n')
+            out.write(f'        .value_offset = 0, /* patched to DDF file offset by patch_ddf.py */\n')
+            out.write(f'        .type = {sym_type}\n')
+            out.write('    },\n')
         out.write('};\n\n')
-        
-        # Symbol count
+
         out.write(f'const uint32_t ddf_symbol_table_count = {len(symbols)};\n')
-        
-        # Summary
-        out.write('\n/* Symbol table summary:\n')
+
+        out.write('\n/* Summary:\n')
         out.write(f'   Total symbols: {len(symbols)}\n')
         out.write(f'   String table size: {len(string_table)} bytes\n')
         out.write('*/\n')
@@ -116,16 +95,14 @@ def main(nm_file, out_file):
     print(f"Output file: {out_file}")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 2 and len(sys.argv) != 3:
         print("DDF Symbol Table Generator")
         print("Usage: gen_ddf_symbol_table.py <nm_output.txt> <output.c>")
-        
         sys.exit(1)
-    
+
     try:
         main(sys.argv[1], sys.argv[2])
     except Exception as e:
-        print(f"ERROR: {str(e)}")
-        
+        print(f"ERROR: {e}")
         sys.exit(1)
 

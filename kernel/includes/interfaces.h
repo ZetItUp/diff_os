@@ -9,9 +9,12 @@ typedef struct kernel_exports
     void (*outb)(unsigned short port, unsigned char data);
     unsigned short (*inw)(unsigned short port);
     void (*outw)(unsigned short port, unsigned short data);
-    
-    void (*printf)(const char *fmt, ...);
-    void (*vprintf)(const char *fmt, va_list ap);
+    void (*outl)(uint16_t port, uint32_t value);
+    uint32_t (*inl)(uint16_t port);
+    void (*io_wait)(void);
+
+    int (*printf)(const char *fmt, ...);
+    int (*vprintf)(const char *fmt, va_list ap);
     void (*pic_clear_mask)(uint8_t);
     void (*pic_set_mask)(uint8_t);
     

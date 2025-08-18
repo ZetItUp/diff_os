@@ -8,14 +8,21 @@ DRIVERS_PATH = .
 IMAGE_DRIVERS_PATH = ../image/system/drivers
 TOOLS_DIR = ../tools
 
-CFLAGS = -g -ffreestanding -fPIC -fno-stack-protector -nodefaultlibs -nostdlib \
--ffunction-sections -fdata-sections -fno-common -I ../kernel/includes -c
+CFLAGS = -g -Wall -Wextra -Wunused-parameter -ffreestanding -fno-stack-protector -nodefaultlibs -nostdlib \
+		 -ffunction-sections -fdata-sections -fno-common -fno-PIC -fno-pic -fno-pie -fno-plt \
+		 -fno-asynchronous-unwind-tables -fno-unwind-tables \
+          -fno-exceptions -fno-jump-tables -fno-ipa-cp-clone \
+          -fno-optimize-sibling-calls -fno-omit-frame-pointer \
+          -fno-builtin -I ../kernel/includes -c
 
-LDFLAGS = -T driver.ld --gc-section \
---undefined=ddf_driver_init --undefined=ddf_driver_exit --undefined=ddf_driver_irq \
---undefined=ddf_irq_number \
--pie --emit-relocs -o
-
+LDFLAGS = -T driver.ld --gc-sections --emit-relocs -nostdlib -no-pie \
+  --undefined=ddf_driver_init \
+  --undefined=ddf_driver_exit \
+  --undefined=ddf_driver_irq \
+  --undefined=ddf_irq_number \
+  -static
+  ##\
+#  ../build/obj/string.o
 
 # Source files
 ALL_DRIVER_CS := $(wildcard $(DRIVERS_PATH)/*.c)
@@ -41,7 +48,7 @@ DRIVERS_BIN := $(patsubst $(DRIVERS_PATH)/%.c,$(IMAGE_DRIVERS_PATH)/%.ddf,$(DRIV
 .PHONY: all clean drivers
 
 all: drivers
-	bash $(TOOLS_DIR)/ddf_patcher.sh
+	bash $(TOOLS_DIR)/ddf_patcher.sh obj ../image/system/drivers
 	@echo "[DRIVERS] Build complete"
 
 drivers: $(DRIVERS_BIN)
@@ -61,13 +68,13 @@ $(DRIVERS_PATH)/obj/%.o: $(DRIVERS_PATH)/%.c | $(DRIVERS_PATH)/obj
 	@$(CC) $(CFLAGS) $< -o $@
 
 $(DRIVERS_PATH)/obj/driver.o: $(DRIVERS_PATH)/obj
-	@echo "[DRIVERS CC] Compiling driver.c"
+	@echo "[DRIVERS CC] Compiling $<"
 	@$(CC) $(CFLAGS) $< -o $@
 
 .SECONDARY:
 $(DRIVERS_PATH)/obj/%_nosym.ddf.elf: $(DRIVERS_PATH)/obj/%.o | $(DRIVERS_PATH)/obj
 	@echo "[DRIVERS LD] Linking ELF without symbols $*"
-	@$(LD) $(LDFLAGS) $@ $^ 2>/dev/null
+	@$(LD) $(LDFLAGS) -o $@ $^
 
 # Generate nm output from ELF
 .SECONDARY:
@@ -90,7 +97,7 @@ $(DRIVERS_PATH)/obj/%_symbols.o: $(DRIVERS_PATH)/obj/%_symbols.c
 .SECONDARY:
 $(DRIVERS_PATH)/obj/%.ddf.elf: $(DRIVERS_PATH)/obj/%.o $(DRIVERS_PATH)/obj/%_symbols.o | $(DRIVERS_PATH)/obj
 	@echo "[DRIVERS LD] Linking final ELF $*"
-	@$(LD) $(LDFLAGS) $@ $^
+	@$(LD) $(LDFLAGS) -o $@ $^
 
 .SECONDARY:
 $(IMAGE_DRIVERS_PATH)/%.ddf: $(DRIVERS_PATH)/obj/%.ddf.elf | $(IMAGE_DRIVERS_PATH)

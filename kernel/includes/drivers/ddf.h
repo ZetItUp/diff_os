@@ -41,11 +41,29 @@ typedef struct
 {
     void *module_base;
     ddf_header_t *header;
+    uint32_t size_bytes;
+
     void (*driver_init)(kernel_exports_t*);
     void (*driver_irq)(unsigned, void*);
     void (*driver_exit)(void);
     uint32_t irq_number;
 } ddf_module_t;
+
+typedef enum ddf_reloc_type
+{
+    DDF_RELOC_ABS32 = 1,
+    DDF_RELOC_REL32 = 2,
+    DDF_RELOC_RELATIVE = 3
+} ddf_reloc_type_t;
+
+typedef struct
+{
+    uint32_t r_offset;
+    uint32_t r_type;
+    uint32_t r_sym_index;
+    int32_t  r_addend;
+} __attribute__((packed)) ddf_reloc_t;
+
 
 void ddf_driver_init(kernel_exports_t *exports);
 void ddf_driver_exit(void);

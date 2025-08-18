@@ -1,0 +1,22 @@
+ Different OS                                                                                                                   
+[RAM] Available Memory: 63 MB
+[DRIVER] VBE Graphics driver installed!
+[DRIVER] PS/2 Keyboard driver installed!
+
+Different Terminal (Version 1.0)
+
+/> cd system
+
+/system> ls
+Content of system/
+==================================================
+ Type               Size  Name
+--------------------------------------------------
+ <FILE>            57724  kernel.bin
+ <DIRECTORY>           0  exls/
+ <FILE>               88  commands.map
+ <DIRECTORY>           0  drivers/
+ <FILE>              184  sys.cfg
+--------------------------------------------------
+
+/system> 

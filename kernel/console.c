@@ -13,8 +13,12 @@
 #define VIDEO_MEMORY    ((volatile unsigned short*)0xB8000)
 
 #ifndef CONSOLE_LOG_CAP
-#define CONSOLE_LOG_CAP 16384  // 16 KB Console log
+#define CONSOLE_LOG_CAP 16384  // 16 KB ring log
 #endif
+
+/* -------------------------------------------------------------------------- */
+/* State                                                                      */
+/* -------------------------------------------------------------------------- */
 
 static int cursor_x = 0;
 static int cursor_y = 0;
@@ -23,7 +27,8 @@ static int floor_enabled = 0;
 static int floor_x = 0;
 static int floor_y = 0;
 
-static int s_vbe_console_active = 0;   // When 1, route output to VBE text backend
+static int s_vbe_console_active = 0;   // 1 => route output to VBE text backend
+static int s_replaying = 0;
 
 unsigned char current_attrib = MAKE_COLOR(FG_GRAY, BG_BLACK);
 
@@ -34,11 +39,13 @@ typedef struct console_log_entry
 } console_log_entry_t;
 
 static console_log_entry_t s_logbuf[CONSOLE_LOG_CAP];
-static unsigned s_log_head = 0;
-static unsigned s_log_count = 0;
-static int s_replaying = 0;
+static unsigned s_log_head = 0;    // write index (next free slot)
+static unsigned s_log_count = 0;   // number of valid entries
 
-// VGA 16-color palette mapped to 24-bit RGB (no alpha here)
+/* -------------------------------------------------------------------------- */
+/* VGA palette mapping (16 VGA colors to 24-bit RGB)                          */
+/* -------------------------------------------------------------------------- */
+
 static const uint32_t s_vga_rgb[16] =
 {
     0x000000, // 0 black
@@ -61,177 +68,199 @@ static const uint32_t s_vga_rgb[16] =
 
 static inline void vbe_apply_colors_from_attrib(unsigned char attrib)
 {
-    uint8_t fg = attrib & 0x0F;
-    uint8_t bg = (attrib >> 4) & 0x0F;
+    uint8_t fg = (uint8_t)(attrib & 0x0F);
+    uint8_t bg = (uint8_t)((attrib >> 4) & 0x0F);
 
-    // Make them opaque ARGB
     uint32_t argb_fg = 0xFF000000u | s_vga_rgb[fg];
     uint32_t argb_bg = 0xFF000000u | s_vga_rgb[bg];
 
     vbe_text_set_colors(argb_fg, argb_bg);
 }
 
-static void log_append(unsigned char attrib, char c)
+// Ritar ETT tecken direkt till aktuell backend utan logg/serial.
+// Hanterar \n, \t, \b identiskt med putch_color:s “rit-del”.
+static inline void render_raw(unsigned char attrib, char c)
 {
-    if (s_replaying)
+    if (console_is_vbe_active())
     {
+        // Backspace
+        if (c == '\b')
+        {
+            uint32_t x, y;
+            vbe_text_get_cursor(&x, &y);
+            if (x > 0)
+            {
+                vbe_text_set_cursor(x - 1, y);
+                vbe_text_putchar(' ');
+                vbe_text_set_cursor(x - 1, y);
+                cursor_x = (int)(x - 1);
+                cursor_y = (int)y;
+            }
+            return;
+        }
+
+        // Färg
+        if (attrib != current_attrib)
+        {
+            current_attrib = attrib;
+            vbe_apply_colors_from_attrib(current_attrib);
+        }
+
+        // Tabbar
+        if (c == '\t')
+        {
+            uint32_t x, y;
+            vbe_text_get_cursor(&x, &y);
+            uint32_t next = (x + 4u) & ~3u;
+            while (x < next)
+            {
+                vbe_text_putchar(' ');
+                vbe_text_get_cursor(&x, &y);
+            }
+            cursor_x = (int)x;
+            cursor_y = (int)y;
+            return;
+        }
+
+        if (c == '\r')
+        {
+            uint32_t x, y;
+            vbe_text_get_cursor(&x, &y);
+            vbe_text_set_cursor(0, y);
+            cursor_x = 0;
+            cursor_y = (int)y;
+            return;
+        }
+
+        // Newline -> nästa rad, X=0
+        if (c == '\n')
+        {
+            uint32_t x0, y0; vbe_text_get_cursor(&x0, &y0);
+            vbe_text_putchar('\n');
+            uint32_t x1, y1; vbe_text_get_cursor(&x1, &y1);
+            if (x1 == x0 && y1 == y0)
+            {
+                y1 = y0 + 1;
+                vbe_text_set_cursor(0, y1);
+            }
+            else
+            {
+                vbe_text_set_cursor(0, y1);
+            }
+            cursor_x = 0; cursor_y = (int)y1;
+            return;
+        }
+
+        // Vanligt tecken
+        vbe_text_putchar(c);
+        uint32_t cx, cy; vbe_text_get_cursor(&cx, &cy);
+        cursor_x = (int)cx; cursor_y = (int)cy;
         return;
     }
 
+    // ---------- VGA ----------
+    if (c == '\n')
+    {
+        cursor_x = 0; cursor_y++;
+    }
+    else if (c == '\r')
+    {
+        cursor_x = 0;
+    }
+    else if (c == '\t')
+    {
+        int next = (cursor_x + 4) & ~3;
+        while (cursor_x < next)
+        {
+            if ((cursor_x >= 0 && cursor_x < SCREEN_WIDTH) &&
+                (cursor_y >= 0 && cursor_y < SCREEN_HEIGHT))
+            {
+                VIDEO_MEMORY[cursor_x + SCREEN_WIDTH * cursor_y] =
+                    ((unsigned short)attrib << 8) | ' ';
+            }
+            cursor_x++;
+        }
+        set_cursor_pos((unsigned short)cursor_x, (unsigned short)cursor_y);
+        return;
+    }
+    else if (c == '\b')
+    {
+        if (cursor_x > 0)
+        {
+            cursor_x--;
+            if ((cursor_x >= 0 && cursor_x < SCREEN_WIDTH) &&
+                (cursor_y >= 0 && cursor_y < SCREEN_HEIGHT))
+            {
+                VIDEO_MEMORY[cursor_x + SCREEN_WIDTH * cursor_y] =
+                    ((unsigned short)attrib << 8) | ' ';
+            }
+            set_cursor_pos((unsigned short)cursor_x, (unsigned short)cursor_y);
+        }
+        return;
+    }
+    else
+    {
+        if ((cursor_x >= 0 && cursor_x < SCREEN_WIDTH) &&
+            (cursor_y >= 0 && cursor_y < SCREEN_HEIGHT))
+        {
+            VIDEO_MEMORY[cursor_x + SCREEN_WIDTH * cursor_y] =
+                ((unsigned short)attrib << 8) | (unsigned char)c;
+        }
+        cursor_x++;
+        if (cursor_x >= SCREEN_WIDTH)
+        {
+            cursor_x = 0; cursor_y++;
+        }
+    }
+
+    // Scroll
+    if (cursor_y >= SCREEN_HEIGHT)
+    {
+        for (int y = 1; y < SCREEN_HEIGHT; y++)
+        {
+            for (int x = 0; x < SCREEN_WIDTH; x++)
+            {
+                VIDEO_MEMORY[x + SCREEN_WIDTH * (y - 1)] =
+                    VIDEO_MEMORY[x + SCREEN_WIDTH * y];
+            }
+        }
+        for (int x = 0; x < SCREEN_WIDTH; x++)
+        {
+            VIDEO_MEMORY[x + SCREEN_WIDTH * (SCREEN_HEIGHT - 1)] =
+                ((unsigned short)current_attrib << 8) | ' ';
+        }
+        cursor_y = SCREEN_HEIGHT - 1;
+    }
+
+    set_cursor_pos((unsigned short)cursor_x, (unsigned short)cursor_y);
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Logging                                                                    */
+/* -------------------------------------------------------------------------- */
+
+static inline void log_append(unsigned char attrib, char c)
+{
+    if (s_replaying)
+    {
+        return; // never record our own replay
+    }
+
     s_logbuf[s_log_head].attrib = attrib;
-    s_logbuf[s_log_head].ch = c;
+    s_logbuf[s_log_head].ch     = c;
 
     s_log_head = (s_log_head + 1) % CONSOLE_LOG_CAP;
-
     if (s_log_count < CONSOLE_LOG_CAP)
     {
         s_log_count++;
     }
-    // else: overwrite oldest silently
+    // else: ring buffer overwrites oldest implicitly
 }
 
-static inline char vga_cell_to_ascii(uint16_t cell)
-{
-    uint8_t ch = (uint8_t)(cell & 0x00FF);
-
-    // Replace control chars and CP437 (>0x7E) with space
-    if (ch < 0x20 || ch >= 0x7F)
-    {
-        return ' ';
-    }
-
-    return (char)ch;
-}
-
-void console_flush_from_vga_text(void)
-{
-    if (!g_vbe.frame_buffer)
-    {
-        return;
-    }
-
-    vbe_text_set_cursor(0, 0);
-
-    for (uint32_t row = 0; row < SCREEN_HEIGHT; row++)
-    {
-        for (uint32_t col = 0; col < SCREEN_WIDTH; col++)
-        {
-            uint16_t cell = VIDEO_MEMORY[row * SCREEN_WIDTH + col];
-            vbe_text_putchar(vga_cell_to_ascii(cell));
-        }
-
-        // End of line
-        vbe_text_putchar('\n');
-    }
-}
-
-void console_flush_log(void)
-{
-    // Disable input floor while replaying to avoid backspace filtering
-    int saved_floor_enabled = floor_enabled;
-    int saved_floor_x = floor_x;
-    int saved_floor_y = floor_y;
-
-    floor_enabled = 0;
-
-    // Clear current backend so replay starts from top-left
-    clear();
-
-    s_replaying = 1;
-
-    unsigned idx = (s_log_head + CONSOLE_LOG_CAP - s_log_count) % CONSOLE_LOG_CAP;
-    idx = 0;
-    for (unsigned i = 0; i < s_log_count; i++)
-    {
-        console_log_entry_t e = s_logbuf[idx];
-        putch_color(e.attrib, e.ch);
-
-        idx++;
-        if (idx == CONSOLE_LOG_CAP)
-        {
-            idx = 0;
-        }
-    }
-
-    s_replaying = 0;
-    
-    // Restore floor state
-    floor_enabled = saved_floor_enabled;
-    floor_x = saved_floor_x;
-    floor_y = saved_floor_y;
-}
-
-uint8_t vga_cell_height(void)
-{
-    if (s_vbe_console_active)
-    {
-        // In VBE mode, cell height is controlled by the text backend (8x16).
-        return 16;
-    }
-
-    outb(0x3D4, 0x09);                 // Maximum Scan Line register
-    return (inb(0x3D5) & 0x1F) + 1;    // Height in scanlines
-}
-
-void vga_cursor_enable(uint8_t start, uint8_t end)
-{
-    if (s_vbe_console_active)
-    {
-        // No hardware cursor in VBE text backend. Ignore.
-        return;
-    }
-
-    outb(0x3D4, 0x0A);                 // Cursor Start
-    uint8_t cur = inb(0x3D5);
-    outb(0x3D5, (cur & 0xC0) | (start & 0x1F));  // bit5 = 0 => enable
-
-    outb(0x3D4, 0x0B);                 // Cursor End
-    cur = inb(0x3D5);
-    outb(0x3D5, (cur & 0xE0) | (end & 0x1F));
-}
-
-void vga_cursor_disable(void)
-{
-    if (s_vbe_console_active)
-    {
-        return;
-    }
-
-    outb(0x3D4, 0x0A);
-    uint8_t cur = inb(0x3D5);
-    outb(0x3D5, cur | 0x20);           // bit5 = 1 => disable
-}
-
-// Switch console backend between VGA text and VBE text framebuffer.
-void console_use_vbe(int active)
-{
-    if (active)
-    {
-        if (vbe_text_init())
-        {
-            s_vbe_console_active = 1;
-            vbe_apply_colors_from_attrib(current_attrib);
-            vbe_text_clear(0xFF000000u); // Clear to background (black)
-            cursor_x = 0;
-            cursor_y = 0;
-            vbe_text_set_cursor(0, 0);
-            return;
-        }
-        // If init failed, fall back to VGA
-    }
-
-    s_vbe_console_active = 0;
-}
-
-// Print a character to the screen
-void putch(char c)
-{
-#ifdef DIFF_DEBUG
-    serial_putc(c);
-#endif
-
-    putch_color(current_attrib, c);
-}
+/* -------------------------------------------------------------------------- */
+/* Helpers                                                                    */
+/* -------------------------------------------------------------------------- */
 
 static inline int at_floor(void)
 {
@@ -244,156 +273,207 @@ static inline int at_floor(void)
     {
         return 1;
     }
-
     if (cursor_y > floor_y)
     {
         return 0;
     }
-
     return cursor_x <= floor_x;
 }
 
-void set_input_floor(int x, int y)
+/* -------------------------------------------------------------------------- */
+/* VGA misc                                                                   */
+/* -------------------------------------------------------------------------- */
+
+uint8_t vga_cell_height(void)
 {
-    if (x < 0)
-    {
-        x = 0;
-    }
-
-    if (x >= SCREEN_WIDTH)
-    {
-        x = SCREEN_WIDTH - 1;
-    }
-
-    if (y < 0)
-    {
-        y = 0;
-    }
-
-    if (y >= SCREEN_HEIGHT)
-    {
-        y = SCREEN_HEIGHT - 1;
-    }
-
-    floor_enabled = 1;
-    floor_x = x;
-    floor_y = y;
-}
-
-void clear_input_floor(void)
-{
-    floor_enabled = 0;
-}
-
-void set_cursor_pos(unsigned short col, unsigned short row)
-{
-    cursor_x = col;
-    cursor_y = row;
-
     if (s_vbe_console_active)
     {
-        // VBE text backend uses cell coordinates directly
-        vbe_text_set_cursor(col, row);
+        // In VBE mode, cell height is backend-defined (e.g., 16).
+        return 16;
+    }
+
+    outb(0x3D4, 0x09);                 // Maximum Scan Line register
+    return (uint8_t)((inb(0x3D5) & 0x1F) + 1);    // Height in scanlines
+}
+
+void vga_cursor_enable(uint8_t start, uint8_t end)
+{
+    if (s_vbe_console_active)
+    {
+        // No hardware cursor in VBE text backend.
         return;
     }
 
-    unsigned short pos = row * SCREEN_WIDTH + col;
+    outb(0x3D4, 0x0A);                 // Cursor Start
+    uint8_t cur = inb(0x3D5);
+    outb(0x3D5, (unsigned char)((cur & 0xC0) | (start & 0x1F)));  // bit5 = 0 => enable
 
-    // VGA hardware cursor
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, (unsigned char)(pos & 0xFF));
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, (unsigned char)((pos >> 8) & 0xFF));
+    outb(0x3D4, 0x0B);                 // Cursor End
+    cur = inb(0x3D5);
+    outb(0x3D5, (unsigned char)((cur & 0xE0) | (end & 0x1F)));
 }
 
-unsigned short get_cursor_pos(void)
+void vga_cursor_disable(void)
 {
     if (s_vbe_console_active)
     {
-        // Synthesize from our shadow cursor
-        return (unsigned short)(cursor_y * SCREEN_WIDTH + cursor_x);
+        return;
     }
 
-    unsigned short pos = 0;
-    outb(0x3D4, 0x0F);
-    pos |= inb(0x3D5);
-    outb(0x3D4, 0x0E);
-    pos |= ((unsigned short)inb(0x3D5)) << 8;
-    return pos;
+    outb(0x3D4, 0x0A);
+    uint8_t cur = inb(0x3D5);
+    outb(0x3D5, (unsigned char)(cur | 0x20));           // bit5 = 1 => disable
 }
 
-void get_cursor(int *x, int *y)
+/* -------------------------------------------------------------------------- */
+/* Backend switch                                                             */
+/* -------------------------------------------------------------------------- */
+
+void console_use_vbe(int active)
 {
-    if (x)
+    if (active)
     {
-        *x = cursor_x;
+        if (vbe_text_init())
+        {
+            s_vbe_console_active = 1;
+
+            // Apply current VGA attribute to VBE colors
+            vbe_apply_colors_from_attrib(current_attrib);
+
+            // Clear to current background and reset cursor
+            uint8_t bg = (uint8_t)((current_attrib >> 4) & 0x0F);
+            uint32_t argb_bg = 0xFF000000u | s_vga_rgb[bg];
+            vbe_text_clear(argb_bg);
+            vbe_text_set_cursor(0, 0);
+            cursor_x = 0;
+            cursor_y = 0;
+
+            return;
+        }
     }
 
-    if (y)
+    s_vbe_console_active = 0;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Printing                                                                   */
+/* -------------------------------------------------------------------------- */
+
+void putch(char c)
+{
+    // Save IF and mask interrupts while mutating screen state
+    unsigned long eflags;
+    asm volatile("pushf; pop %0" : "=r"(eflags));
+    asm volatile("cli");
+
+    // Mirror to serial (CRLF on '\n'). This does NOT affect the log.
+    if (!s_replaying)
     {
-        *y = cursor_y;
+        if (c == '\n')
+        {
+            serial_putc('\r');
+            serial_putc('\n');
+        }
+        else
+        {
+            serial_putc(c);
+        }
     }
-}
 
-unsigned short get_row(void)
-{
-    return get_cursor_pos() / SCREEN_WIDTH;
-}
+    // Log EXACTLY what was sent to putch() (including '\n' and '\r').
+    log_append(current_attrib, c);
 
-unsigned short get_col(void)
-{
-    return get_cursor_pos() % SCREEN_WIDTH;
-}
+    // Render to current backend.
+    putch_color(current_attrib, c);
 
-int console_is_vbe_active(void)
-{
-    return s_vbe_console_active;
+    // Restore IF exactly as it was
+    if (eflags & (1u << 9))
+    {
+        asm volatile("sti");
+    }
 }
 
 void putch_color(unsigned char attrib, char c)
 {
-    log_append(attrib, c);
-
     if (s_vbe_console_active)
     {
-        // Respect input floor for backspace
-        if (c == '\b')
-        {
-            if (at_floor())
-            {
-                return;
-            }
-        }
-
-        // Update colors if attribute changed
+        // Attribute change
         if (attrib != current_attrib)
         {
             current_attrib = attrib;
             vbe_apply_colors_from_attrib(current_attrib);
         }
 
-        // Handle tabs manually to align with 4-space stops
+        // Backspace
+        if (c == '\b')
+        {
+            if (!at_floor())
+            {
+                uint32_t x, y;
+                vbe_text_get_cursor(&x, &y);
+                if (x > 0)
+                {
+                    vbe_text_set_cursor(x - 1, y);
+                    vbe_text_putchar(' ');
+                    vbe_text_set_cursor(x - 1, y);
+                    cursor_x = (int)(x - 1);
+                    cursor_y = (int)y;
+                }
+            }
+            return;
+        }
+
+        // Carriage return: go to column 0
+        if (c == '\r')
+        {
+            uint32_t x, y;
+            vbe_text_get_cursor(&x, &y);
+            vbe_text_set_cursor(0, y);
+            cursor_x = 0;
+            cursor_y = (int)y;
+            return;
+        }
+
+        // Newline: next row, x=0
+        if (c == '\n')
+        {
+            uint32_t x0, y0;
+            vbe_text_get_cursor(&x0, &y0);
+            vbe_text_putchar('\n'); // let backend advance if it supports it
+
+            uint32_t x1, y1;
+            vbe_text_get_cursor(&x1, &y1);
+            if (x1 == x0 && y1 == y0)
+            {
+                // Backend did not advance; do it manually
+                y1 = y0 + 1;
+            }
+            vbe_text_set_cursor(0, y1);
+            cursor_x = 0;
+            cursor_y = (int)y1;
+            return;
+        }
+
+        // Tabs → 4-space stops
         if (c == '\t')
         {
             uint32_t x, y;
             vbe_text_get_cursor(&x, &y);
-            uint32_t next = (x + 4) & ~3u;
-
+            uint32_t next = (x + 4u) & ~3u;
             while (x < next)
             {
                 vbe_text_putchar(' ');
                 vbe_text_get_cursor(&x, &y);
             }
-
             cursor_x = (int)x;
             cursor_y = (int)y;
             return;
         }
 
-        // Forward the character to VBE renderer
+        // Regular printable
         vbe_text_putchar(c);
 
-        // Sync our shadow cursor with backend
+        // Sync shadow cursor
         uint32_t cx, cy;
         vbe_text_get_cursor(&cx, &cy);
         cursor_x = (int)cx;
@@ -402,7 +482,7 @@ void putch_color(unsigned char attrib, char c)
         return;
     }
 
-    // ----- VGA text mode path -----
+    /* ------------------------------ VGA path ------------------------------ */
 
     if (c == '\n')
     {
@@ -415,19 +495,34 @@ void putch_color(unsigned char attrib, char c)
     }
     else if (c == '\t')
     {
-        cursor_x += 4;
-        set_x(cursor_x);
+        int next = (cursor_x + 4) & ~3;
+        while (cursor_x < next)
+        {
+            if ((cursor_x >= 0 && cursor_x < SCREEN_WIDTH) &&
+                (cursor_y >= 0 && cursor_y < SCREEN_HEIGHT))
+            {
+                VIDEO_MEMORY[cursor_x + SCREEN_WIDTH * cursor_y] =
+                    ((unsigned short)attrib << 8) | ' ';
+            }
+            cursor_x++;
+        }
+        set_cursor_pos((unsigned short)cursor_x, (unsigned short)cursor_y);
+        return;
     }
     else if (c == '\b')
     {
         if (!at_floor() && cursor_x > 0)
         {
             cursor_x--;
-            putch(' ');
-            cursor_x--;
-            set_x(cursor_x);
-            return;
+            if ((cursor_x >= 0 && cursor_x < SCREEN_WIDTH) &&
+                (cursor_y >= 0 && cursor_y < SCREEN_HEIGHT))
+            {
+                VIDEO_MEMORY[cursor_x + SCREEN_WIDTH * cursor_y] =
+                    ((unsigned short)attrib << 8) | ' ';
+            }
+            set_cursor_pos((unsigned short)cursor_x, (unsigned short)cursor_y);
         }
+        return;
     }
     else
     {
@@ -447,6 +542,7 @@ void putch_color(unsigned char attrib, char c)
         }
     }
 
+    // Scroll if needed
     if (cursor_y >= SCREEN_HEIGHT)
     {
         for (int y = 1; y < SCREEN_HEIGHT; y++)
@@ -467,11 +563,57 @@ void putch_color(unsigned char attrib, char c)
         cursor_y = SCREEN_HEIGHT - 1;
     }
 
-    set_cursor_pos(cursor_x, cursor_y);
+    set_cursor_pos((unsigned short)cursor_x, (unsigned short)cursor_y);
 }
 
-int puts(const char *str)
+/* -------------------------------------------------------------------------- */
+/* Replay                                                                     */
+/* -------------------------------------------------------------------------- */
+
+void console_flush_log(void)
 {
+    // Temporarily disable input floor during replay to avoid backspace filtering
+    int saved_floor_enabled = floor_enabled;
+    int saved_floor_x = floor_x;
+    int saved_floor_y = floor_y;
+    floor_enabled = 0;
+
+    // Clear current backend so replay starts at (0,0)
+    s_replaying = 1;
+    clear();
+    // Start from the oldest entry
+    unsigned idx = (s_log_head + CONSOLE_LOG_CAP - s_log_count) % CONSOLE_LOG_CAP;
+    for (unsigned i = 0; i < s_log_count; i++)
+    {
+        console_log_entry_t e = s_logbuf[idx];
+        render_raw(e.attrib, e.ch);
+        
+        idx++;
+        if (idx == CONSOLE_LOG_CAP)
+        {
+            idx = 0;
+        }
+    }
+
+    s_replaying = 0;
+
+    // Restore floor state
+    floor_enabled = saved_floor_enabled;
+    floor_x = saved_floor_x;
+    floor_y = saved_floor_y;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Convenience API                                                            */
+/* -------------------------------------------------------------------------- */
+
+int console_puts(const char *str)
+{
+    if (!str)
+    {
+        return -1;
+    }
+
     while (*str)
     {
         putch(*str++);
@@ -495,7 +637,7 @@ void set_x(int x)
     if (x >= 0 && x < SCREEN_WIDTH)
     {
         cursor_x = x;
-        set_cursor_pos(cursor_x, cursor_y);
+        set_cursor_pos((unsigned short)cursor_x, (unsigned short)cursor_y);
     }
 }
 
@@ -504,7 +646,7 @@ void set_y(int y)
     if (y >= 0 && y < SCREEN_HEIGHT)
     {
         cursor_y = y;
-        set_cursor_pos(cursor_x, cursor_y);
+        set_cursor_pos((unsigned short)cursor_x, (unsigned short)cursor_y);
     }
 }
 
@@ -514,14 +656,49 @@ void set_pos(int x, int y)
     set_y(y);
 }
 
+void get_cursor(int *x, int *y)
+{
+    if (x)
+    {
+        *x = cursor_x;
+    }
+    if (y)
+    {
+        *y = cursor_y;
+    }
+}
+
+unsigned short get_cursor_pos(void)
+{
+    if (s_vbe_console_active)
+    {
+        // Synthesize from our shadow cursor
+        return (unsigned short)(cursor_y * SCREEN_WIDTH + cursor_x);
+    }
+
+    unsigned short pos = 0;
+    outb(0x3D4, 0x0F);
+    pos |= inb(0x3D5);
+    outb(0x3D4, 0x0E);
+    pos |= ((unsigned short)inb(0x3D5)) << 8;
+    return pos;
+}
+
+unsigned short get_row(void)
+{
+    return (unsigned short)(get_cursor_pos() / (unsigned short)SCREEN_WIDTH);
+}
+
+unsigned short get_col(void)
+{
+    return (unsigned short)(get_cursor_pos() % (unsigned short)SCREEN_WIDTH);
+}
+
 void clear(void)
 {
     if (s_vbe_console_active)
     {
-        // Clear to the current background color derived from VGA attribute
-        uint8_t bg = (current_attrib >> 4) & 0x0F;
-        uint32_t argb_bg = 0xFF000000u | s_vga_rgb[bg];
-        vbe_text_clear(argb_bg);
+        vbe_text_clear(0xFF11427D);
         vbe_text_set_cursor(0, 0);
         cursor_x = 0;
         cursor_y = 0;
@@ -550,12 +727,43 @@ void puthex(int value)
     }
 }
 
-void console_set_background_color(uint32_t bg_argb)
+void set_input_floor(int x, int y)
 {
-    uint32_t fg, x, y;
-    vbe_text_get_cursor(&x, &y); 
-    fg = 0xFFD0D0D0u;
-    vbe_text_set_colors(fg, bg_argb);
-    vbe_text_clear(bg_argb);
-    vbe_text_set_cursor(x, y);
+    if (x < 0) { x = 0; }
+    if (x >= SCREEN_WIDTH) { x = SCREEN_WIDTH - 1; }
+    if (y < 0) { y = 0; }
+    if (y >= SCREEN_HEIGHT) { y = SCREEN_HEIGHT - 1; }
+
+    floor_enabled = 1;
+    floor_x = x;
+    floor_y = y;
 }
+
+void clear_input_floor(void)
+{
+    floor_enabled = 0;
+}
+
+int console_is_vbe_active(void)
+{
+    return s_vbe_console_active;
+}
+
+void set_cursor_pos(unsigned short x, unsigned short y)
+{
+    cursor_x = x;
+    cursor_y = y;
+
+    if (s_vbe_console_active)
+    {
+        vbe_text_set_cursor((uint32_t)x, (uint32_t)y);
+        return;
+    }
+
+    unsigned short pos = (unsigned short)(y * SCREEN_WIDTH + x);
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, (unsigned char)(pos & 0xFF));
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, (unsigned char)((pos >> 8) & 0xFF));
+}
+

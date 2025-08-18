@@ -1,2 +1,2 @@
-file drivers/obj/keyboard.ddf.elf
+file build/kernel.elf
 target remote localhost:1234

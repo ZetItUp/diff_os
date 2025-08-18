@@ -55,3 +55,4 @@ void ufree(void *ptr, size_t size);
 void* umalloc(size_t size);
 void paging_update_flags(uint32_t addr, uint32_t size, uint32_t set_mask, uint32_t clear_mask);
 void paging_set_user(uint32_t addr, uint32_t size);
+int paging_probe_pde_pte(uint32_t va, uint32_t *out_pde, uint32_t *out_pte);

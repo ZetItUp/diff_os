@@ -1,7 +1,9 @@
 #include "stdint.h"
 #include "stddef.h"
 #include "string.h"
+#include "stdio.h"
 #include "heap.h"
+#include "paging.h"
 #include "console.h"
 #include "dirent.h"
 #include "system/usercopy.h"
@@ -352,7 +354,6 @@ int system_read_dir(int handle, struct dirent *out)
         kdir.d_name[n] = '\0';
 
         g_dir[handle].cursor = i + 1;
-
         if(copy_to_user(out, &kdir, sizeof(kdir)) != 0)
         {
             return -1;

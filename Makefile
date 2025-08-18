@@ -20,7 +20,7 @@ TOOLS_DIR = tools
 DRIVERS_DIR = drivers
 IMAGE = $(TARGET)
 
-DEBUG ?= 0
+DEBUG ?=0
 ifeq ($(DEBUG),1)
 CFLAGS += -DDIFF_DEBUG
 endif
@@ -196,12 +196,18 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 run: all
 	@echo "[QEMU] Starting OS"
 	@# @VBoxManage convertfromraw --format VDI build/diffos.img build/diffos.vdi
-	@qemu-system-i386 -monitor stdio -serial file:serial.log -m 64M -vga std -drive id=disk,file=build/diffos.img,if=ide,format=raw
-
+	qemu-system-i386 \
+		-monitor stdio \
+		-m 64M \
+		-serial file:serial.log \
+		-d guest_errors,trace:ioport_* -D qemu.log \
+		-drive id=disk,file=build/diffos.img,if=ide,format=raw \
+		-chardev file,id=dbg,path=/home/zet/os/debugcon.log \
+		-device isa-debugcon,iobase=0xe9,chardev=dbg
 # Debug in QEMU with GDB
 debug: all
 	@echo "[QEMU] Starting in debug mode"
-	@qemu-system-i386 -monitor stdio -m 64M -drive format=raw,file=$(TARGET) -s -S &
+	@qemu-system-i386 -monitor stdio -m 64M -vga std -drive format=raw,file=$(TARGET) -s -S &
 	@echo "[GDB] Starting debugger"
 	@gdb -x 1kernel.gdb
 

@@ -8,6 +8,7 @@
 *.dex
 *.exl
 *.zip
+*.log
 build/
 cross/
 1token

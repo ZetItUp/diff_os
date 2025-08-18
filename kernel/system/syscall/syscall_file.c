@@ -320,7 +320,7 @@ int system_file_open(const char *abs_path, int oflags, int mode)
 
     if(path_to_entry_index(kpath, &idx) != 0)
     {
-        printf("[FILE OPEN] File not found '%s'\n", abs_path);
+        printf("[FILE OPEN] File not found '%s'\n", kpath);
 
         return -1;
     }
