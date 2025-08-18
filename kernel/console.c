@@ -437,20 +437,13 @@ void putch_color(unsigned char attrib, char c)
         // Newline: next row, x=0
         if (c == '\n')
         {
-            uint32_t x0, y0;
-            vbe_text_get_cursor(&x0, &y0);
-            vbe_text_putchar('\n'); // let backend advance if it supports it
+            vbe_text_putchar('\n');
 
-            uint32_t x1, y1;
-            vbe_text_get_cursor(&x1, &y1);
-            if (x1 == x0 && y1 == y0)
-            {
-                // Backend did not advance; do it manually
-                y1 = y0 + 1;
-            }
-            vbe_text_set_cursor(0, y1);
-            cursor_x = 0;
-            cursor_y = (int)y1;
+            // Sync skuggmarkören från backend, inget extra set_cursor här.
+            uint32_t cx, cy;
+            vbe_text_get_cursor(&cx, &cy);
+            cursor_x = (int)cx;
+            cursor_y = (int)cy;
             return;
         }
 

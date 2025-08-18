@@ -5,6 +5,15 @@
 
 Different Terminal (Version 1.0)
 
+/> ls
+Content of /
+==================================================
+ Type               Size  Name
+--------------------------------------------------
+ <DIRECTORY>           0  system/
+ <DIRECTORY>           0  programs/
+--------------------------------------------------
+
 /> cd system
 
 /system> ls
@@ -18,5 +27,38 @@ Content of system/
  <DIRECTORY>           0  drivers/
  <FILE>              184  sys.cfg
 --------------------------------------------------
+
+/system> hello
+Hello World!
+
+/system> echo ME TOO
+ME TOO
+
+/system> ls
+Content of system/
+==================================================
+ Type               Size  Name
+--------------------------------------------------
+ <FILE>            57724  kernel.bin
+ <DIRECTORY>           0  exls/
+ <FILE>               88  commands.map
+ <DIRECTORY>           0  drivers/
+ <FILE>              184  sys.cfg
+--------------------------------------------------
+
+/system> ls
+Content of system/
+==================================================
+ Type               Size  Name
+--------------------------------------------------
+ <FILE>            57724  kernel.bin
+ <DIRECTORY>           0  exls/
+ <FILE>               88  commands.map
+ <DIRECTORY>           0  drivers/
+ <FILE>              184  sys.cfg
+--------------------------------------------------
+
+/system> yay
+Unknown command: yay
 
 /system> 

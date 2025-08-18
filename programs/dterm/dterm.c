@@ -173,12 +173,14 @@ static int bi_help(int argc, char **argv)
 {
     (void)argc; 
     (void)argv;
-
-    puts("  cd      \t- Change current directory");
-    puts("  help    \t- List built-in commands");
-    puts("  echo    \t- Print its arguments");
-    puts("  ver     \t- Show shell version");
-    puts("  exit    \t- Exit the shell");
+    
+    puts(" Available commands:");
+    puts("--------------------------------------------");
+    puts(" cd    \t- Change current directory");
+    puts(" help  \t- List built-in commands");
+    puts(" echo  \t- Print its arguments");
+    puts(" ver   \t- Show shell version");
+    puts(" exit  \t- Exit the shell");
 
     return 0;
 }
