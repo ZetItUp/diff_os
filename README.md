@@ -1,7 +1,8 @@
 # Different OS
 A different OS
 
-<img width="716" height="462" alt="Skärmbild 2025-08-14 200627" src="https://github.com/user-attachments/assets/e1784ca2-528d-4ac1-839d-1f50ff55694b" />
+<img width="1020" height="825" alt="Skärmbild 2025-08-19 041200" src="https://github.com/user-attachments/assets/f864566f-7b5e-4cce-a483-32de4b6aa67c" />
+
 
 
 The goal for this was to load a kernel from a bootloader. However i kept building on it.
