@@ -103,8 +103,9 @@ static inline void render_raw(unsigned char attrib, char c)
         if (attrib != current_attrib)
         {
             current_attrib = attrib;
-            vbe_apply_colors_from_attrib(current_attrib);
         }
+        
+        vbe_apply_colors_from_attrib(current_attrib);
 
         // Tabbar
         if (c == '\t')
@@ -132,7 +133,6 @@ static inline void render_raw(unsigned char attrib, char c)
             return;
         }
 
-        // Newline -> nästa rad, X=0
         if (c == '\n')
         {
             uint32_t x0, y0; vbe_text_get_cursor(&x0, &y0);
@@ -151,14 +151,12 @@ static inline void render_raw(unsigned char attrib, char c)
             return;
         }
 
-        // Vanligt tecken
         vbe_text_putchar(c);
         uint32_t cx, cy; vbe_text_get_cursor(&cx, &cy);
         cursor_x = (int)cx; cursor_y = (int)cy;
         return;
     }
 
-    // ---------- VGA ----------
     if (c == '\n')
     {
         cursor_x = 0; cursor_y++;
@@ -235,16 +233,11 @@ static inline void render_raw(unsigned char attrib, char c)
     set_cursor_pos((unsigned short)cursor_x, (unsigned short)cursor_y);
 }
 
-
-/* -------------------------------------------------------------------------- */
-/* Logging                                                                    */
-/* -------------------------------------------------------------------------- */
-
 static inline void log_append(unsigned char attrib, char c)
 {
     if (s_replaying)
     {
-        return; // never record our own replay
+        return; 
     }
 
     s_logbuf[s_log_head].attrib = attrib;
@@ -255,12 +248,7 @@ static inline void log_append(unsigned char attrib, char c)
     {
         s_log_count++;
     }
-    // else: ring buffer overwrites oldest implicitly
 }
-
-/* -------------------------------------------------------------------------- */
-/* Helpers                                                                    */
-/* -------------------------------------------------------------------------- */
 
 static inline int at_floor(void)
 {
@@ -280,35 +268,29 @@ static inline int at_floor(void)
     return cursor_x <= floor_x;
 }
 
-/* -------------------------------------------------------------------------- */
-/* VGA misc                                                                   */
-/* -------------------------------------------------------------------------- */
-
 uint8_t vga_cell_height(void)
 {
     if (s_vbe_console_active)
     {
-        // In VBE mode, cell height is backend-defined (e.g., 16).
         return 16;
     }
 
-    outb(0x3D4, 0x09);                 // Maximum Scan Line register
-    return (uint8_t)((inb(0x3D5) & 0x1F) + 1);    // Height in scanlines
+    outb(0x3D4, 0x09);                 
+    return (uint8_t)((inb(0x3D5) & 0x1F) + 1);   
 }
 
 void vga_cursor_enable(uint8_t start, uint8_t end)
 {
     if (s_vbe_console_active)
     {
-        // No hardware cursor in VBE text backend.
         return;
     }
 
-    outb(0x3D4, 0x0A);                 // Cursor Start
+    outb(0x3D4, 0x0A);  
     uint8_t cur = inb(0x3D5);
-    outb(0x3D5, (unsigned char)((cur & 0xC0) | (start & 0x1F)));  // bit5 = 0 => enable
+    outb(0x3D5, (unsigned char)((cur & 0xC0) | (start & 0x1F)));
 
-    outb(0x3D4, 0x0B);                 // Cursor End
+    outb(0x3D4, 0x0B); 
     cur = inb(0x3D5);
     outb(0x3D5, (unsigned char)((cur & 0xE0) | (end & 0x1F)));
 }
@@ -325,10 +307,6 @@ void vga_cursor_disable(void)
     outb(0x3D5, (unsigned char)(cur | 0x20));           // bit5 = 1 => disable
 }
 
-/* -------------------------------------------------------------------------- */
-/* Backend switch                                                             */
-/* -------------------------------------------------------------------------- */
-
 void console_use_vbe(int active)
 {
     if (active)
@@ -337,10 +315,8 @@ void console_use_vbe(int active)
         {
             s_vbe_console_active = 1;
 
-            // Apply current VGA attribute to VBE colors
             vbe_apply_colors_from_attrib(current_attrib);
 
-            // Clear to current background and reset cursor
             uint8_t bg = (uint8_t)((current_attrib >> 4) & 0x0F);
             uint32_t argb_bg = 0xFF000000u | s_vga_rgb[bg];
             vbe_text_clear(argb_bg);
@@ -355,18 +331,12 @@ void console_use_vbe(int active)
     s_vbe_console_active = 0;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Printing                                                                   */
-/* -------------------------------------------------------------------------- */
-
 void putch(char c)
 {
-    // Save IF and mask interrupts while mutating screen state
     unsigned long eflags;
     asm volatile("pushf; pop %0" : "=r"(eflags));
     asm volatile("cli");
 
-    // Mirror to serial (CRLF on '\n'). This does NOT affect the log.
     if (!s_replaying)
     {
         if (c == '\n')
@@ -380,13 +350,10 @@ void putch(char c)
         }
     }
 
-    // Log EXACTLY what was sent to putch() (including '\n' and '\r').
     log_append(current_attrib, c);
 
-    // Render to current backend.
     putch_color(current_attrib, c);
 
-    // Restore IF exactly as it was
     if (eflags & (1u << 9))
     {
         asm volatile("sti");
@@ -397,14 +364,13 @@ void putch_color(unsigned char attrib, char c)
 {
     if (s_vbe_console_active)
     {
-        // Attribute change
         if (attrib != current_attrib)
         {
             current_attrib = attrib;
-            vbe_apply_colors_from_attrib(current_attrib);
         }
 
-        // Backspace
+        vbe_apply_colors_from_attrib(current_attrib);
+        
         if (c == '\b')
         {
             if (!at_floor())
@@ -423,7 +389,6 @@ void putch_color(unsigned char attrib, char c)
             return;
         }
 
-        // Carriage return: go to column 0
         if (c == '\r')
         {
             uint32_t x, y;
@@ -434,12 +399,10 @@ void putch_color(unsigned char attrib, char c)
             return;
         }
 
-        // Newline: next row, x=0
         if (c == '\n')
         {
             vbe_text_putchar('\n');
 
-            // Sync skuggmarkören från backend, inget extra set_cursor här.
             uint32_t cx, cy;
             vbe_text_get_cursor(&cx, &cy);
             cursor_x = (int)cx;
@@ -447,7 +410,6 @@ void putch_color(unsigned char attrib, char c)
             return;
         }
 
-        // Tabs → 4-space stops
         if (c == '\t')
         {
             uint32_t x, y;
@@ -463,10 +425,8 @@ void putch_color(unsigned char attrib, char c)
             return;
         }
 
-        // Regular printable
         vbe_text_putchar(c);
 
-        // Sync shadow cursor
         uint32_t cx, cy;
         vbe_text_get_cursor(&cx, &cy);
         cursor_x = (int)cx;
@@ -474,8 +434,6 @@ void putch_color(unsigned char attrib, char c)
 
         return;
     }
-
-    /* ------------------------------ VGA path ------------------------------ */
 
     if (c == '\n')
     {
@@ -559,23 +517,17 @@ void putch_color(unsigned char attrib, char c)
     set_cursor_pos((unsigned short)cursor_x, (unsigned short)cursor_y);
 }
 
-/* -------------------------------------------------------------------------- */
-/* Replay                                                                     */
-/* -------------------------------------------------------------------------- */
-
 void console_flush_log(void)
 {
-    // Temporarily disable input floor during replay to avoid backspace filtering
     int saved_floor_enabled = floor_enabled;
     int saved_floor_x = floor_x;
     int saved_floor_y = floor_y;
     floor_enabled = 0;
 
-    // Clear current backend so replay starts at (0,0)
     s_replaying = 1;
     clear();
-    // Start from the oldest entry
     unsigned idx = (s_log_head + CONSOLE_LOG_CAP - s_log_count) % CONSOLE_LOG_CAP;
+    
     for (unsigned i = 0; i < s_log_count; i++)
     {
         console_log_entry_t e = s_logbuf[idx];
@@ -590,15 +542,10 @@ void console_flush_log(void)
 
     s_replaying = 0;
 
-    // Restore floor state
     floor_enabled = saved_floor_enabled;
     floor_x = saved_floor_x;
     floor_y = saved_floor_y;
 }
-
-/* -------------------------------------------------------------------------- */
-/* Convenience API                                                            */
-/* -------------------------------------------------------------------------- */
 
 int console_puts(const char *str)
 {
@@ -691,7 +638,7 @@ void clear(void)
 {
     if (s_vbe_console_active)
     {
-        vbe_text_clear(0xFF11427D);
+        vbe_text_clear(0xFF000000);
         vbe_text_set_cursor(0, 0);
         cursor_x = 0;
         cursor_y = 0;

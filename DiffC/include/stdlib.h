@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));
+
 void exit(int code);
 void itoa(int value, char *str, int base);
 void utoa(unsigned int val, char* buf, int base);

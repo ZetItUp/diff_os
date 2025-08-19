@@ -24,6 +24,8 @@ enum
     SYSTEM_DIR_OPEN = 14,
     SYSTEM_DIR_READ = 15,
     SYSTEM_DIR_CLOSE = 16,
+    SYSTEM_CONSOLE_SET_COLOR = 17,
+    SYSTEM_CONSOLE_GET_COLOR = 18,
 };
 
 struct syscall_frame 

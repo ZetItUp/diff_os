@@ -77,6 +77,27 @@ static int resolve_exec_path(char *out, size_t out_sz, const char *name)
     return -1;
 }
 
+static int system_console_set_color(uint32_t fg, uint32_t bg)
+{
+    return console_set_colors_kernel((uint8_t)fg, (uint8_t)bg);
+}
+
+static int system_console_get_color(uint32_t *out)
+{
+    uint8_t fg = 7;
+    uint8_t bg = 0;
+
+    if(!out)
+    {
+        return -1;
+    }
+
+    console_get_colors_kernel(&fg, &bg);
+    *out = (uint32_t)fg | ((uint32_t)bg << 8);
+
+    return 0;
+}
+
 static int system_putchar(int ch)
 {
     putch((char)ch & 0xFF);
@@ -393,6 +414,18 @@ int system_call_dispatch(struct syscall_frame *f)
         {
             ret = system_close_dir(arg0);
 
+            break;
+        }
+        case SYSTEM_CONSOLE_SET_COLOR:
+        {
+            ret = system_console_set_color(arg0, arg1);
+            
+            break;
+        }
+        case SYSTEM_CONSOLE_GET_COLOR:
+        {
+            ret = system_console_get_color((uint32_t*)arg0);
+            
             break;
         }
         default:

@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <dirent.h>
+#include <console.h>
 
 enum
 {
@@ -13,77 +15,158 @@ enum
 static void hr(char ch)
 {
     int width = 1 + TYPE_W + 1 + SIZE_W + 2 + NAME_W + 4;
-    
-    for (int i = 0; i < width; i++) 
-    { 
-        putchar(ch); 
+    for (int i = 0; i < width; i++)
+    {
+        putchar(ch);
     }
-    
     putchar('\n');
+}
+
+static int is_dir(const struct dirent *e)
+{
+#ifdef DT_DIR
+    if (e->d_type == DT_DIR) return 1;
+#endif
+    if (e->d_name[0] == '.' && (e->d_name[1] == '\0' || (e->d_name[1] == '.' && e->d_name[2] == '\0'))) return 1;
+    return e->d_size == 0;
+}
+
+static unsigned char to_lower_char(unsigned char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A' + 'a';
+    return c;
+}
+
+static int icmp(const char *a, const char *b)
+{
+    while (*a && *b)
+    {
+        unsigned char ca = to_lower_char((unsigned char)*a);
+        unsigned char cb = to_lower_char((unsigned char)*b);
+        if (ca != cb) return (ca < cb) ? -1 : 1;
+        a++;
+        b++;
+    }
+    if (*a) return 1;
+    if (*b) return -1;
+    return 0;
+}
+
+static void sort_by_name(struct dirent *arr, size_t n)
+{
+    for (size_t i = 1; i < n; i++)
+    {
+        struct dirent key = arr[i];
+        size_t j = i;
+        while (j > 0 && icmp(arr[j - 1].d_name, key.d_name) > 0)
+        {
+            arr[j] = arr[j - 1];
+            j--;
+        }
+        arr[j] = key;
+    }
 }
 
 int main(int argc, char *argv[])
 {
     const char *path = (argc > 1 && argv[1] && argv[1][0]) ? argv[1] : ".";
-
     DIR *d = opendir(path);
-
-    if(!d)
+    if (!d)
     {
         printf("ls: There is no directory %s!\n", path);
-
         return 1;
     }
 
-    struct dirent ent;
+    size_t cap = 64;
+    size_t n = 0;
+    struct dirent *entries = malloc(cap * sizeof(*entries));
+    if (!entries)
+    {
+        closedir(d);
+        return 1;
+    }
+
+    while (1)
+    {
+        struct dirent ent;
+        int r = readdir(d, &ent);
+        if (r > 0) break;
+        if (r < 0)
+        {
+            free(entries);
+            closedir(d);
+            return 1;
+        }
+        if (n == cap)
+        {
+            cap *= 2;
+            struct dirent *tmp = realloc(entries, cap * sizeof(*tmp));
+            if (!tmp)
+            {
+                free(entries);
+                closedir(d);
+                return 1;
+            }
+            entries = tmp;
+        }
+        entries[n++] = ent;
+    }
+
+    closedir(d);
+
+    struct dirent *dirs = malloc(n * sizeof(*dirs));
+    struct dirent *files = malloc(n * sizeof(*files));
+    if (!dirs || !files)
+    {
+        free(entries);
+        free(dirs);
+        free(files);
+        return 1;
+    }
+
+    size_t nd = 0, nf = 0;
+    for (size_t i = 0; i < n; i++)
+    {
+        if (is_dir(&entries[i])) dirs[nd++] = entries[i];
+        else files[nf++] = entries[i];
+    }
+
+    if (nd > 1) sort_by_name(dirs, nd);
+    if (nf > 1) sort_by_name(files, nf);
 
     const char *tmp_path = path;
-
-    while(*tmp_path == '/' || *tmp_path == '.')
-    {
-        tmp_path++;
-    }
+    while (*tmp_path == '/' || *tmp_path == '.') tmp_path++;
 
     printf("Content of %s/\n", tmp_path);
     hr('=');
-    printf(" %-12s %10s  %s\n", "Type", "Size", "Name");
+    printf(" %-12s %10s  %s\n", "Type", "Size (bytes)", "Name");
     hr('-');
 
-    while(1)
+    for (size_t i = 0; i < nd; i++)
     {
-        int read = readdir(d, &ent);
+        uint8_t c;
+        console_get_fgcolor(&c);
+        console_set_fgcolor(CONSOLE_COLOR_YELLOW);
+        printf(" %-12s ", "DIRECTORY");
+        console_set_fgcolor(c);
+        printf(" %10u  %s/\n", (unsigned)dirs[i].d_size, dirs[i].d_name);
+    }
 
-        if(read > 0)
-        {
-            break;
-        }
-        if(read < 0)
-        {
-            printf("ls: Read Error!\n");
-            closedir(d);
-
-            return 1;
-        }
-        
-        if(ent.d_type == DT_DIR)
-        {
-            const char *dir_name = ent.d_name;
-
-            while(*dir_name == '/')
-            {
-                dir_name++;
-            }
-            
-            printf(" %-12s %10u  %s/\n", "<DIRECTORY>", (unsigned)ent.d_size, dir_name);
-        }
-        else if(ent.d_type == DT_REG)
-        {
-            printf(" %-12s %10u  %s\n", "<FILE>", (unsigned)ent.d_size, ent.d_name);
-        }
+    for (size_t i = 0; i < nf; i++)
+    {
+        uint8_t c;
+        console_get_fgcolor(&c);
+        console_set_fgcolor(CONSOLE_COLOR_CYAN);
+        printf(" %-12s ", "FILE");
+        console_set_fgcolor(c);
+        printf(" %10u  %s\n", (unsigned)files[i].d_size, files[i].d_name);
     }
 
     hr('-');
-    closedir(d);
 
+    free(entries);
+    free(dirs);
+    free(files);
     return 0;
 }
+

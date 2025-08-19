@@ -80,8 +80,8 @@ int copy_from_user(void *kdst, const void *usrc, size_t n)
     const uint8_t *us;
     size_t i;
 
-    uintptr_t ra = (uintptr_t)__builtin_return_address(0);
 #ifdef DIFF_DEBUG
+    uintptr_t ra = (uintptr_t)__builtin_return_address(0);
     printf("[USERCOPY] in IRQ (from_user) caller=%p, src=%p, n=%zu\n", (void*)ra, usrc, n);
 #endif
     

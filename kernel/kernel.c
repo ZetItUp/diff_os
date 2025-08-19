@@ -52,7 +52,7 @@ int keyboard_pop(void);
 static sys_info_t system;
 
 char bg = BG_BLACK;
-char fg = FG_GRAY;
+char fg = FG_BLUE;
 
 void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
 {
@@ -91,7 +91,6 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
     uint8_t h = vga_cell_height();
     vga_cursor_enable(0, h - 1);
     init_filesystem();
-
 
     display_banner();
     display_sys_info();
@@ -275,21 +274,12 @@ void display_banner()
     int x, y;
     get_cursor(&x, &y);
     set_pos(0, 0);
-    uint32_t background = 0xFF11427D;
-    vbe_text_set_colors(0xFFF7C61B, bg);
-    //set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
+    set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
     printf(" D");
-    //set_color(MAKE_COLOR(FG_CYAN, BG_BLACK));
-    vbe_text_set_colors(0xFFC98E27, bg);
+    set_color(MAKE_COLOR(FG_CYAN, BG_BLACK));
     printf("ifferent ");
-    //set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
-    vbe_text_set_colors(0xFFF7C61B, bg);
+    set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
     printf("OS");
-    
-    for(int i = 14; i < 129; i++)
-    {
-        printf(" ");
-    }
-    vbe_text_set_colors(0xFFDDDDDD, background);
+    set_color(MAKE_COLOR(FG_GRAY, BG_BLACK));    
     set_pos(x, y);
 }

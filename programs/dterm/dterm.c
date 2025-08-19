@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <dirent.h>
 #include <syscall.h>
+#include <console.h>
 
 static const char *g_shell_name   = "Different Terminal";
 static const unsigned g_ver_major = 1;
@@ -187,6 +188,10 @@ static int bi_help(int argc, char **argv)
 
 static int bi_echo(int argc, char **argv)
 {
+    uint8_t fg_tmp = 0;
+    console_get_fgcolor(&fg_tmp);
+    console_set_fgcolor(CONSOLE_COLOR_CYAN);
+
     for (int i = 1; i < argc; i++) 
     {
         if (i > 1)
@@ -196,7 +201,8 @@ static int bi_echo(int argc, char **argv)
 
         printf("%s", argv[i]);
     }
-    
+
+    console_set_fgcolor(fg_tmp);
     putchar('\n');
     
     return 0;

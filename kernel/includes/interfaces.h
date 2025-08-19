@@ -61,6 +61,10 @@ void keyboard_drain(void);
 int keyboard_trygetch(uint8_t *out);
 uint8_t keyboard_getch(void);
 
+// Console
+int console_set_colors_kernel(uint8_t fg, uint8_t bg);
+void console_get_colors_kernel(uint8_t *out_fg, uint8_t *out_bg);
+
 // VBE
 extern vbe_exports_t g_vbe;
 

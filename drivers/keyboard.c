@@ -37,7 +37,6 @@ static volatile kernel_exports_t *kernel = 0;
 
 static kb_cmd_t kb_cmdq[KB_CMD_QUEUE_SIZE] = {0};
 static int kb_q_head = 0;
-static int kb_q_tail = 0;
 static int kb_q_count = 0;
 static kb_cmdq_state_t kb_cmdq_state = KBQ_IDLE;
 static int kb_resend_limit = 3;
@@ -45,18 +44,6 @@ static int kb_resend_limit = 3;
 static volatile uint8_t kb_fifo[KB_FIFO_SIZE];
 static volatile unsigned kb_head = 0;
 static volatile unsigned kb_tail = 0;
-
-static void reset_keyboard_controller(void) 
-{
-    kernel->outb(KEYBOARD_COMMAND, 0xAD); // Disable keyboard
-    kernel->outb(KEYBOARD_COMMAND, 0xAE); // Re-enable keyboard
-
-    // Flush any pending data
-    while (kernel->inb(KEYBOARD_STATUS) & 0x01) 
-    {
-        (void)kernel->inb(KEYBOARD_DATA);
-    }
-}
 
 static inline int keyboard_fifo_empty(void)
 {
@@ -157,30 +144,6 @@ static void kbq_start_next(void)
 
     kb_cmdq_state = KBQ_SEND;
     kbq_send_cmd(&kb_cmdq[kb_q_head]);
-}
-
-static int kbq_enqueue(uint8_t cmd, int has_data, uint8_t data)
-{
-    if (kb_q_count >= KB_CMD_QUEUE_SIZE)
-    {
-        return -1;
-    }
-
-    kb_cmd_t *queue = &kb_cmdq[kb_q_tail];
-    queue->command = cmd;
-    queue->has_data = has_data;
-    queue->data = data;
-    queue->retries = 0;
-
-    kb_q_tail = (kb_q_tail + 1) % KB_CMD_QUEUE_SIZE;
-    kb_q_count++;
-
-    if (kb_cmdq_state == KBQ_IDLE)
-    {
-        kbq_start_next();
-    }
-
-    return 0;
 }
 
 static void i8042_service(void)
@@ -367,6 +330,9 @@ void ddf_driver_exit(void)
 __attribute__((section(".text")))
 void ddf_driver_irq(unsigned irq, void *context)
 {
+    (void)irq;
+    (void)context;
+    
     while (kernel->inb(KEYBOARD_STATUS) & 0x01)
     {
         uint8_t val = kernel->inb(KEYBOARD_DATA);

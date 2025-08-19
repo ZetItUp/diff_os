@@ -26,6 +26,8 @@ enum
     SYSTEM_DIR_OPEN = 14,
     SYSTEM_DIR_READ = 15,
     SYSTEM_DIR_CLOSE = 16,
+    SYSTEM_CONSOLE_SET_COLOR = 17,
+    SYSTEM_CONSOLE_GET_COLOR = 18,
 };
 
 static inline __attribute__((always_inline))
@@ -165,4 +167,14 @@ static inline int system_read_dir(int handle, struct dirent *entry)
 static inline int system_close_dir(int handle)
 {
     return do_sys(SYSTEM_DIR_CLOSE, handle, 0, 0, 0);
+}
+
+static inline int system_console_set_color(uint32_t fg, uint32_t bg)
+{
+    return do_sys(SYSTEM_CONSOLE_SET_COLOR, fg, bg, 0, 0);
+}
+
+static inline int system_console_get_color(uint32_t *out)
+{
+    return do_sys(SYSTEM_CONSOLE_GET_COLOR, (int)(uintptr_t)out, 0, 0, 0);
 }
