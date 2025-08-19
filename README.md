@@ -34,7 +34,7 @@ The ways i've done some stuff in it may seem weird, but im learning.
 * Cross-compiler for GCC i386
 * Python3
 * Binutils
-* QEMU 6 or 7, not newer
+* QEMU
 
 ### Preperations
 Open the Makefile in the root folder and make sure the paths and programs points to your builds.
