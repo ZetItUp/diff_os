@@ -33,7 +33,8 @@ BOOT_STAGE2 = boot/boot_stage2.asm
 
 ASM_SRC = \
 	kernel/arch/x86_64/cpu/isr_stub.asm \
-	kernel/arch/x86_64/cpu/usermode.asm
+	kernel/arch/x86_64/cpu/usermode.asm \
+	kernel/arch/x86_64/cpu/context_switch.asm
 	
 KERNEL_SRC = \
     kernel/library/string.c \
@@ -52,6 +53,9 @@ KERNEL_SRC = \
 	kernel/system/syscall.c \
 	kernel/system/syscall_dir.c \
 	kernel/system/syscall_file.c \
+	kernel/system/threads.c \
+	kernel/system/scheduler.c \
+	kernel/system/spinlock.c \
 	kernel/dex/dex_loader.c \
 	kernel/dex/exl_loader.c \
 	kernel/kernel.c \

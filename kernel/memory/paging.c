@@ -30,6 +30,9 @@ __attribute__((aligned(4096))) uint32_t kernel_page_tables[64][PAGE_ENTRIES];
 #define USER_MAX 0x7FFF0000u
 #endif
 
+extern char __heap_start;
+extern char __heap_end;
+
 static uint32_t *block_bitmap;
 static uint32_t max_blocks;                        /* 4MB “blocks” for 4MB pages */
 static uint32_t phys_page_bitmap[(MAX_PHYS_PAGES + 31) / 32]; /* 4KB pages */
@@ -250,35 +253,62 @@ static void init_phys_bitmap(void)
 void init_paging(uint32_t ram_mb)
 {
     max_blocks = ram_mb / 4;
-    if (max_blocks > MAX_BLOCKS) { max_blocks = MAX_BLOCKS; }
+    
+    if (max_blocks > MAX_BLOCKS) 
+    { 
+        max_blocks = MAX_BLOCKS; 
+    }
 
     static uint32_t bitmap_storage[(MAX_BLOCKS + 31) / 32];
     block_bitmap = bitmap_storage;
 
-    /* Reset PD and 4MB block bitmap */
-    for (int i = 0; i < 1024; i++) { page_directory[i] = 0; }
-    for (int i = 0; i < (int)((max_blocks + 31) / 32); i++) { block_bitmap[i] = 0; }
+    for (int i = 0; i < 1024; i++) 
+    { 
+        page_directory[i] = 0; 
+    }
+    
+    for (int i = 0; i < (int)((max_blocks + 31) / 32); i++) 
+    { 
+        block_bitmap[i] = 0; 
+    }
 
     init_phys_bitmap();
 
     alloc_page_table(0, kernel_page_tables[0]);
 
-    /* Identity-map first 8MB via 4KB pages (devices, kernel, etc.). */
-    identity_map_range(0x00000000, 0x00800000);
-    pt_next = 2;
-    set_block(0);
-    set_block(1);
+    uint32_t heap_end = (uint32_t)(uintptr_t)&__heap_end;
+    uint32_t id_end = ALIGN_UP(heap_end, PAGE_SIZE_4KB);
+    uint32_t id_end_plus = id_end + PAGE_SIZE_4KB;
 
-    /* Load CR3 */
+    identity_map_range(0x00000000u, id_end_plus);
+
+    uint32_t pages_reserved = id_end_plus / PAGE_SIZE_4KB;
+    uint32_t pages_already = (BLOCK_SIZE / PAGE_SIZE_4KB);
+    
+    if (pages_reserved > MAX_PHYS_PAGES) 
+    { 
+        pages_reserved = MAX_PHYS_PAGES; 
+    }
+    
+    for (uint32_t i = pages_already; i < pages_reserved; i++)
+    {
+        set_phys_page((int)i);
+    }
+
+    int blocks_reserved = (int)((id_end_plus + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    if (blocks_reserved > (int)MAX_BLOCKS) { blocks_reserved = (int)MAX_BLOCKS; }
+    for (int b = 0; b < blocks_reserved; b++)
+    {
+        set_block(b);
+    }
+
     asm volatile("mov %0, %%cr3" :: "r"(&page_directory));
 
-    /* Enable PSE (4MB pages) in CR4 */
     uint32_t cr4;
     asm volatile("mov %%cr4, %0" : "=r"(cr4));
     cr4 |= 0x10;
     asm volatile("mov %0, %%cr4" :: "r"(cr4));
 
-    /* Enable paging in CR0 */
     uint32_t cr0;
     asm volatile("mov %%cr0, %0" : "=r"(cr0));
     cr0 |= 0x80000000u;

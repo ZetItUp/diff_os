@@ -389,77 +389,66 @@ fail_image:
 
     return -1;
 }
-
-void dex_run(const FileTable *ft, const char *path, int argc, char **argv)
+int dex_run(const FileTable* ft, const char* path, int argc, char** argv)
 {
-    int idx = find_entry_by_path(ft, path);
-
-    if (idx < 0)
+    int file_index = find_entry_by_path(ft, path);
+    if (file_index < 0)
     {
         printf("[DEX] ERROR: File not found: %s\n", path);
-
-        return;
+        return -1;
     }
 
-    const FileEntry *fe = &ft->entries[idx];
-
-    if (!fe->file_size_bytes)
+    const FileEntry* file_entry = &ft->entries[file_index];
+    if (!file_entry->file_size_bytes)
     {
         printf("[DEX] ERROR: Empty file: %s\n", path);
-
-        return;
+        return -2;
     }
 
-    uint8_t *buf = (uint8_t*)kmalloc(fe->file_size_bytes);
-
-    if (!buf)
+    uint8_t* buffer = (uint8_t*)kmalloc(file_entry->file_size_bytes);
+    if (!buffer)
     {
-        printf("[DEX] ERROR: Unable to allocate %u bytes for the program!\n", fe->file_size_bytes);
-
-        return;
+        printf("[DEX] ERROR: Unable to allocate %u bytes for the program!\n", file_entry->file_size_bytes);
+        return -3;
     }
 
-    if (read_file(ft, path, buf) < 0)
+    if (read_file(ft, path, buffer) < 0)
     {
         printf("[DEX] ERROR: Failed to read file: %s\n", path);
-        kfree(buf);
-
-        return;
+        kfree(buffer);
+        return -4;
     }
 
     dex_executable_t dex;
-
-    if (dex_load(buf, fe->file_size_bytes, &dex) == 0)
+    int load_rc = dex_load(buffer, file_entry->file_size_bytes, &dex);
+    if (load_rc != 0)
     {
-        uint32_t user_sp = build_user_stack(path, argc, argv);
-
-        if (!user_sp)
-        {
-            kfree(buf);
-
-            return;
-        }
-
-        uint8_t *stub = build_user_exit_stub((uint32_t)dex.dex_entry);
-
-        if (!stub)
-        {
-            printf("[DEX] ERROR: No stub found!\n");
-            kfree(buf);
-
-            return;
-        }
-
-#ifdef DIFF_DEBUG
-        paging_dump_range(user_sp - 64, 128);
-        paging_check_user_range(user_sp - 64, 128);
-        DDBG("[DEX] jump to stub=%p, entry=%p, esp=%08x\n", stub, dex.dex_entry, user_sp);
-#endif
-
-        paging_update_flags((uint32_t)stub, 64, PAGE_PRESENT | PAGE_USER, 0);
-        enter_user_mode((uint32_t)stub, user_sp);
+        kfree(buffer);
+        return load_rc; // negative error from dex_load
     }
 
-    kfree(buf);
+    uint32_t user_sp = build_user_stack(path, argc, argv);
+    if (!user_sp)
+    {
+        kfree(buffer);
+        return -5;
+    }
+
+    uint8_t* stub = build_user_exit_stub((uint32_t)dex.dex_entry);
+    if (!stub)
+    {
+        printf("[DEX] ERROR: No stub found!\n");
+        kfree(buffer);
+        return -6;
+    }
+
+    paging_update_flags((uint32_t)stub, 64, PAGE_PRESENT | PAGE_USER, 0);
+
+    // Kör användarprogrammet; när det avslutas återvänder vi hit
+    enter_user_mode((uint32_t)stub, user_sp);
+
+    // Just nu saknas en riktig exit-kod från användarland -> returnera 0
+    kfree(buffer);
+    return 0;
 }
 

@@ -14,7 +14,7 @@ typedef struct block_header
 
 // Align sizes to 4 bytes
 #define ALIGN4(x)   (((((x) - 1) >> 2) << 2) + 4)
-#define HEAP_BLOCK_SIZE  sizeof(block_header_t)
+#define HEAP_BLOCK_SIZE  ALIGN(sizeof(block_header_t))
 
 extern block_header_t *heap_base;
 extern char *heap_limit;

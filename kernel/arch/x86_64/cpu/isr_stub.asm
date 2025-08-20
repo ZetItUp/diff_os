@@ -186,7 +186,7 @@ system_call_stub:
     call system_call_dispatch
     add  esp, 4
 
-    mov [esp + 4*7], eax
+    ;mov [esp + 4*7], eax
 
     popad
     pop gs

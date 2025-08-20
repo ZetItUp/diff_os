@@ -2,3 +2,4 @@
 
 hello=/programs/hello/hello.dex
 ls=/programs/ls/ls.dex
+ttest=/programs/ttest/ttest.dex

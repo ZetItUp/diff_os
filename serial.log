@@ -5,21 +5,71 @@
 
 Different Terminal (Version 1.0)
 
-/> hello
-Hello World!
+/> ttest
+Thread and Timer Test Program
+Thread ID = 2
+[TEST] clock_gettime: 1.640 s
+[TEST] yield burst, tid=2
+  yield 0
+  yield 1
+  yield 2
+  yield 3
+  yield 4
+[TEST] msleep(100) at 1640 ms
+[TEST] woke at      1740 ms  (+100 ms)
+[TEST] msleep(250) at 1740 ms
+[TEST] woke at      1990 ms  (+250 ms)
+[TEST] usleep(5000) at 1990 ms
+[TEST] woke at      2000 ms  (~5000 us, +10 ms)
+[TEST] usleep(20000) at 2000 ms
+[TEST] woke at      2020 ms  (~20000 us, +20 ms)
+[TEST] nanosleep(123 ms) at 2020 ms
+[TEST] woke at           2150 ms  (+130 ms)
+[Test] Done!
 
-/> s cd system
+/> 
+/> tet  test
+Thread and Timer Test Program
+Thread ID = 2
+[TEST] clock_gettime: 15.330 s
+[TEST] yield burst, tid=2
+  yield 0
+  yield 1
+  yield 2
+  yield 3
+  yield 4
+[TEST] msleep(100) at 15380 ms
+[TEST] woke at      15480 ms  (+100 ms)
+[TEST] msleep(250) at 15480 ms
+[TEST] woke at      15730 ms  (+250 ms)
+[TEST] usleep(5000) at 15730 ms
+[TEST] woke at      15740 ms  (~5000 us, +10 ms)
+[TEST] usleep(20000) at 15740 ms
+[TEST] woke at      15760 ms  (~20000 us, +20 ms)
+[TEST] nanosleep(123 ms) at 15760 ms
+[TEST] woke at           15900 ms  (+140 ms)
+[Test] Done!
 
-/system> ls
-Content of system/
-==================================================
- Type         Size (bytes)  Name
---------------------------------------------------
- DIRECTORY              0  drivers/
- DIRECTORY              0  exls/
- FILE                  88  commands.map
- FILE               57724  kernel.bin
- FILE                 184  sys.cfg
---------------------------------------------------
+/> ttest
+Thread and Timer Test Program
+Thread ID = 2
+[TEST] clock_gettime: 27.060 s
+[TEST] yield burst, tid=2
+  yield 0
+  yield 1
+  yield 2
+  yield 3
+  yield 4
+[TEST] msleep(100) at 27130 ms
+[TEST] woke at      27230 ms  (+100 ms)
+[TEST] msleep(250) at 27230 ms
+[TEST] woke at      27490 ms  (+260 ms)
+[TEST] usleep(5000) at 27490 ms
+[TEST] woke at      27510 ms  (~5000 us, +20 ms)
+[TEST] usleep(20000) at 27510 ms
+[TEST] woke at      27540 ms  (~20000 us, +30 ms)
+[TEST] nanosleep(123 ms) at 27540 ms
+[TEST] woke at           27680 ms  (+140 ms)
+[Test] Done!
 
-/system> 
+/> 

@@ -38,7 +38,7 @@ SECTIONS
     }
 
     __heap_start = .;
-    . = . + 1M;     /* 1MB Heap */
+    . = . + 8M;     /* 8MB Heap */
     __heap_end = .;
     /DISCARD/ : { *(.comment .note .eh_frame) }
 }

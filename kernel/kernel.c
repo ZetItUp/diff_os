@@ -4,7 +4,6 @@
 #include "paging.h"
 #include "console.h"
 #include "serial.h"
-#include "idt.h"
 #include "irq.h"
 #include "pic.h"
 #include "io.h"
@@ -19,50 +18,57 @@
 #include "drivers/driver.h"
 #include "drivers/ata.h"
 #include "dex/dex.h"
+#include "system/threads.h"
+#include "system/scheduler.h"
+
 
 __attribute__((naked, section(".text.start")))
 void _start(void)
 {
     asm volatile(
-        // Fetch arguments from the old stack
-        "mov (%esp), %eax\n\t"      // EAX = bios_mem_map
-        "mov 4(%esp), %edx\n\t"     // EDX = mem_entry_count
-
-        "mov $0x20000, %esp\n\t"    // Place a new stack
-        "push %edx\n\t"             // mem_entry_count
-        "push %eax\n\t"             // bios_mem_map
-
+        "mov (%esp), %eax\n\t"
+        "mov 4(%esp), %edx\n\t"
+        "mov $0x20000, %esp\n\t"
+        "push %edx\n\t"
+        "push %eax\n\t"
         "call kmain\n\t"
         "cli\n\t"
         "hlt\n\t"
     );
 }
 
-void display_banner();
-void display_sys_info();
-void print_time();
-void test_ata_read();
-void do_tests();
+// Types
 
 extern char __heap_start;
 extern char __heap_end;
 
-int keyboard_pop(void);
+// State
 
 static sys_info_t system;
+static char background = BG_BLACK;
+static char foreground = FG_GRAY;
 
-char bg = BG_BLACK;
-char fg = FG_BLUE;
+// Prototypes
 
-void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
+static void init_thread(void* argument);
+void display_banner(void);
+void display_sys_info(void);
+void test_ata_read(void);
+void do_tests(void);
+
+// Entry
+
+
+// Kernel
+
+void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
 {
     serial_init();
-    
-    set_color(MAKE_COLOR(fg, bg));
-    clear();
-    
-    uint32_t total_ram = 0;
 
+    set_color(MAKE_COLOR(foreground, background));
+    clear();
+
+    uint32_t total_ram = 0;
     for (uint32_t i = 0; i < mem_entry_count; i++)
     {
         if (bios_mem_map[i].type == 1 && bios_mem_map[i].base_high == 0)
@@ -70,85 +76,108 @@ void kmain(e820_entry_t *bios_mem_map, uint32_t mem_entry_count)
             total_ram += bios_mem_map[i].length_low;
         }
     }
-
     uint32_t ram_mb = (uint32_t)(total_ram / (1024 * 1024));
     system.ram_mb = ram_mb;
-
-    // Initialize paging and heap
+    
     init_paging(ram_mb);
     init_heap(&__heap_start, &__heap_end);
 
-    // Initialize IDT
     idt_init();
-
-    // Remap PIC
     pic_remap(0x20, 0x28);
-
-    // Initialize IRQ
     irq_init();
+    timer_install();
+    scheduler_init();
+    thread_create(init_thread, NULL, 4096);
 
+    asm volatile("sti");
+    scheduler_start();
+
+    for (;;)
+    {
+    }
+}
+
+// Init
+
+static void init_thread(void* argument)
+{
+    (void)argument;
+    asm volatile("sti"); 
     vga_capture_rom_font_early();
     uint8_t h = vga_cell_height();
     vga_cursor_enable(0, h - 1);
+    
     init_filesystem();
-
     display_banner();
     display_sys_info();
+
+    char* system_config_file = "system/sys.cfg";
+    load_drivers(file_table, system_config_file);
     
-    asm volatile("sti");
-    char *sys_cfg_file = "system/sys.cfg";
-    load_drivers(file_table, sys_cfg_file);
-
-    char *shell_path = find_shell_path(file_table, sys_cfg_file);
-    if (shell_path)
+    for (;;)
     {
-        dex_run(file_table, shell_path, 0, 0);
-        kfree(shell_path);
-    }
-    else
-    {
-        printf("[ERROR] No shell was set!\n");
-    }
-
-    // test_ata_read();
-    // do_tests();
-
-    while (1)
-    {
-        // print_time();
+        char* shell_path = find_shell_path(file_table, system_config_file);
+        if (shell_path)
+        {
+            int result = dex_run(file_table, shell_path, 0, 0);
+            kfree(shell_path);
+            printf("[init] shell exited with code %d, restarting in 1000 ms...\n", result);
+        }
+        else
+        {
+            printf("[ERROR] No shell was set! Retrying in 1000 ms...\n");
+        }
+        
+        sleep_ms(1000);
     }
 }
 
-void display_sys_info()
+// UI
+
+void display_banner(void)
 {
-    // set_color(MAKE_COLOR(FG_YELLOW, BG_BLACK));
-    // printf("\tS Y S T E M   I N F O\n");
-    //set_color(MAKE_COLOR(fg, bg));
+    int x;
+    int y;
+    get_cursor(&x, &y);
+    set_pos(0, 0);
+    set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
+    printf(" D");
+    set_color(MAKE_COLOR(FG_CYAN, BG_BLACK));
+    printf("ifferent ");
+    set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
+    printf("OS");
+    set_color(MAKE_COLOR(FG_GRAY, BG_BLACK));
+    set_pos(x, y);
+}
+
+void display_sys_info(void)
+{
     printf("\n[RAM] Available Memory: %u MB\n", system.ram_mb);
 }
 
-void do_tests()
+// Tests
+
+void do_tests(void)
 {
     printf("TEST 1: Testing 4MB mapping...\n");
-    map_page(0x400000, 0x400000); // Map 4 MB at virt 4MB
+    map_page(0x400000, 0x400000);
     printf("\t\tMapped 4MB region at 0x400000\n");
     unmap_page(0x400000);
     printf("\t\tUnmapped 4MB region at 0x400000\n");
 
     printf("TEST 2: Testing 4KB mapping...\n");
-    map_page(0x800000, 8192); // Map 8 KB at virt 8MB
+    map_page(0x800000, 8192);
     printf("\t\tMapped 8KB region at 0x800000...\n");
     unmap_page(0x800000);
     printf("\t\tUnmapped 8KB region at 0x800000\n");
 
     printf("TEST 3: Testing physical page alloc/free...\n");
-    uint32_t p1 = alloc_phys_page();
-    uint32_t p2 = alloc_phys_page();
-
-    printf("\t\tPhys1: 0x%x\n", p1);
-    printf("\t\tPhys2: 0x%x\n", p2);
-    free_phys_page(p1);
-    free_phys_page(p2);
+    uint32_t phys1 = alloc_phys_page();
+    uint32_t phys2 = alloc_phys_page();
+    printf("\t\tPhys1: 0x%x\n", phys1);
+    printf("\t\tPhys2: 0x%x\n", phys2);
+    free_phys_page(phys1);
+    free_phys_page(phys2);
     printf("\t\tFreed both physical pages\n");
 
     printf("TEST 4: Stress test: map 100 small pages...\n");
@@ -156,7 +185,6 @@ void do_tests()
     {
         map_page(0xA00000 + (i * 0x1000), 4096);
     }
-
     printf("\t\tUnmapping 100 small pages...\n");
     for (int i = 0; i < 100; i++)
     {
@@ -164,36 +192,29 @@ void do_tests()
     }
 
     printf("TEST 5: Testing mixed mapping...\n");
-    // Map 4MB block
     map_page(0xC00000, 0x400000);
     printf("\t\tMapped 4MB at 0xC00000...\n");
-
-    // Map small pages right after
     for (int i = 0; i < 5; i++)
     {
         map_page(0x1000000 + (i * 0x1000), 4096);
     }
-
     printf("\t\tUnmapping mixed...\n");
     unmap_page(0xC00000);
-
     for (int i = 0; i < 5; i++)
     {
         unmap_page(0x1000000 + (i * 0x1000));
     }
 
     printf("TEST 6: Testing alloc/free region...\n");
-    alloc_region(0x2000000, 8); // 8MB = 2x 4MB blocks
+    alloc_region(0x2000000, 8);
     printf("\t\tRegion allocated at 0x2000000\n");
     free_region(0x2000000, 8);
     printf("\t\tRegion freed.\n");
-
-    // Reallocate same region
     alloc_region(0x2000000, 8);
     printf("\t\tRegion reallocated successfully.\n");
     free_region(0x2000000, 8);
 
-    printf("TEST 7: Testing fragmentation...");
+    printf("TEST 7: Testing fragmentation...\n");
     map_page(0x3000000, 0x400000);
     map_page(0x7000000, 0x400000);
     unmap_page(0x3000000);
@@ -205,46 +226,37 @@ void do_tests()
 
 void test_ata_read(void)
 {
-    SuperBlock sb;
-
-    if (read_superblock(&sb) != 0)
+    SuperBlock superblock;
+    if (read_superblock(&superblock) != 0)
     {
         printf("Could not read superblock\n");
-
         return;
     }
 
     FileTable table;
-
-    if (disk_read(sb.file_table_sector, sb.file_table_size, &table) != 0)
+    if (disk_read(superblock.file_table_sector, superblock.file_table_size, &table) != 0)
     {
         printf("Could not read file table\n");
-
         return;
     }
 
-    int idx = find_entry_by_path(&table, "/system/kernel.bin");
-
-    if (idx == -1)
+    int index = find_entry_by_path(&table, "/system/kernel.bin");
+    if (index == -1)
     {
         printf("kernel.bin not found!\n");
-
         return;
     }
 
-    FileEntry *fe = &table.entries[idx];
+    FileEntry* entry = &table.entries[index];
 
     uint8_t buffer[512];
-
-    if (ata_read(fe->start_sector, 1, buffer) == 0)
+    if (ata_read(entry->start_sector, 1, buffer) == 0)
     {
-        printf("kernel.bin start sector: %d\nFirst 16 bytes:\n", fe->start_sector);
-
+        printf("kernel.bin start sector: %d\nFirst 16 bytes:\n", entry->start_sector);
         for (int i = 0; i < 16; i++)
         {
             printf("%x ", buffer[i]);
         }
-
         printf("\n");
     }
     else
@@ -253,33 +265,3 @@ void test_ata_read(void)
     }
 }
 
-void print_time()
-{
-    if (timer_tick_updated == true)
-    {
-        timer_tick_updated = false;
-
-        set_x(39);
-        set_y(12);
-
-        char buffer[12];
-
-        //itoa(timer_ticks, buffer, 10);
-        printf("%s", buffer);
-    }
-}
-
-void display_banner()
-{
-    int x, y;
-    get_cursor(&x, &y);
-    set_pos(0, 0);
-    set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
-    printf(" D");
-    set_color(MAKE_COLOR(FG_CYAN, BG_BLACK));
-    printf("ifferent ");
-    set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
-    printf("OS");
-    set_color(MAKE_COLOR(FG_GRAY, BG_BLACK));    
-    set_pos(x, y);
-}

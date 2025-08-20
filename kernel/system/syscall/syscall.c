@@ -4,12 +4,15 @@
 #include "idt.h"
 #include "system/syscall.h"
 #include "system/usercopy.h"
+#include "system/scheduler.h"
+#include "system/threads.h"
 #include "console.h"
 #include "stdio.h"
 #include "paging.h"
 #include "heap.h"
 #include "dex/dex.h"
 #include "diff.h"
+#include "timer.h"
 
 #define MAX_EXEC_NEST 8
 #define MAX_ARG_LEN   128
@@ -195,6 +198,7 @@ int system_call_dispatch(struct syscall_frame *f)
     (void)arg3;
 
     int ret = -1;
+    int regs_set = 0;
 
     switch(num)
     {
@@ -428,6 +432,39 @@ int system_call_dispatch(struct syscall_frame *f)
             
             break;
         }
+        case SYSTEM_THREAD_YIELD:
+        {
+            thread_yield();
+            ret = 0;
+
+            break;
+        }
+        case SYSTEM_THREAD_SLEEP_MS:
+        {
+            uint32_t ms = (uint32_t)arg0;
+            sleep_ms(ms);
+            ret = 0;
+
+            break;
+        }
+        case SYSTEM_TIME_MS:
+        {
+            uint64_t now = timer_now_ms();
+            f->eax = (uint32_t)(now & 0xFFFFFFFF);
+            f->edx = (uint32_t)(now >> 32);
+    
+            regs_set = 1;
+            ret = 0;
+
+            break;
+        }
+        case SYSTEM_THREAD_GET_ID:
+        {
+            thread_t *t = current_thread();
+            ret = t ? t->thread_id : -1;
+
+            break;
+        }
         default:
         {
             puts("[System Call] Unknown number: ");
@@ -439,7 +476,11 @@ int system_call_dispatch(struct syscall_frame *f)
         }
     }
 
-    f->eax = (uint32_t)ret;
+    if(!regs_set)
+    {
+        f->eax = (uint32_t)ret;
+        f->edx = 0;
+    }
 
     return ret;
 }

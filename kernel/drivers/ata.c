@@ -28,6 +28,7 @@ static int ata_wait_busy_clear(void)
         }
     }
 
+    printf("[ATA] timeout: BSY stuck\n");
     return -1;
 }
 
@@ -43,7 +44,7 @@ static int ata_wait_drq_set(void)
             return 0;
         }
     }
-
+    printf("[ATA] timeout: DRQ not set\n");
     return -1;
 }
 

@@ -28,17 +28,38 @@ enum
     SYSTEM_DIR_CLOSE = 16,
     SYSTEM_CONSOLE_SET_COLOR = 17,
     SYSTEM_CONSOLE_GET_COLOR = 18,
+    SYSTEM_THREAD_YIELD = 19,
+    SYSTEM_THREAD_SLEEP_MS = 20,
+    SYSTEM_TIME_MS = 21,
+    SYSTEM_THREAD_GET_ID = 22,
 };
 
-static inline __attribute__((always_inline))
-int do_sys(int n, int a0, int a1, int a2, int a3)
+static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
+{
+    uint32_t lo, hi;
+    asm volatile(
+        "push %%ebx\n\t"
+        "push %%esi\n\t"
+        "push %%edi\n\t"
+        "mov  %2, %%eax\n\t"   // eax = syscall#
+        "int  $0x66\n\t"       // returns with edx:eax
+        "pop  %%edi\n\t"
+        "pop  %%esi\n\t"
+        "pop  %%ebx\n\t"
+        : "=a"(lo), "=d"(hi)
+        : "r"(n)
+        : "ecx", "memory", "cc");
+    return ((uint64_t)hi << 32) | (uint64_t)lo;
+}
+
+static inline __attribute__((always_inline)) int do_sys(int n, int a0, int a1, int a2, int a3)
 {
     register int r_eax asm("eax") = n;
     register int r_ebx asm("ebx") = a0;
     register int r_ecx asm("ecx") = a1;
     register int r_edx asm("edx") = a2;
     register int r_esi asm("esi") = a3;
-    register int r_edi asm("edi"); // bara deklarerad; sparas av asm-blocket
+    register int r_edi asm("edi");
 
     asm volatile(
         "push %%ebx\n\t"
@@ -52,6 +73,7 @@ int do_sys(int n, int a0, int a1, int a2, int a3)
         :
         : "memory", "cc"
     );
+
     return r_eax;
 }
 
@@ -177,4 +199,24 @@ static inline int system_console_set_color(uint32_t fg, uint32_t bg)
 static inline int system_console_get_color(uint32_t *out)
 {
     return do_sys(SYSTEM_CONSOLE_GET_COLOR, (int)(uintptr_t)out, 0, 0, 0);
+}
+
+static inline __attribute__((always_inline)) void system_thread_yield(void)
+{
+    (void)do_sys(SYSTEM_THREAD_YIELD, 0, 0, 0, 0);
+}
+
+static inline __attribute__((always_inline)) void system_thread_sleep_ms(uint32_t ms)
+{
+    (void)do_sys(SYSTEM_THREAD_SLEEP_MS, (int)ms, 0, 0, 0);
+}
+
+static inline __attribute__((always_inline)) uint64_t system_time_ms(void)
+{
+    return do_sys64_0(SYSTEM_TIME_MS);
+}
+
+static inline __attribute__((always_inline)) int system_thread_get_id(void)
+{
+    return do_sys(SYSTEM_THREAD_GET_ID, 0, 0, 0, 0);
 }
