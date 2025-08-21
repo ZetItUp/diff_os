@@ -8,56 +8,38 @@
 #include "stddef.h"
 #include "stdbool.h"
 
-/* --------------------------------------------------------------------------
-   PIT hardware
-   -------------------------------------------------------------------------- */
-
-#define PIT_CH0_PORT   0x40
-#define PIT_CMD_PORT   0x43
-#define PIT_INPUT_HZ   1193182u
-#define PIT_IRQ_LINE   0
+#define PIT_CH0_PORT 0x40
+#define PIT_CMD_PORT 0x43
+#define PIT_INPUT_HZ 1193182u
+#define PIT_IRQ_LINE 0
 
 #ifndef TIMER_DEFAULT_HZ
-#define TIMER_DEFAULT_HZ 100u      /* 100 Hz = 10 ms tick */
+#define TIMER_DEFAULT_HZ 100u
 #endif
 
-/* --------------------------------------------------------------------------
-   Legacy globals (kept for compatibility with existing code)
-   -------------------------------------------------------------------------- */
 extern thread_t* current_thread(void);
 volatile uint32_t timer_ticks = 0;
-volatile bool     timer_tick_updated = false;
+volatile bool timer_tick_updated = false;
 
-/* Save/restore IF helpers (avoid enabling interrupts accidentally) */
 static inline uint32_t irq_save(void)
 {
     uint32_t flags;
-    __asm__ __volatile__("pushf; pop %0; cli" : "=r"(flags) :: "memory");
+
+    __asm__ __volatile__("pushf; pop %0; cli" : "=r"(flags) :: "memory");  // Save EFLAGS and disabling interrupts
+
     return flags;
 }
 
 static inline void irq_restore(uint32_t flags)
 {
-    __asm__ __volatile__("push %0; popf" :: "r"(flags) : "memory");
+    __asm__ __volatile__("push %0; popf" :: "r"(flags) : "memory");  // Restore previous EFLAGS
 }
 
-/* --------------------------------------------------------------------------
-   Global timebase (no 64-bit division)
-   -------------------------------------------------------------------------- */
-
-static volatile uint64_t g_ticks = 0;   /* increments once per PIT IRQ */
-static volatile uint32_t g_hz    = TIMER_DEFAULT_HZ;
-
-/* Millisecond accumulator:
-   Every tick we add:
-     g_ms += ms_inc;
-     frac_accum += ms_rem;
-     if (frac_accum >= hz) { g_ms++; frac_accum -= hz; }
-   where ms_inc = 1000 / hz, ms_rem = 1000 % hz.
-*/
-static volatile uint64_t g_ms = 0;          /* monotonic milliseconds since boot */
-static volatile uint32_t g_ms_inc = 0;      /* floor(1000 / hz) */
-static volatile uint32_t g_ms_rem = 0;      /* (1000 % hz) */
+static volatile uint64_t g_ticks = 0;
+static volatile uint32_t g_hz = TIMER_DEFAULT_HZ;
+static volatile uint64_t g_ms = 0;
+static volatile uint32_t g_ms_inc = 0;
+static volatile uint32_t g_ms_rem = 0;
 static volatile uint32_t g_ms_frac_accum = 0;
 
 uint32_t timer_hz(void)
@@ -69,25 +51,24 @@ uint64_t timer_now_ticks(void)
 {
     uint32_t f = irq_save();
     uint64_t t = g_ticks;
+
     irq_restore(f);
+
     return t;
 }
 
 uint64_t timer_now_ms(void)
 {
     uint32_t f = irq_save();
-    uint64_t ms = g_ms;              /* already maintained tick-by-tick */
+    uint64_t ms = g_ms;
+
     irq_restore(f);
+
     return ms;
 }
 
-/* --------------------------------------------------------------------------
-   Timer queue (earliest-expiring first)
-   -------------------------------------------------------------------------- */
-
 static struct ktimer *g_timer_head = NULL;
 
-/* Queue helpers (caller holds irq_save/irq_restore) */
 static void timerq_insert(struct ktimer *t)
 {
     t->active = true;
@@ -96,10 +77,12 @@ static void timerq_insert(struct ktimer *t)
     {
         t->next = g_timer_head;
         g_timer_head = t;
+
         return;
     }
 
     struct ktimer *cur = g_timer_head;
+
     while (cur->next && cur->next->expires_ms <= t->expires_ms)
     {
         cur = cur->next;
@@ -117,6 +100,7 @@ static void timerq_remove(struct ktimer *t)
     }
 
     struct ktimer **pp = &g_timer_head;
+
     while (*pp)
     {
         if (*pp == t)
@@ -124,8 +108,10 @@ static void timerq_remove(struct ktimer *t)
             *pp = t->next;
             t->next = NULL;
             t->active = false;
+
             return;
         }
+
         pp = &((*pp)->next);
     }
 
@@ -133,11 +119,12 @@ static void timerq_remove(struct ktimer *t)
     t->active = false;
 }
 
-/* --------------------------------------------------------------------------
-   Public timer API
-   -------------------------------------------------------------------------- */
-
-void ktimer_add_once(struct ktimer *t, uint32_t delay_ms, ktimer_callback_t cb, void *arg, void *owner)
+void ktimer_add_once(
+    struct ktimer *t,
+    uint32_t delay_ms,
+    ktimer_callback_t cb,
+    void *arg,
+    void *owner)
 {
     if (!t || !cb)
     {
@@ -153,12 +140,18 @@ void ktimer_add_once(struct ktimer *t, uint32_t delay_ms, ktimer_callback_t cb, 
     t->expires_ms = timer_now_ms() + (uint64_t)delay_ms;
     t->next = NULL;
     t->active = false;
+
     timerq_insert(t);
 
     irq_restore(f);
 }
 
-void ktimer_add_periodic(struct ktimer *t, uint32_t period_ms, ktimer_callback_t cb, void *arg, void *owner)
+void ktimer_add_periodic(
+    struct ktimer *t,
+    uint32_t period_ms,
+    ktimer_callback_t cb,
+    void *arg,
+    void *owner)
 {
     if (!t || !cb || period_ms == 0)
     {
@@ -174,6 +167,7 @@ void ktimer_add_periodic(struct ktimer *t, uint32_t period_ms, ktimer_callback_t
     t->expires_ms = timer_now_ms() + (uint64_t)period_ms;
     t->next = NULL;
     t->active = false;
+
     timerq_insert(t);
 
     irq_restore(f);
@@ -187,16 +181,21 @@ void ktimer_cancel(struct ktimer *t)
     }
 
     uint32_t f = irq_save();
+
     timerq_remove(t);
+
     irq_restore(f);
 }
 
-/* --------------------------------------------------------------------------
-   Sleep support (busy-wait fallback; will block with a scheduler later)
-   -------------------------------------------------------------------------- */
+__attribute__((weak)) void scheduler_block_current_until_wakeup(void) 
+{ 
 
-__attribute__((weak)) void sched_block_current_until_wakeup(void) { /* weak stub */ }
-__attribute__((weak)) void sched_wake_owner(void *owner) { (void)owner; /* weak stub */ }
+} 
+
+__attribute__((weak)) void schededuler_wake_owner(void *owner) 
+{ 
+    (void)owner; 
+} 
 
 typedef struct sleep_helper
 {
@@ -209,15 +208,16 @@ static void sleep_cb(void *arg)
 {
     sleep_helper_t *h = (sleep_helper_t *)arg;
     h->woke = true;
+
     if (h->owner)
     {
-        sched_wake_owner(h->owner);
+        scheduler_wake_owner(h->owner);  
     }
 }
 
 void sleep_ms(uint32_t ms)
 {
-    void *owner = current_thread();
+    void *owner = current_thread(); 
 
     sleep_helper_t helper;
     helper.woke = false;
@@ -225,7 +225,7 @@ void sleep_ms(uint32_t ms)
 
     ktimer_add_once(&helper.timer, ms, sleep_cb, &helper, owner);
 
-    sched_block_current_until_wakeup();
+    scheduler_block_current_until_wakeup();  
 
     while (!helper.woke)
     {
@@ -233,61 +233,56 @@ void sleep_ms(uint32_t ms)
     }
 }
 
-/* --------------------------------------------------------------------------
-   PIT programming and IRQ path
-   -------------------------------------------------------------------------- */
-
 static void pit_program(uint32_t hz)
 {
-    /* Guard against nonsense values; also avoid divisor=0 */
     if (hz < 19)
     {
-        hz = 19; /* ~52.6 ms/tick worst case */
+        hz = 19;  // This needs to be >= ~19 Hz to avoid divisor underflow
     }
 
     uint32_t divisor = PIT_INPUT_HZ / hz;
+
     if (divisor == 0)
     {
-        divisor = 1;
+        divisor = 1;  // This needs to be >=1 for PIT programming
     }
 
-    /* Command: ch0, access mode lobyte/hibyte, mode 3 (square wave), binary */
-    outb(PIT_CMD_PORT, 0x36);
+    outb(PIT_CMD_PORT, 0x36);  // Programming PIT ch0, lobyte/hibyte, mode 3 (square wave)
 
-    /* Divisor low, then high */
     outb(PIT_CH0_PORT, (uint8_t)(divisor & 0xFF));
     outb(PIT_CH0_PORT, (uint8_t)((divisor >> 8) & 0xFF));
 
-    /* Update globals and ms accumulator parameters atomically */
     uint32_t f = irq_save();
+
     g_hz = hz;
-    g_ms_inc = 1000u / hz;  /* integer part */
-    g_ms_rem = 1000u % hz;  /* fractional remainder */
-    g_ms_frac_accum = 0;    /* reset frac accumulator on reprogramming */
+    g_ms_inc = 1000u / hz; 
+    g_ms_rem = 1000u % hz;
+    g_ms_frac_accum = 0; 
+
     irq_restore(f);
 }
 
-/* Called by IRQ0 handler */
 void ktimer_tick_isr(void)
 {
-    /* Bump tick counters */
     g_ticks++;
     timer_ticks++;
     timer_tick_updated = true;
 
-    /* Advance monotonic milliseconds without division */
-    uint32_t hz = g_hz;  /* read once */
-    g_ms += g_ms_inc;
-    uint32_t acc = g_ms_frac_accum + g_ms_rem;
+    uint32_t hz = g_hz;
+    g_ms += g_ms_inc;  // Advancing monotonic ms by integer part
+
+    uint32_t acc = g_ms_frac_accum + g_ms_rem;  // Accumulating fractional ms for correction
+
     if (acc >= hz)
     {
-        g_ms += 1;
-        acc -= hz;
+        g_ms += 1;     // Calculating the time correction by carrying 1 ms
+        acc -= hz;     // Attempting to preserve leftover fractional part
     }
+
     g_ms_frac_accum = acc;
 
-    /* Expire any timers that are due (loop to handle multiple) */
-    uint64_t now_ms = g_ms; /* already atomic enough inside IRQ */
+    uint64_t now_ms = g_ms;  // Reading current ms for timer expirations
+
     while (g_timer_head && g_timer_head->expires_ms <= now_ms)
     {
         struct ktimer *t = g_timer_head;
@@ -295,16 +290,15 @@ void ktimer_tick_isr(void)
         t->next = NULL;
         t->active = false;
 
-        /* Periodic: re-arm before callback to reduce drift */
         if (t->period_ms != 0)
         {
-            t->expires_ms = now_ms + (uint64_t)t->period_ms;
+            t->expires_ms = now_ms + (uint64_t)t->period_ms;  // Attempting to re-arm periodic timer to reduce drift
             timerq_insert(t);
         }
 
         if (t->cb)
         {
-            t->cb(t->callback_arg); /* Runs in IRQ context: keep it quick */
+            t->cb(t->callback_arg);  // This needs to be fast (IRQ context)
         }
     }
 }
@@ -313,25 +307,20 @@ static void timer_irq_handler(unsigned irq, void *ctx)
 {
     (void)irq;
     (void)ctx;
-    ktimer_tick_isr();
-}
 
-/* --------------------------------------------------------------------------
-   Public init
-   -------------------------------------------------------------------------- */
+    ktimer_tick_isr(); 
+}
 
 void timer_init(uint32_t frequency)
 {
-    pit_program(frequency);
+    pit_program(frequency);  // Attempting to program PIT to requested frequency
 }
 
 void timer_install(void)
 {
-    /* Program PIT at default HZ and hook IRQ0 */
-    pit_program(TIMER_DEFAULT_HZ);
+    pit_program(TIMER_DEFAULT_HZ);  // Start with default frequency
 
-    /* Register IRQ0 handler and unmask the line */
-    irq_install_handler(PIT_IRQ_LINE, timer_irq_handler);
-    pic_clear_mask(PIT_IRQ_LINE);
+    irq_install_handler(PIT_IRQ_LINE, timer_irq_handler);  // This needs to be bound to IRQ0
+    pic_clear_mask(PIT_IRQ_LINE);  // This needs to unmask IRQ0 on PIC
 }
 

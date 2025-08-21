@@ -5,17 +5,12 @@
 #include <stdbool.h>
 #include "system/threads.h"
 
-// API
 void scheduler_add_thread(thread_t* thread);
 void scheduler_init(void);
 void scheduler_start(void);
 void thread_yield(void);
 void scheduler_block_current_until_wakeup(void);
 void scheduler_wake_owner(void* owner);
-
-// Timer alias
-void sched_block_current_until_wakeup(void);
-void sched_wake_owner(void* owner);
 
 // Arch interface
 void context_switch(cpu_context_t* save_context, cpu_context_t* load_context);

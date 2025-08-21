@@ -1,7 +1,3 @@
-// All comments are written in English.
-// Allman brace style is used consistently.
-// Extremely defensive: bounds checks, detailed debug when DIFF_DEBUG is defined.
-
 #include "drivers/module_loader.h"
 #include "drivers/ddf.h"
 #include "diff.h"
@@ -17,18 +13,19 @@
 #define NULL ((void*)0)
 #endif
 
-extern FileTable *file_table;       // Provided by diff.c
-extern kernel_exports_t g_exports;  // Provided by intf_kernel.c
+extern FileTable *file_table;
+extern kernel_exports_t g_exports;
 
-/* -------------------------------------------------------------------------- */
-/* Helpers                                                                    */
-/* -------------------------------------------------------------------------- */
+// NOTE: Addend is an extra value added to the symbol address during relocation
+
+// Basic helpers
 
 static inline uint32_t max_u32(uint32_t a, uint32_t b)
 {
     return (a > b) ? a : b;
 }
 
+// Check if pointer is inside the loaded module image
 int ptr_in_module(const ddf_module_t *m, const void *ptr)
 {
     if (!m || !m->module_base || m->size_bytes == 0 || !ptr)
@@ -43,10 +40,11 @@ int ptr_in_module(const ddf_module_t *m, const void *ptr)
     return (p >= lo) && (p < hi);
 }
 
+// Print header of the exports block
 void dump_exports_header(const kernel_exports_t *e)
 {
 #ifdef DIFF_DEBUG
-    /* kernel_exports_t might be packed; copy to aligned scratch before reading. */
+    // Copy to aligned scratch
     uint32_t scratch[8] = {0};
     size_t avail = sizeof(*e);
     size_t want  = sizeof(scratch);
@@ -62,24 +60,28 @@ void dump_exports_header(const kernel_exports_t *e)
 #endif
 }
 
-/* off+size must be within [0, total]; size==0 is allowed. */
+// Check that a sub range fits inside a buffer
 static int range_ok(uint32_t off, uint32_t size, uint32_t total)
 {
     if (off > total)
     {
         return 0;
     }
+
     if (size == 0)
     {
         return 1;
     }
+
     if (size > 0xFFFFFFFFu - off)
     {
         return 0;
     }
+
     return (off + size) <= total;
 }
 
+// Write and read helpers for 32 bit words
 static inline void wr32(void *p, uint32_t v)
 {
     *(uint32_t *)p = v;
@@ -90,6 +92,7 @@ static inline uint32_t rd32(const void *p)
     return *(const uint32_t *)p;
 }
 
+// Validate DDF header
 static int validate_header(const ddf_header_t *h, uint32_t file_bytes, uint32_t *out_min_total)
 {
     uint32_t need_total;
@@ -102,12 +105,14 @@ static int validate_header(const ddf_header_t *h, uint32_t file_bytes, uint32_t 
     if (h->magic != DDF_MAGIC)
     {
         printf("[MODULE] ERROR: Bad DDF magic: 0x%08x\n", (unsigned)h->magic);
+
         return -1;
     }
 
     if (h->version_major != 1)
     {
         printf("[MODULE] ERROR: Unsupported DDF major version: %u\n", (unsigned)h->version_major);
+
         return -1;
     }
 
@@ -118,17 +123,36 @@ static int validate_header(const ddf_header_t *h, uint32_t file_bytes, uint32_t 
     }
 #endif
 
-    /* Sections that must live inside the on-disk image */
-    if (!range_ok(h->text_offset,   h->text_size,   file_bytes)) { printf("[MODULE] ERROR: .text OOB\n"); return -1; }
-    if (!range_ok(h->rodata_offset, h->rodata_size, file_bytes)) { printf("[MODULE] ERROR: .rodata OOB\n"); return -1; }
-    if (!range_ok(h->data_offset,   h->data_size,   file_bytes)) { printf("[MODULE] ERROR: .data OOB\n"); return -1; }
+    // Sections must be inside the disk image
+    if (!range_ok(h->text_offset,   h->text_size,   file_bytes))
+    {
+        printf("[MODULE] ERROR: .text OOB\n");
 
-    /* Tables inside file */
+        return -1;
+    }
+
+    if (!range_ok(h->rodata_offset, h->rodata_size, file_bytes))
+    {
+        printf("[MODULE] ERROR: .rodata OOB\n");
+
+        return -1;
+    }
+
+    if (!range_ok(h->data_offset,   h->data_size,   file_bytes))
+    {
+        printf("[MODULE] ERROR: .data OOB\n");
+
+        return -1;
+    }
+
+    // Tables must fit in file
     {
         uint32_t sym_bytes = h->symbol_table_count * (uint32_t)sizeof(ddf_symbol_t);
+
         if (!range_ok(h->symbol_table_offset, sym_bytes, file_bytes))
         {
             printf("[MODULE] ERROR: symtab OOB\n");
+
             return -1;
         }
     }
@@ -136,19 +160,21 @@ static int validate_header(const ddf_header_t *h, uint32_t file_bytes, uint32_t 
     if (!range_ok(h->strtab_offset, 1, file_bytes))
     {
         printf("[MODULE] ERROR: strtab OOB\n");
+
         return -1;
     }
 
     {
         uint32_t rel_bytes = h->reloc_table_count * (uint32_t)sizeof(ddf_reloc_t);
+
         if (!range_ok(h->reloc_table_offset, rel_bytes, file_bytes))
         {
             printf("[MODULE] ERROR: reloc OOB\n");
+
             return -1;
         }
     }
 
-    /* Compute minimal total bytes needed in memory (file + BSS extension) */
     need_total = file_bytes;
 
     if (h->bss_size != 0)
@@ -158,10 +184,12 @@ static int validate_header(const ddf_header_t *h, uint32_t file_bytes, uint32_t 
         if (h->bss_offset > 0xFFFFFFFFu - h->bss_size)
         {
             printf("[MODULE] ERROR: BSS overflow\n");
+
             return -1;
         }
 
         bss_end = h->bss_offset + h->bss_size;
+
         if (bss_end > need_total)
         {
             need_total = bss_end;
@@ -169,9 +197,11 @@ static int validate_header(const ddf_header_t *h, uint32_t file_bytes, uint32_t 
     }
 
     *out_min_total = need_total;
+
     return 0;
 }
 
+// Print key header fields in debug mode
 static void debug_dump_header(const ddf_header_t *h, uint32_t file_bytes)
 {
 #ifndef DIFF_DEBUG
@@ -204,10 +234,13 @@ static void debug_dump_header(const ddf_header_t *h, uint32_t file_bytes)
 
     const ddf_symbol_t *sy = (const ddf_symbol_t *)((const uint8_t*)h + h->symbol_table_offset);
     const char *st = (const char *)((const uint8_t*)h + h->strtab_offset);
+
     printf("[DDF] symbols (%u):\n", (unsigned)h->symbol_table_count);
+
     for (uint32_t i = 0; i < h->symbol_table_count; i++)
     {
         const char *nm = st + sy[i].name_offset;
+
         printf("  [%u] name='%s' value_off=0x%08x type=%u\n",
                (unsigned)i, nm ? nm : "", (unsigned)sy[i].value_offset, (unsigned)sy[i].type);
     }
@@ -215,20 +248,18 @@ static void debug_dump_header(const ddf_header_t *h, uint32_t file_bytes)
 }
 
 #ifdef DIFF_DEBUG
+// Safe helper to look for a string from the module image for logs
 static const char *ddf_get_string(const void *base, const ddf_header_t *h, uint32_t name_off)
 {
-    (void)h; /* header was validated */
+    (void)h;
 
     const char *strtab = (const char *)((const uint8_t*)base + h->strtab_offset);
-    return strtab + name_off; /* Do not deref outside of debug printing */
+
+    return strtab + name_off;
 }
 #endif
 
-/* -------------------------------------------------------------------------- */
-/* Relocations                                                                */
-/* -------------------------------------------------------------------------- */
-// All comments are written in English.
-// Allman brace style is used consistently.
+// Relocations
 
 static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_bytes)
 {
@@ -241,7 +272,7 @@ static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_b
     const ddf_symbol_t *syms = (const ddf_symbol_t *)((const uint8_t*)base + h->symbol_table_offset);
 
 #ifdef DIFF_DEBUG
-    printf("[RELOC] Applying %u relocations...\n", (unsigned)h->reloc_table_count);
+    printf("[RELOC] Applying %u relocations\n", (unsigned)h->reloc_table_count);
 #endif
 
     for (uint32_t i = 0; i < h->reloc_table_count; i++)
@@ -251,13 +282,14 @@ static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_b
 
         if (!range_ok(where_off, 4, total_bytes))
         {
-            printf("[RELOC] ERROR: r[%u] target OOB (off=%u)\n", (unsigned)i, (unsigned)where_off);
+            printf("[RELOC] ERROR: r[%u] target OOB off=%u\n", (unsigned)i, (unsigned)where_off);
+
             return -1;
         }
 
         uint8_t *loc = (uint8_t*)base + where_off;
 
-        uint32_t S = 0;                 // runtime VA of symbol/target
+        uint32_t S = 0;
         uint32_t A = (uint32_t)r->r_addend;
         int have_sym = (r->r_sym_index != 0xFFFFFFFFu);
 
@@ -265,8 +297,8 @@ static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_b
         {
             if (r->r_sym_index >= h->symbol_table_count)
             {
-                printf("[RELOC] ERROR: r[%u] bad sym index %u\n",
-                       (unsigned)i, (unsigned)r->r_sym_index);
+                printf("[RELOC] ERROR: r[%u] bad sym index %u\n", (unsigned)i, (unsigned)r->r_sym_index);
+
                 return -1;
             }
 
@@ -275,8 +307,8 @@ static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_b
 
             if (!range_ok(voff, 1, total_bytes))
             {
-                printf("[RELOC] ERROR: r[%u] sym value OOB (off=%u)\n",
-                       (unsigned)i, (unsigned)voff);
+                printf("[RELOC] ERROR: r[%u] sym value OOB off=%u\n", (unsigned)i, (unsigned)voff);
+
                 return -1;
             }
 
@@ -284,20 +316,18 @@ static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_b
         }
         else
         {
-            /* In this custom format, addend holds a module-relative TARGET offset.
-               Therefore: S = base + off, and the effective addend MUST be zero
-               to avoid double-adding the offset. */
+            // In this format the addend holds a module relative target offset
             uint32_t t_off = A;
 
             if (!range_ok(t_off, 1, total_bytes))
             {
-                printf("[RELOC] ERROR: r[%u] addend-as-target OOB (%u)\n",
-                       (unsigned)i, (unsigned)t_off);
+                printf("[RELOC] ERROR: r[%u] addend target OOB %u\n", (unsigned)i, (unsigned)t_off);
+
                 return -1;
             }
 
             S = (uint32_t)((uintptr_t)base + t_off);
-            A = 0;      // **** CRITICAL FIX: prevent double-add ****
+            A = 0; // Prevent double add
         }
 
         switch (r->r_type)
@@ -305,18 +335,19 @@ static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_b
             case DDF_RELOC_ABS32:
             {
                 uint32_t V = S + A;
+
                 wr32(loc, V);
 
 #ifdef DIFF_DEBUG
                 if (have_sym)
                 {
-                    printf("[RELOC] #%u type=ABS32 off=%08x -> %08x sym=idx%u addend=%d\n",
+                    printf("[RELOC] #%u ABS32 off=%08x -> %08x sym=%u A=%d\n",
                            (unsigned)i, (unsigned)where_off, (unsigned)V,
                            (unsigned)r->r_sym_index, (int)r->r_addend);
                 }
                 else
                 {
-                    printf("[RELOC] #%u type=ABS32 off=%08x -> %08x sym=<none>(t_off) A=0\n",
+                    printf("[RELOC] #%u ABS32 off=%08x -> %08x sym=none A=0\n",
                            (unsigned)i, (unsigned)where_off, (unsigned)V);
                 }
 #endif
@@ -325,29 +356,30 @@ static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_b
 
             case DDF_RELOC_REL32:
             {
-                /* i386 PC-relative: final stored displacement = S + A - (P + 4) */
+                // i386 style PC relative displacement
                 uint32_t Pp4 = (uint32_t)((uintptr_t)loc + 4u);
                 int32_t disp = (int32_t)((int64_t)S + (int32_t)A - (int64_t)Pp4);
+
                 wr32(loc, (uint32_t)disp);
 
 #ifdef DIFF_DEBUG
                 if (have_sym)
                 {
-                    printf("[RELOC] #%u type=REL32 off=%08x P+4=%08x S=%08x A=%d disp=%08x sym=idx%u\n",
+                    printf("[RELOC] #%u REL32 off=%08x P+4=%08x S=%08x A=%d disp=%08x sym=%u\n",
                            (unsigned)i, (unsigned)where_off, (unsigned)Pp4, (unsigned)S,
                            (int)r->r_addend, (unsigned)disp, (unsigned)r->r_sym_index);
                 }
                 else
                 {
-                    printf("[RELOC] #%u type=REL32 off=%08x P+4=%08x S=%08x A=0 disp=%08x sym=<none>(t_off)\n",
+                    printf("[RELOC] #%u REL32 off=%08x P+4=%08x S=%08x A=0 disp=%08x sym=none\n",
                            (unsigned)i, (unsigned)where_off, (unsigned)Pp4, (unsigned)S, (unsigned)disp);
                 }
 
-                /* Optional sanity: show computed DEST for debugging */
+                // Show resolved destination for sanity
                 {
                     uint32_t disp_written = rd32(loc);
                     uint32_t dest = (uint32_t)((uintptr_t)loc + 4u + disp_written);
-                    printf("[RELOC]      -> dest=%08x\n", (unsigned)dest);
+                    printf("[RELOC] dest=%08x\n", (unsigned)dest);
                 }
 #endif
                 break;
@@ -355,7 +387,7 @@ static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_b
 
             case DDF_RELOC_RELATIVE:
             {
-                /* If addend points inside module image, treat as module-relative; else raw. */
+                // If addend is inside module treat as module relative else keep raw
                 uint32_t add = (uint32_t)r->r_addend;
                 uint32_t val = range_ok(add, 1, total_bytes)
                                ? (uint32_t)((uintptr_t)base + add)
@@ -364,31 +396,33 @@ static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_b
 #ifdef DIFF_DEBUG
                 if (range_ok(add, 1, total_bytes))
                 {
-                    printf("[RELOC] #%u type=RELATIVE off=%08x -> %08x\n",
+                    printf("[RELOC] #%u RELATIVE off=%08x -> %08x\n",
                            (unsigned)i, (unsigned)where_off, (unsigned)val);
                 }
                 else
                 {
-                    printf("[RELOC] #%u type=RELATIVE off=%08x addend outside module (%u) -> raw %08x\n",
+                    printf("[RELOC] #%u RELATIVE off=%08x addend outside %u -> %08x\n",
                            (unsigned)i, (unsigned)where_off, (unsigned)add, (unsigned)val);
                 }
 #endif
                 wr32(loc, val);
+
                 break;
             }
 
             default:
             {
-                printf("[RELOC] ERROR: r[%u] unknown type %u\n",
-                       (unsigned)i, (unsigned)r->r_type);
+                printf("[RELOC] ERROR: r[%u] unknown type %u\n", (unsigned)i, (unsigned)r->r_type);
+
                 return -1;
             }
         }
 
-        /* Strong guard: abort if a relocation would write into the NULL page. */
+        // Guard against writes into a null page
         if ((uintptr_t)loc < 0x1000u)
         {
-            printf("[RELOC] ERROR: wrote into NULL page? loc=%p\n", (void *)loc);
+            printf("[RELOC] ERROR: wrote into NULL page loc=%p\n", (void *)loc);
+
             return -1;
         }
     }
@@ -396,11 +430,7 @@ static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_b
     return 0;
 }
 
-
-/* -------------------------------------------------------------------------- */
-/* Public: symbol lookup inside a loaded DDF module                           */
-/* -------------------------------------------------------------------------- */
-
+// Symbol lookup inside a module
 void *ddf_find_symbol(void *module_base, ddf_header_t *header, const char *name)
 {
     if (!module_base || !header || !name)
@@ -435,9 +465,7 @@ void *ddf_find_symbol(void *module_base, ddf_header_t *header, const char *name)
     return NULL;
 }
 
-/* -------------------------------------------------------------------------- */
-/* Loader                                                                     */
-/* -------------------------------------------------------------------------- */
+// Module loader
 
 void *load_ddf_module(const char *path, ddf_header_t **out_header, uint32_t *out_header_off, uint32_t *out_size)
 {
@@ -448,63 +476,86 @@ void *load_ddf_module(const char *path, ddf_header_t **out_header, uint32_t *out
     ddf_header_t *hdr;
     uint32_t need_total;
 
-    if (out_header)     { *out_header = NULL; }
-    if (out_header_off) { *out_header_off = 0; }
-    if (out_size)       { *out_size = 0; }
+    if (out_header)
+    {
+        *out_header = NULL;
+    }
+
+    if (out_header_off)
+    {
+        *out_header_off = 0;
+    }
+
+    if (out_size)
+    {
+        *out_size = 0;
+    }
 
     if (!path || !file_table)
     {
         printf("[MODULE] ERROR: path or file_table is NULL\n");
+
         return NULL;
     }
 
     idx = find_entry_by_path(file_table, path);
+
     if (idx < 0)
     {
         printf("[MODULE] ERROR: '%s' not found in DiffFS\n", path);
+
         return NULL;
     }
 
     fe = &file_table->entries[idx];
+
     if (fe->type != ENTRY_TYPE_FILE || fe->file_size_bytes == 0)
     {
         printf("[MODULE] ERROR: '%s' is not a regular file\n", path);
+
         return NULL;
     }
 
     file_img = kmalloc(fe->file_size_bytes);
+
     if (!file_img)
     {
         printf("[MODULE] ERROR: OOM for module file image (%u bytes)\n", (unsigned)fe->file_size_bytes);
+
         return NULL;
     }
 
     bytes_read = read_file(file_table, path, file_img);
+
     if (bytes_read <= 0)
     {
         printf("[MODULE] ERROR: failed to read '%s'\n", path);
         kfree(file_img);
+
         return NULL;
     }
 
-    hdr = (ddf_header_t *)file_img; /* Header is at start of image */
+    hdr = (ddf_header_t *)file_img;
 
     if (validate_header(hdr, (uint32_t)bytes_read, &need_total) != 0)
     {
         kfree(file_img);
+
         return NULL;
     }
 
     debug_dump_header(hdr, (uint32_t)bytes_read);
 
-    /* Grow buffer to include BSS, if needed */
+    // Grow allocation to cover bss if needed
     if (need_total > (uint32_t)bytes_read)
     {
         void *bigger = kmalloc(need_total);
+
         if (!bigger)
         {
             printf("[MODULE] ERROR: OOM for module total (%u bytes)\n", (unsigned)need_total);
             kfree(file_img);
+
             return NULL;
         }
 
@@ -515,28 +566,42 @@ void *load_ddf_module(const char *path, ddf_header_t **out_header, uint32_t *out
         hdr = (ddf_header_t *)file_img;
     }
 
-    /* Zero BSS explicitly even if buffer was already large. */
+    // Zero bss in case the buffer is too large
     if (hdr->bss_size)
     {
         if (!range_ok(hdr->bss_offset, hdr->bss_size, need_total))
         {
             printf("[MODULE] ERROR: BSS out of bounds after alloc\n");
             kfree(file_img);
+
             return NULL;
         }
+
         memset((uint8_t*)file_img + hdr->bss_offset, 0, hdr->bss_size);
     }
 
-    /* Apply relocations (no double-dereference bug). */
+    // Apply relocations
     if (apply_relocations(file_img, hdr, need_total) != 0)
     {
         kfree(file_img);
+
         return NULL;
     }
 
-    if (out_header)     { *out_header = hdr; }
-    if (out_header_off) { *out_header_off = 0; }
-    if (out_size)       { *out_size = need_total; }
+    if (out_header)
+    {
+        *out_header = hdr;
+    }
+
+    if (out_header_off)
+    {
+        *out_header_off = 0;
+    }
+
+    if (out_size)
+    {
+        *out_size = need_total;
+    }
 
 #ifdef DIFF_DEBUG
     printf("[MODULE] Loaded '%s' at %p total=%u bytes\n", path, file_img, (unsigned)need_total);
@@ -545,6 +610,7 @@ void *load_ddf_module(const char *path, ddf_header_t **out_header, uint32_t *out
     return file_img;
 }
 
+// Fill function pointers from header offsets
 static void fill_entrypoints(ddf_module_t *m)
 {
     if (!m || !m->module_base || !m->header)
@@ -563,32 +629,35 @@ static void fill_entrypoints(ddf_module_t *m)
     {
         m->driver_init = (void (*)(kernel_exports_t*))(void *)(base + h->init_offset);
     }
+
     if (h->exit_offset)
     {
         m->driver_exit = (void (*)(void))(void *)(base + h->exit_offset);
     }
+
     if (h->irq_offset)
     {
         m->driver_irq = (void (*)(unsigned, void*))(void *)(base + h->irq_offset);
     }
 }
 
+// Pick a IRQ number from header
 static uint32_t detect_irq_number(void *base, ddf_header_t *h)
 {
     uint32_t chosen = IRQ_INVALID;
 
-    /* Accept only sane values from header (exclude 0). */
     if (h->irq_number != IRQ_INVALID && h->irq_number < 16 && h->irq_number != 0)
     {
         chosen = h->irq_number;
     }
     else
     {
-        /* Otherwise try to read the packed symbol in .ddf_meta */
         volatile unsigned int *p = (volatile unsigned int *)ddf_find_symbol(base, h, "ddf_irq_number");
+
         if (p)
         {
             uint32_t v = *p;
+
             if (v < 16 && v != 0)
             {
                 chosen = v;
@@ -597,15 +666,13 @@ static uint32_t detect_irq_number(void *base, ddf_header_t *h)
     }
 
 #ifdef DIFF_DEBUG
-    printf("[MODULE] IRQ resolve: header=%u -> using=%u\n",
-           (unsigned)h->irq_number, (unsigned)chosen);
+    printf("[MODULE] IRQ resolve header=%u using=%u\n", (unsigned)h->irq_number, (unsigned)chosen);
 #endif
 
     return chosen;
 }
 
-/* Main entry */
-
+// Load a driver module
 ddf_module_t *load_driver(const char *path)
 {
     if (!path)
@@ -616,17 +683,21 @@ ddf_module_t *load_driver(const char *path)
     ddf_header_t *h = NULL;
     uint32_t header_off = 0;
     uint32_t size_bytes = 0;
+
     void *base = load_ddf_module(path, &h, &header_off, &size_bytes);
+
     if (!base)
     {
         return NULL;
     }
 
     ddf_module_t *m = (ddf_module_t *)kmalloc(sizeof(ddf_module_t));
+
     if (!m)
     {
         printf("[MODULE] ERROR: OOM for ddf_module_t\n");
         kfree(base);
+
         return NULL;
     }
 
@@ -637,11 +708,11 @@ ddf_module_t *load_driver(const char *path)
 
     fill_entrypoints(m);
 
-    /* Resolve IRQ line (do NOT subscribe here). */
+    // Resolve IRQ line 
     m->irq_number = detect_irq_number(base, h);
 
 #ifdef DIFF_DEBUG
-    printf("[MODULE] Entry: init=%p exit=%p irq=%p irq_num=%u\n",
+    printf("[MODULE] Entry init=%p exit=%p irq=%p irq_num=%u\n",
            (void*)m->driver_init, (void*)m->driver_exit, (void*)m->driver_irq, (unsigned)m->irq_number);
 #endif
 

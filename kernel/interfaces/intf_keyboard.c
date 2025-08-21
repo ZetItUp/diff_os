@@ -72,8 +72,7 @@ static int shift, caps, ctrl, alt, e0;
 
 static void keyboard_process_scancode(uint8_t sc)
 {
-    // E0 prefix
-    if (sc == 0xE0)
+    if (sc == 0xE0)  // Handle E0 prefix
     {
         e0 = 1;
 
@@ -83,45 +82,42 @@ static void keyboard_process_scancode(uint8_t sc)
     int release = sc & 0x80;
     sc &= 0x7F;
 
-    // Modifiers
-    if (sc == 0x2A || sc == 0x36) // Shift
+    if (sc == 0x2A || sc == 0x36)  // Shift
     {
         shift = !release;
 
         return;
     }
 
-    if (sc == 0x1D && !e0) // Left Ctrl
+    if (sc == 0x1D && !e0)  // Left Ctrl
     {
         ctrl = !release;
 
         return;
     }
 
-    if (sc == 0x38 && !e0) // Left Alt
+    if (sc == 0x38 && !e0)  // Left Alt
     {
         alt = !release;
 
         return;
     }
 
-    if (sc == 0x3A && !release) // Caps toggle
+    if (sc == 0x3A && !release)  // Caps toggle
     {
         caps ^= 1;
 
         return;
     }
 
-    // Ignore releases 
-    if (release)
+    if (release)  // Ignore releases
     {
         e0 = 0;
 
         return;
     }
 
-    // Editing/control keys 
-    if (sc == 0x0E) // Backspace
+    if (sc == 0x0E)  // Backspace
     {
         ch_push(0x08);
         e0 = 0;
@@ -129,7 +125,7 @@ static void keyboard_process_scancode(uint8_t sc)
         return;
     }
 
-    if (sc == 0x1C) // Enter (main)
+    if (sc == 0x1C)  // Enter (main)
     {
         ch_push('\n');
         e0 = 0;
@@ -137,7 +133,7 @@ static void keyboard_process_scancode(uint8_t sc)
         return;
     }
 
-    if (e0 && sc == 0x1C) // Enter (keypad, E0 1C)
+    if (e0 && sc == 0x1C)  // Enter (keypad)
     {
         ch_push('\n');
         e0 = 0;
@@ -145,7 +141,7 @@ static void keyboard_process_scancode(uint8_t sc)
         return;
     }
 
-    if (sc == 0x0F) // Tab
+    if (sc == 0x0F)  // Tab
     {
         ch_push('\t');
         e0 = 0;
@@ -153,7 +149,6 @@ static void keyboard_process_scancode(uint8_t sc)
         return;
     }
 
-    // Regular characters
     if (sc >= 128)
     {
         e0 = 0;
@@ -170,14 +165,14 @@ static void keyboard_process_scancode(uint8_t sc)
         return;
     }
 
-    if (ch >= 'a' && ch <= 'z')
+    if (ch >= 'a' && ch <= 'z')  // Apply Caps/Shift on letters
     {
         if (shift ^ caps)
         {
             ch -= 32;
         }
     }
-    else if (shift && shift_map[sc])
+    else if (shift && shift_map[sc])  // Apply Shift on symbols
     {
         ch = shift_map[sc];
     }
@@ -193,6 +188,7 @@ void keyboard_init(void)
     ctrl = 0;
     alt = 0;
     e0 = 0;
+
     ch_head = 0;
     ch_tail = 0;
 }
@@ -220,7 +216,7 @@ uint8_t keyboard_getch(void)
             return c;
         }
 
-        asm volatile("sti; hlt");
+        asm volatile("sti; hlt");  // Sleep until next interrupt
     }
 }
 

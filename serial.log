@@ -1,7 +1,7 @@
  Different OS
 [RAM] Available Memory: 63 MB
-[DRIVER] VBE Graphics driver installed!
-[DRIVER] PS/2 Keyboard driver installed!
+[DRIVER] VBE Graphics driver installed
+[DRIVER] PS2 keyboard ready
 
 Different Terminal (Version 1.0)
 
@@ -14,40 +14,26 @@ Content of /
  DIRECTORY              0  system/
 --------------------------------------------------
 
-/> cd y system
-
-/system> ls
-Content of system/
-==================================================
- Type         Size (bytes)  Name
---------------------------------------------------
- DIRECTORY              0  drivers/
- DIRECTORY              0  exls/
- FILE                 120  commands.map
- FILE               53628  kernel.bin
- FILE                 184  sys.cfg
---------------------------------------------------
-
-/system> ttest
+/> ttest
 Thread and Timer Test Program
 Thread ID = 2
-[TEST] clock_gettime: 11.630 s
-[TEST] yield burst, tid=2
+[TEST] clock_gettime: 3.830 s
+[TEST] yield burst, time=2
   yield 0
   yield 1
   yield 2
   yield 3
   yield 4
-[TEST] msleep(100) at 11640 ms
-[TEST] woke at      11740 ms  (+100 ms)
-[TEST] msleep(250) at 11740 ms
-[TEST] woke at      11990 ms  (+250 ms)
-[TEST] usleep(5000) at 11990 ms
-[TEST] woke at      12000 ms  (~5000 us, +10 ms)
-[TEST] usleep(20000) at 12000 ms
-[TEST] woke at      12020 ms  (~20000 us, +20 ms)
-[TEST] nanosleep(123 ms) at 12020 ms
-[TEST] woke at           12160 ms  (+140 ms)
-[Test] Done!
+[TEST] msleep(100) at 3830 ms
+[TEST] woke at      3930 ms  (+100 ms)
+[TEST] msleep(250) at 3930 ms
+[TEST] woke at      4180 ms  (+250 ms)
+[TEST] usleep(5000) at 4180 ms
+[TEST] woke at      4190 ms  (~5000 us, +10 ms)
+[TEST] usleep(20000) at 4190 ms
+[TEST] woke at      4210 ms  (~20000 us, +20 ms)
+[TEST] nanosleep(123 ms) at 4210 ms
+[TEST] woke at           4340 ms  (+130 ms)
+[TEST] Completed!
 
-/system> 
+/> 

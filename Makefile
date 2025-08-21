@@ -46,7 +46,6 @@ KERNEL_SRC = \
 	kernel/arch/x86_64/cpu/pic.c \
 	kernel/arch/x86_64/cpu/timer.c \
 	kernel/drivers/ata.c \
-	kernel/drivers/driver.c \
 	kernel/drivers/config.c \
 	kernel/drivers/module_loader.c \
 	kernel/system/system.c \
@@ -73,6 +72,11 @@ KERNEL_SRC += \
 	kernel/interfaces/intf_memory.c \
 	kernel/interfaces/intf_vbe.c \
 	kernel/interfaces/intf_console.c
+
+PROGRAMS_LIST = dterm \
+				hello \
+				ls \
+				ttest
 
 # Helpers
 KERNEL_SRC += \
@@ -215,6 +219,19 @@ debug: all
 	@qemu-system-i386 -monitor stdio -m 64M -vga std -drive format=raw,file=$(TARGET) -s -S &
 	@echo "[GDB] Starting debugger"
 	@gdb -x 1kernel.gdb
+
+diffc:
+	@echo "[DiffC] Compiling library!"
+	@$(MAKE) -C DiffC/
+
+programs:
+	@echo "[Programs] Compiling all programs"
+	@$(MAKE) -C programs/ $(PROGRAMS_LIST)
+
+allclean: clean
+	@echo "[CLEAN] Cleaning everything!"
+	@$(MAKE) -C DiffC/ clean
+	@$(MAKE) -C programs/ clean
 
 # Clean build
 clean:

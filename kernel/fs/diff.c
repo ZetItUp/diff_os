@@ -6,19 +6,21 @@
 #include "drivers/ata.h"
 #include "system/spinlock.h"
 
-// State
+// Local helpers without locks
 static int find_entry_by_path_nolock(const FileTable* table, const char* path);
 static int path_next_token(char** it, char* out, size_t out_sz);
 
+// Global filesystem state
 SuperBlock superblock;
 FileTable* file_table;
-static FileTable file_table_static;
 static uint8_t* file_bitmap;
 static uint8_t* sector_bitmap;
 static spinlock_t file_table_lock;
 static spinlock_t sector_bitmap_lock;
 
-// Low-level I/O
+extern volatile int g_in_irq;
+
+// Low level disk I/O
 
 int disk_read(uint32_t sector, uint32_t count, void* buffer)
 {
@@ -30,6 +32,8 @@ int disk_write(uint32_t sector, uint32_t count, const void* buffer)
     return ata_write(sector, count, buffer);
 }
 
+// Superblock and tables
+
 int read_file_table(const SuperBlock* sb)
 {
     size_t table_bytes;
@@ -38,48 +42,62 @@ int read_file_table(const SuperBlock* sb)
     uint8_t* new_bitmap;
     int r;
 
+    // Sizes on disk in bytes
     table_bytes = (size_t)sb->file_table_size * SECTOR_SIZE;
     bitmap_bytes = (size_t)sb->file_table_bitmap_size * SECTOR_SIZE;
 
+    // Must fit the structure we expect
     if (table_bytes < sizeof(FileTable))
     {
         printf("[Diff FS] ERROR: file_table too small (%u < %u)\n",
                (unsigned)table_bytes, (unsigned)sizeof(FileTable));
+
         return -1;
     }
 
+    // Read the file table
     new_table = (FileTable*)kmalloc(table_bytes);
+
     if (!new_table)
     {
         printf("[Diff FS] ERROR: OOM for file_table (%u bytes)\n", (unsigned)table_bytes);
+
         return -1;
     }
 
     r = disk_read(sb->file_table_sector, sb->file_table_size, new_table);
+
     if (r < 0)
     {
         printf("[Diff FS] ERROR: disk_read(file_table) failed\n");
         kfree(new_table);
+
         return -1;
     }
 
+    // Read the file bitmap
     new_bitmap = (uint8_t*)kmalloc(bitmap_bytes);
+
     if (!new_bitmap)
     {
         printf("[Diff FS] ERROR: OOM for file_bitmap (%u bytes)\n", (unsigned)bitmap_bytes);
         kfree(new_table);
+
         return -1;
     }
 
     r = disk_read(sb->file_table_bitmap_sector, sb->file_table_bitmap_size, new_bitmap);
+
     if (r < 0)
     {
         printf("[Diff FS] ERROR: disk_read(file_bitmap) failed\n");
         kfree(new_bitmap);
         kfree(new_table);
+
         return -1;
     }
-
+    
+    // Lock and update so both pointers change at the same time
     spin_lock(&file_table_lock);
     file_table = new_table;
     file_bitmap = new_bitmap;
@@ -88,12 +106,11 @@ int read_file_table(const SuperBlock* sb)
     return 0;
 }
 
-// Superblock / tables
 int read_superblock(SuperBlock* sb)
 {
-    int r;
+    // Superblock is at a fixed sector
+    int r = disk_read(2048, 1, sb);
 
-    r = disk_read(2048, 1, sb);
     if (r < 0)
     {
         return -1;
@@ -106,30 +123,38 @@ int init_filesystem(void)
 {
     int r;
 
+    // Init locks before touching globals
     spinlock_init(&file_table_lock);
     spinlock_init(&sector_bitmap_lock);
 
+    // Load superblock first
     r = read_superblock(&superblock);
+
     if (r < 0)
     {
         printf("[Diff FS] ERROR: Unable to read superblock!\n");
+
         return -1;
     }
 
+    // Then load file table and its bitmap
     r = read_file_table(&superblock);
+
     if (r != 0)
     {
         printf("[Diff FS] ERROR: Unable to read file table!\n");
+
         return -1;
     }
 
     return 0;
 }
 
-// Case-insensitive compare (ASCII)
+// ASCII case insensitive compare
 
 static int ascii_stricmp(const char* a, const char* b)
 {
+    // Fold to lowercase and compare
     unsigned char ca;
     unsigned char cb;
 
@@ -138,8 +163,15 @@ static int ascii_stricmp(const char* a, const char* b)
         ca = (unsigned char)*a++;
         cb = (unsigned char)*b++;
 
-        if (ca >= 'A' && ca <= 'Z') { ca = (unsigned char)(ca - 'A' + 'a'); }
-        if (cb >= 'A' && cb <= 'Z') { cb = (unsigned char)(cb - 'A' + 'a'); }
+        if (ca >= 'A' && ca <= 'Z')
+        {
+            ca = (unsigned char)(ca - 'A' + 'a');
+        }
+
+        if (cb >= 'A' && cb <= 'Z')
+        {
+            cb = (unsigned char)(cb - 'A' + 'a');
+        }
 
         if (ca != cb || ca == '\0' || cb == '\0')
         {
@@ -148,33 +180,32 @@ static int ascii_stricmp(const char* a, const char* b)
     }
 }
 
-// Directory / path helpers
+// Directory and path helpers
 
 static uint32_t detect_root_id(const FileTable* table)
 {
-    int i;
-
-    for (i = 0; i < MAX_FILES; i++)
+    // Find an entry that looks like root
+    for (int i = 0; i < MAX_FILES; i++)
     {
-        const FileEntry* fe;
-        fe = &table->entries[i];
+        const FileEntry* fe = &table->entries[i];
+
         if (fe->entry_id != 0 && fe->parent_id == 0 && fe->type == ENTRY_TYPE_DIR)
         {
             return fe->entry_id;
         }
     }
 
+    // Fallback used by some images
     return 1;
 }
 
 int find_entry_in_dir(const FileTable* table, uint32_t parent_id, const char* filename)
 {
-    int i;
-
-    for (i = 0; i < MAX_FILES; i++)
+    // Linear scan works for small tables
+    for (int i = 0; i < MAX_FILES; i++)
     {
-        const FileEntry* fe;
-        fe = &table->entries[i];
+        const FileEntry* fe = &table->entries[i];
+
         if (fe->entry_id == 0)
         {
             continue;
@@ -193,32 +224,61 @@ int find_entry_in_dir(const FileTable* table, uint32_t parent_id, const char* fi
 
 static void rstrip_token(char* s)
 {
-    size_t n;
+    // Trim trailing spaces and tabs
+    if (!s)
+    {
+        return;
+    }
 
-    if (!s) { return; }
+    size_t n = 0;
 
-    n = 0;
-    while (s[n] != '\0') { n++; }
-    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t')) { s[--n] = '\0'; }
+    while (s[n] != '\0')
+    {
+        n++;
+    }
+
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t'))
+    {
+        s[--n] = '\0';
+    }
 }
 
 static int find_entry_by_path_nolock(const FileTable* table, const char* path)
 {
+    // Walk path like "/a/b/c" one token at a time
     char buf[512];
     char* cursor;
     uint32_t current_parent;
     int index;
     char token[MAX_FILENAME_LEN];
 
-    if (!path || !*path) { return -1; }
+    if (!path || !*path)
+    {
+        return -1;
+    }
 
     (void)strlcpy(buf, path, sizeof(buf));
     rstrip_token(buf);
+
+    // Trim leading whitespace
     {
-        char* s=buf;
-        char* dst=buf;
-        while (*s == ' ' || *s == '\t') { s++; }
-        if (s != buf) { while (*s) { *dst++ = *s++; } *dst = '\0'; }
+        char* s = buf;
+        char* dst = buf;
+
+        while (*s == ' ' || *s == '\t')
+        {
+            s++;
+        }
+
+        if (s != buf)
+        {
+            while (*s)
+            {
+                *dst++ = *s++;
+            }
+
+            *dst = '\0';
+        }
     }
 
     cursor = buf;
@@ -227,20 +287,31 @@ static int find_entry_by_path_nolock(const FileTable* table, const char* path)
 
     while (path_next_token(&cursor, token, sizeof(token)))
     {
-        const FileEntry* fe;
-        char* peek;
-
+        // Find child under current parent
         index = find_entry_in_dir(table, current_parent, token);
-        if (index == -1) { return -1; }
 
-        fe = &table->entries[index];
+        if (index == -1)
+        {
+            return -1;
+        }
 
-        peek = cursor;
-        while (*peek == '/') { peek++; }
+        const FileEntry* fe = &table->entries[index];
+
+        // If there is more of the path left we must be in a directory
+        char* peek = cursor;
+
+        while (*peek == '/')
+        {
+            peek++;
+        }
 
         if (*peek != '\0')
         {
-            if (fe->type != ENTRY_TYPE_DIR) { return -1; }
+            if (fe->type != ENTRY_TYPE_DIR)
+            {
+                return -1;
+            }
+
             current_parent = fe->entry_id;
         }
     }
@@ -250,40 +321,62 @@ static int find_entry_by_path_nolock(const FileTable* table, const char* path)
 
 static int path_next_token(char** it, char* out, size_t out_sz)
 {
-    char* p;
-    size_t n;
+    // Parse next path component into out
+    if (!it || !*it || !out || out_sz == 0)
+    {
+        return 0;
+    }
 
-    if (!it || !*it || !out || out_sz == 0) { return 0; }
+    char* p = *it;
 
-    p = *it;
-    while (*p == '/') { p++; }
+    while (*p == '/')
+    {
+        p++;
+    }
 
     if (*p == '\0')
     {
         *it = p;
         out[0] = '\0';
+
         return 0;
     }
 
-    n = 0;
-    while (*p != '\0' && *p != '/' && (n + 1) < out_sz) { out[n++] = *p++; }
+    size_t n = 0;
+
+    while (*p != '\0' && *p != '/' && (n + 1) < out_sz)
+    {
+        out[n++] = *p++;
+    }
+
     out[n] = '\0';
     *it = p;
 
     rstrip_token(out);
+
+    // Trim leading whitespace
     {
-        char* s;
-        char* dst;
-        s = out;
-        while (*s == ' ' || *s == '\t') { s++; }
+        char* s = out;
+
+        while (*s == ' ' || *s == '\t')
+        {
+            s++;
+        }
+
         if (s != out)
         {
-            dst = out;
-            while (*s) { *dst++ = *s++; }
+            char* dst = out;
+
+            while (*s)
+            {
+                *dst++ = *s++;
+            }
+
             *dst = '\0';
         }
     }
 
+    // Skip empty and single dot
     if (out[0] == '\0' || (out[0] == '.' && out[1] == '\0'))
     {
         return path_next_token(it, out, out_sz);
@@ -294,10 +387,13 @@ static int path_next_token(char** it, char* out, size_t out_sz)
 
 int find_entry_by_path(const FileTable* table, const char* path)
 {
+    // Lock wrapper around the no lock helper
     int idx;
+
     spin_lock(&file_table_lock);
     idx = find_entry_by_path_nolock(table, path);
     spin_unlock(&file_table_lock);
+
     return idx;
 }
 
@@ -305,6 +401,7 @@ int find_entry_by_path(const FileTable* table, const char* path)
 
 int read_file(const FileTable* table, const char* path, void* buffer)
 {
+    // Read a whole file by path into caller buffer
     int index;
     uint32_t start_sector;
     uint32_t sector_count;
@@ -317,30 +414,49 @@ int read_file(const FileTable* table, const char* path, void* buffer)
     spin_lock(&file_table_lock);
 
     index = find_entry_by_path_nolock(table, path);
-    if (index == -1) { spin_unlock(&file_table_lock); return -1; }
+
+    if (index == -1)
+    {
+        spin_unlock(&file_table_lock);
+
+        return -1;
+    }
 
     if (table->entries[index].type != ENTRY_TYPE_FILE)
-    { spin_unlock(&file_table_lock); return -1; }
+    {
+        spin_unlock(&file_table_lock);
 
-    start_sector    = table->entries[index].start_sector;
-    sector_count    = table->entries[index].sector_count;
+        return -1;
+    }
+
+    start_sector = table->entries[index].start_sector;
+    sector_count = table->entries[index].sector_count;
     file_size_bytes = table->entries[index].file_size_bytes;
 
     spin_unlock(&file_table_lock);
 
-    buf_ptr   = (uint8_t*)buffer;
+    buf_ptr = (uint8_t*)buffer;
     bytes_left = file_size_bytes;
 
     for (s = 0; s < sector_count; s++)
     {
         int rr = disk_read(start_sector + s, 1, temp);
-        if (rr < 0) { return -2; }
+
+        if (rr < 0)
+        {
+            return -2;
+        }
 
         uint32_t to_copy = (bytes_left > SECTOR_SIZE) ? SECTOR_SIZE : bytes_left;
+
         memcpy(buf_ptr, temp, to_copy);
-        buf_ptr   += to_copy;
+        buf_ptr += to_copy;
         bytes_left -= to_copy;
-        if (bytes_left == 0) { break; }
+
+        if (bytes_left == 0)
+        {
+            break;
+        }
     }
 
     return (int)file_size_bytes;
@@ -350,24 +466,26 @@ int read_file(const FileTable* table, const char* path, void* buffer)
 
 void set_bitmap_bit(uint8_t* bitmap, int index)
 {
+    // Mark taken
     bitmap[index / 8] |= (uint8_t)(1 << (index % 8));
 }
 
 void clear_bitmap_bit(uint8_t* bitmap, int index)
 {
+    // Mark free
     bitmap[index / 8] &= (uint8_t)~(1 << (index % 8));
 }
 
 int is_bitmap_bit_set(const uint8_t* bitmap, int index)
 {
+    // True if taken
     return (bitmap[index / 8] & (uint8_t)(1 << (index % 8))) != 0;
 }
 
 int find_free_entry(const uint8_t* bitmap, int max_files)
 {
-    int i;
-
-    for (i = 0; i < max_files; i++)
+    // First fit scan
+    for (int i = 0; i < max_files; i++)
     {
         if (!is_bitmap_bit_set(bitmap, i))
         {
@@ -380,15 +498,18 @@ int find_free_entry(const uint8_t* bitmap, int max_files)
 
 int allocate_file_entry(const char* name, EntryType type, int max_files)
 {
+    // Grab a free slot and fill a new entry
     int index;
     FileEntry* entry;
 
     spin_lock(&file_table_lock);
 
     index = find_free_entry(file_bitmap, max_files);
+
     if (index == -1)
     {
         spin_unlock(&file_table_lock);
+
         return -1;
     }
 
@@ -401,6 +522,7 @@ int allocate_file_entry(const char* name, EntryType type, int max_files)
     (void)strlcpy(entry->filename, name, MAX_FILENAME_LEN);
 
     spin_unlock(&file_table_lock);
+
     return index;
 }
 
@@ -408,22 +530,28 @@ int allocate_file_entry(const char* name, EntryType type, int max_files)
 
 int read_sector_bitmap(const SuperBlock* sb)
 {
+    // Load the on disk sector allocation bitmap
     size_t bitmap_bytes;
     uint8_t* new_sector_bitmap;
     int r;
 
     bitmap_bytes = sb->sector_bitmap_size * SECTOR_SIZE;
+
     new_sector_bitmap = (uint8_t*)kmalloc(bitmap_bytes);
+
     if (!new_sector_bitmap)
     {
         printf("[Diff FS] ERROR: OOM for sector_bitmap (%u bytes)\n", (unsigned)bitmap_bytes);
+
         return -1;
     }
 
     r = disk_read(sb->sector_bitmap_sector, sb->sector_bitmap_size, new_sector_bitmap);
+
     if (r < 0)
     {
         kfree(new_sector_bitmap);
+
         return r;
     }
 
@@ -436,40 +564,51 @@ int read_sector_bitmap(const SuperBlock* sb)
 
 int allocate_sectors(uint32_t count, uint32_t* first_sector, const SuperBlock* sb)
 {
+    // First fit over the sector bitmap
     uint32_t i;
     uint32_t allocated;
 
     spin_lock(&sector_bitmap_lock);
 
     allocated = 0;
+
     for (i = 0; i < sb->total_sectors && allocated < count; i++)
     {
         if (!is_bitmap_bit_set(sector_bitmap, (int)i))
         {
-            if (allocated == 0) { *first_sector = i; }
+            if (allocated == 0)
+            {
+                *first_sector = i;
+            }
+
             set_bitmap_bit(sector_bitmap, (int)i);
             allocated++;
         }
     }
 
     spin_unlock(&sector_bitmap_lock);
+
     return (allocated == count) ? 0 : -1;
 }
 
 void free_sectors(uint32_t start, uint32_t count)
 {
+    // Clear a run of bits in the sector bitmap
     uint32_t i;
 
     spin_lock(&sector_bitmap_lock);
+
     for (i = 0; i < count; i++)
     {
         clear_bitmap_bit(sector_bitmap, (int)(start + i));
     }
+
     spin_unlock(&sector_bitmap_lock);
 }
 
 int write_file_table(const SuperBlock* sb)
 {
+    // Flush the file table back to disk
     int bytes;
 
     spin_lock(&file_table_lock);
@@ -481,6 +620,7 @@ int write_file_table(const SuperBlock* sb)
 
 int write_sector_bitmap(const SuperBlock* sb)
 {
+    // Flush the sector bitmap back to disk
     int bytes;
 
     spin_lock(&sector_bitmap_lock);

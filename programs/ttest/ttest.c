@@ -6,7 +6,7 @@
 static void test_yield_burst(void)
 {
     int tid = thread_get_id();
-    printf("[TEST] yield burst, tid=%d\n", tid);
+    printf("[TEST] yield burst, time=%d\n", tid);
 
     for (int i = 0; i < 5; i++)
     {
@@ -98,7 +98,7 @@ int main(void)
 
     test_nanosleep(123);
 
-    printf("[Test] Done!\n");
+    printf("[TEST] Completed!\n");
     return 0;
 }
 

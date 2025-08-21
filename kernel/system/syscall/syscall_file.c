@@ -28,6 +28,7 @@
 #define KERNEL_FILE_DESCRIPTOR_BASE 3
 #define KERNEL_FILE_DESCRIPTOR_MAX  32
 
+// File descriptor
 typedef struct
 {
     uint8_t used;
@@ -41,11 +42,13 @@ typedef struct
 static file_descriptor_t s_file_descriptor[KERNEL_FILE_DESCRIPTOR_MAX];
 static int s_sector_bitmap_loaded = 0;
 
+// Check if file can be written
 static int file_writable(int flags)
 {
     return (flags & (O_WRONLY | O_RDWR)) ? 1 : 0;
 }
 
+// Make sure filesystem is initialized
 static int verify_fs_ready(void)
 {
     if(!file_table)
@@ -59,6 +62,7 @@ static int verify_fs_ready(void)
     return 0;
 }
 
+// Make sure sector bitmap is loaded
 static int verify_sector_bitmap(void)
 {
     if(!s_sector_bitmap_loaded)
@@ -74,6 +78,7 @@ static int verify_sector_bitmap(void)
     return 0;
 }
 
+// Write file table and sector bitmap back to disk
 static int flush_metadata(void)
 {
     if(write_file_table(&superblock) != 0)
@@ -92,6 +97,7 @@ static int flush_metadata(void)
     return 0;
 }
 
+// Find root directory id
 static uint32_t find_root_id(void)
 {
     for(int i = 0; i < MAX_FILES; i++)
@@ -122,6 +128,7 @@ static uint32_t find_root_id(void)
     return root_id;
 }
 
+// Compare two names
 static int name_equals(const char *a, const char *b)
 {
     for(int i = 0; i < MAX_FILENAME_LEN; i++)
@@ -130,7 +137,7 @@ static int name_equals(const char *a, const char *b)
         char cb = b[i];
 
         if(ca != cb)
-    {
+        {
             return 0;
         }
 
@@ -143,6 +150,7 @@ static int name_equals(const char *a, const char *b)
     return 1;
 }
 
+// Find child entry under a parent directory
 static int find_child_entry(uint32_t parent_id, const char *name, int *out_index)
 {
     if(!name || !name[0])
@@ -175,6 +183,7 @@ static int find_child_entry(uint32_t parent_id, const char *name, int *out_index
     return -1;
 }
 
+// Convert path string to file entry index
 static int path_to_entry_index(const char *path, int *out_index)
 {
     uint32_t cur = 0;
@@ -231,14 +240,15 @@ static int path_to_entry_index(const char *path, int *out_index)
 
             if(tok[0] == '\0')
             {
-                // Skip empty
+                // Skip empty name
             }
             else if(tok[0] == '.' && tok[1] == '\0')
             {
-                // Stay
+                // Stay in same dir
             }
             else if(tok[0] == '.' && tok[1] == '.' && tok[2] == '\0')
             {
+                // Go up one dir
                 uint32_t parent_of_cur = 0;
                 int parent_index = -1;
 
@@ -300,6 +310,7 @@ static int path_to_entry_index(const char *path, int *out_index)
     return 0;
 }
 
+// Open a file and return file descriptor
 int system_file_open(const char *abs_path, int oflags, int mode)
 {
     (void)mode;
@@ -389,6 +400,7 @@ int system_file_open(const char *abs_path, int oflags, int mode)
     return -1;
 }
 
+// Close an open file
 int system_file_close(int file_descriptor)
 {
     if(file_descriptor < KERNEL_FILE_DESCRIPTOR_BASE)
@@ -409,10 +421,12 @@ int system_file_close(int file_descriptor)
     return 0;
 }
 
+// Read from a file or stdin
 long system_file_read(int file, void *buf, unsigned long count)
 {
     if(file == 0)
     {
+        // stdin
         uint8_t first = keyboard_getch();
 
         if(copy_to_user(buf, &first, 1) != 0)
@@ -444,6 +458,7 @@ long system_file_read(int file, void *buf, unsigned long count)
 
     if(file == 1 || file == 2)
     {
+        // stdout/stderr not readable
         return -1;
     }
 
@@ -471,6 +486,7 @@ long system_file_read(int file, void *buf, unsigned long count)
     return (long)take;
 }
 
+// Change file position
 long system_file_seek(int file, long offset, int whence)
 {
     if(file < KERNEL_FILE_DESCRIPTOR_BASE)
@@ -539,6 +555,7 @@ long system_file_seek(int file, long offset, int whence)
     return (long)kf->pos;
 }
 
+// Write buffer to disk for a file
 static int system_write_file_to_disk(FileEntry *fe, const uint8_t *data, uint32_t new_size)
 {
     uint32_t new_sectors = (new_size + 511) / 512;
@@ -616,10 +633,12 @@ static int system_write_file_to_disk(FileEntry *fe, const uint8_t *data, uint32_
     return flush_metadata();
 }
 
+// Write to file or stdout/stderr
 long system_file_write(int file, const void *buf, unsigned long count)
 {
     if(file == 1 || file == 2)
     {
+        // stdout/stderr
         for(unsigned long i = 0; i < count; i++)
         {
             char c;
@@ -637,6 +656,7 @@ long system_file_write(int file, const void *buf, unsigned long count)
 
     if(file == 0)
     {
+        // stdin not writable
         return -1;
     }
 

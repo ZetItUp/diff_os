@@ -23,8 +23,10 @@ extern FileTable *file_table;
 
 static dir_handle_t g_dir[MAX_DIR_HANDLES];
 
+// Try to find root dir id
 static uint32_t find_root_id(void)
 {
+    // First check for dir with parent id 0
     for(int i = 0; i < MAX_FILES; i++)
     {
         const FileEntry *fe = &file_table->entries[i];
@@ -35,6 +37,7 @@ static uint32_t find_root_id(void)
         }
     }
 
+    // If not found, pick the lowest dir id
     uint32_t root_id = 0;
 
     for(int i = 0; i < MAX_FILES; i++)
@@ -53,6 +56,7 @@ static uint32_t find_root_id(void)
     return root_id;
 }
 
+// Compare two names char by char
 static int name_equals(const char *a, const char *b)
 {
     for(int i = 0; i < MAX_FILENAME_LEN; i++)
@@ -74,6 +78,7 @@ static int name_equals(const char *a, const char *b)
     return 1;
 }
 
+// Look for child dir under given parent
 static int find_child_dir(uint32_t parent_id, const char *name, uint32_t *out_id)
 {
     if(!name || !name[0])
@@ -111,11 +116,13 @@ static int find_child_dir(uint32_t parent_id, const char *name, uint32_t *out_id
     return -1;
 }
 
+// Go through path string and resolve to dir id
 static int path_to_dir_id(const char *path, uint32_t *out_id)
 {
     uint32_t cur = 0;
     int absolute = 0;
 
+    // Handle empty or "."
     if(!path || !path[0] || (path[0] == '.' && path[1] == '\0'))
     {
         cur = find_root_id();
@@ -127,6 +134,7 @@ static int path_to_dir_id(const char *path, uint32_t *out_id)
     }
     else if(path[0] == '/')
     {
+        // Absolute path, start from root
         absolute = 1;
         cur = find_root_id();
 
@@ -135,6 +143,7 @@ static int path_to_dir_id(const char *path, uint32_t *out_id)
             return -1;
         }
 
+        // If it's only a "/", return root
         if(path[1] == '\0')
         {
             *out_id = cur;
@@ -144,6 +153,7 @@ static int path_to_dir_id(const char *path, uint32_t *out_id)
     }
     else
     {
+        // Relative path, for now also from root
         cur = find_root_id();
 
         if(!cur)
@@ -152,6 +162,7 @@ static int path_to_dir_id(const char *path, uint32_t *out_id)
         }
     }
 
+    // Tokenize
     const char *p = path + (absolute ? 1 : 0);
     char tok[NAME_MAX];
     int ti = 0;
@@ -168,14 +179,15 @@ static int path_to_dir_id(const char *path, uint32_t *out_id)
 
             if(tok[0] == '\0')
             {
-                // Skip empty token
+                // Skip empty token like "//"
             }
             else if(tok[0] == '.' && tok[1] == '\0')
             {
-                // Stay in the same directory
+                // Stay in same dir
             }
             else if(tok[0] == '.' && tok[1] == '.' && tok[2] == '\0')
             {
+                // Go one step up
                 uint32_t parent_of_cur = 0;
 
                 for(int i = 0; i < MAX_FILES; i++)
@@ -197,6 +209,7 @@ static int path_to_dir_id(const char *path, uint32_t *out_id)
             }
             else
             {
+                // Try to step into child dir
                 uint32_t next_id = 0;
 
                 if(find_child_dir(cur, tok, &next_id) != 0)
@@ -226,6 +239,7 @@ static int path_to_dir_id(const char *path, uint32_t *out_id)
     return 0;
 }
 
+// Grab a free handle slot
 static int dir_handle_alloc(void)
 {
     for(int i = 0; i < MAX_DIR_HANDLES; i++)
@@ -243,6 +257,7 @@ static int dir_handle_alloc(void)
     return -1;
 }
 
+// Mark handle slot free again
 static void dir_handle_free(int handle)
 {
     if(handle >= 0 && handle < MAX_DIR_HANDLES)
@@ -253,10 +268,12 @@ static void dir_handle_free(int handle)
     }
 }
 
+// Open dir given a path
 int system_open_dir(const char *path)
 {
     if(!file_table)
     {
+        // Setup filesystem if first time
         if(init_filesystem() != 0)
         {
             return -1;
@@ -297,6 +314,7 @@ int system_open_dir(const char *path)
     return handle;
 }
 
+// Read entry from dir handle
 int system_read_dir(int handle, struct dirent *out)
 {
     if(handle < 0 || handle >= MAX_DIR_HANDLES || !out)
@@ -313,6 +331,7 @@ int system_read_dir(int handle, struct dirent *out)
 
     struct dirent kdir;
 
+    // Loop through table
     for(uint32_t i = g_dir[handle].cursor; i < (uint32_t)MAX_FILES; i++)
     {
         const FileEntry *fe = &file_table->entries[i];
@@ -327,11 +346,13 @@ int system_read_dir(int handle, struct dirent *out)
             continue;
         }
 
+        // Fill dirent data
         kdir.d_id = fe->entry_id;
         kdir.d_type = (fe->type == ENTRY_TYPE_DIR) ? DT_DIR :
                       (fe->type == ENTRY_TYPE_FILE) ? DT_REG : DT_UNKNOWN;
         kdir.d_size = fe->file_size_bytes;
 
+        // Copy filename
         size_t src_len = 0;
 
         while(src_len < MAX_FILENAME_LEN && fe->filename[src_len] != '\0')
@@ -353,7 +374,9 @@ int system_read_dir(int handle, struct dirent *out)
 
         kdir.d_name[n] = '\0';
 
+        // Save cursor for next call
         g_dir[handle].cursor = i + 1;
+
         if(copy_to_user(out, &kdir, sizeof(kdir)) != 0)
         {
             return -1;
@@ -362,9 +385,11 @@ int system_read_dir(int handle, struct dirent *out)
         return 0;
     }
 
+    // No more files in dir
     return 1;
 }
 
+// Close dir handle
 int system_close_dir(int handle)
 {
     if(handle < 0 || handle >= MAX_DIR_HANDLES)
