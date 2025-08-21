@@ -14,26 +14,26 @@ Content of /
  DIRECTORY              0  system/
 --------------------------------------------------
 
-/> ttest
+/> te test
 Thread and Timer Test Program
 Thread ID = 2
-[TEST] clock_gettime: 3.830 s
+[TEST] clock_gettime: 3.360 s
 [TEST] yield burst, time=2
   yield 0
   yield 1
   yield 2
   yield 3
   yield 4
-[TEST] msleep(100) at 3830 ms
-[TEST] woke at      3930 ms  (+100 ms)
-[TEST] msleep(250) at 3930 ms
-[TEST] woke at      4180 ms  (+250 ms)
-[TEST] usleep(5000) at 4180 ms
-[TEST] woke at      4190 ms  (~5000 us, +10 ms)
-[TEST] usleep(20000) at 4190 ms
-[TEST] woke at      4210 ms  (~20000 us, +20 ms)
-[TEST] nanosleep(123 ms) at 4210 ms
-[TEST] woke at           4340 ms  (+130 ms)
+[TEST] msleep(100) at 3360 ms
+[TEST] woke at      3460 ms  (+100 ms)
+[TEST] msleep(250) at 3460 ms
+[TEST] woke at      3710 ms  (+250 ms)
+[TEST] usleep(5000) at 3710 ms
+[TEST] woke at      3720 ms  (~5000 us, +10 ms)
+[TEST] usleep(20000) at 3720 ms
+[TEST] woke at      3740 ms  (~20000 us, +20 ms)
+[TEST] nanosleep(123 ms) at 3740 ms
+[TEST] woke at           3870 ms  (+130 ms)
 [TEST] Completed!
 
 /> 

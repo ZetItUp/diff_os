@@ -224,7 +224,7 @@ diffc:
 	@echo "[DiffC] Compiling library!"
 	@$(MAKE) -C DiffC/
 
-programs:
+progs:
 	@echo "[Programs] Compiling all programs"
 	@$(MAKE) -C programs/ $(PROGRAMS_LIST)
 
