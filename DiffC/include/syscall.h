@@ -32,6 +32,8 @@ enum
     SYSTEM_THREAD_SLEEP_MS = 20,
     SYSTEM_TIME_MS = 21,
     SYSTEM_THREAD_GET_ID = 22,
+    SYSTEM_PROCESS_SPAWN = 23,
+    SYSTEM_WAIT_PID = 24,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -81,7 +83,6 @@ static inline __attribute__((always_inline)) int do_sys(int n, int a0, int a1, i
 static inline __attribute__((always_inline)) void system_exit(int code) 
 {
     (void)do_sys(SYSTEM_EXIT, code, 0, 0, 0);
-    __builtin_unreachable();
 }
 
 static inline __attribute__((always_inline)) void system_putchar(char c) 
@@ -219,4 +220,14 @@ static inline __attribute__((always_inline)) uint64_t system_time_ms(void)
 static inline __attribute__((always_inline)) int system_thread_get_id(void)
 {
     return do_sys(SYSTEM_THREAD_GET_ID, 0, 0, 0, 0);
+}
+
+static inline int system_process_spawn(const char *path, int argc, char **argv)
+{
+    return do_sys(SYSTEM_PROCESS_SPAWN, (int)(uintptr_t)path, argc, (int)(uintptr_t)argv, 0);
+}
+
+static inline int system_wait_pid(int pid, int *status)
+{
+    return do_sys(SYSTEM_WAIT_PID, pid, (int)status, 0, 0);
 }

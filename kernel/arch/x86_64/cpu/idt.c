@@ -1,3 +1,5 @@
+// idt.c
+
 #include "idt.h"
 #include "irq.h"
 #include "console.h"
@@ -63,17 +65,15 @@ const char *exception_messages[] =
 
 void idt_init()
 {
-
-    for(int i = 0; i < 32; i++)
+    for (int i = 0; i < 32; i++)
     {
         idt_set_entry(i, (uint32_t)isr_stubs[i], 0x08, 0x8E);
     }
 
     struct IDTDescriptor idt_desc;
     idt_desc.limit = sizeof(idt) - 1;
-    idt_desc.base = (uint32_t)&idt;
+    idt_desc.base  = (uint32_t)&idt;
 
-    // Load IDT with lidt
     asm volatile("cli");
     asm volatile("lidt %0" : : "m"(idt_desc));
 
@@ -82,22 +82,31 @@ void idt_init()
 
 void idt_set_entry(int num, uint32_t handler_addr, uint16_t selector, uint8_t type_attr)
 {
-    // Set lowest 16 bits of the handler address
-    idt[num].offset_low = (handler_addr & 0xFFFF);
-    // Segment selector, usually 0x08 (Kernel code segment in GDT)
-    idt[num].selector = selector;
-    // Reserved,set to 0
-    idt[num].zero = 0;
-    // Type and attribute, (ex. 0x8E,  Present, Ring 0, 32-bit Interrupt Gate)
-    idt[num].type_attr = type_attr;
-    // Set highest 16 bit of the handler address
+    idt[num].offset_low  = (handler_addr & 0xFFFF);
+    idt[num].selector    = selector;
+    idt[num].zero        = 0;
+    idt[num].type_attr   = type_attr;  // 0x8E = present, ring0, 32-bit interrupt gate
     idt[num].offset_high = (handler_addr >> 16) & 0xFFFF;
 }
+
+/* === Säkrare page-fault-utskrift, med reentransvakt och säkra hexdumps === */
+
+static volatile int s_in_pf = 0;  // reentrans-vakt
 
 static void print_page_fault(struct stack_frame *f)
 {
     uint32_t cr2;
     asm volatile("mov %%cr2, %0" : "=r"(cr2));
+
+    // Reentransskydd: om vi PF:ar inuti PF-handlern, skriv minimalt och stanna
+    s_in_pf++;
+    if (s_in_pf > 1) {
+        puts("\n==== PAGE FAULT (re-entrant) ====\n");
+        printf("EIP=%08x  CR2=%08x\n", f->eip, cr2);
+        puts("[PF] Re-entrancy detected; skipping memory dumps.\n");
+        for (;;)
+            asm volatile("hlt");
+    }
 
     printf("\n==== PAGE FAULT ====\n");
     printf("EIP=%08x  CR2=%08x\n", f->eip, cr2);
@@ -110,11 +119,15 @@ static void print_page_fault(struct stack_frame *f)
     // PDE/PTE för faultande adress
     dump_pde_pte(cr2);
 
-    // Instruktionsbytes vid EIP (bör vara mappad annars exekveras den inte)
-    printf("[bytes @EIP]");
-    hexdump_bytes((const void*)f->eip, 16);
+    // Instruktionsbytes vid EIP (kolla att den verkligen är mappad för att undvika PF i handlern)
+    if (page_present(f->eip)) {
+        printf("[bytes @EIP]");
+        hexdump_bytes((const void*)f->eip, 16);
+    } else {
+        printf("[bytes @EIP] (unmapped)\n");
+    }
 
-    // Försök visa bytes vid CR2 om sidan finns
+    // Bytes vid CR2 om sidan finns
     if (page_present(cr2)) {
         printf("[bytes @CR2]");
         hexdump_bytes((const void*)cr2, 16);
@@ -122,47 +135,28 @@ static void print_page_fault(struct stack_frame *f)
         printf("[bytes @CR2] (unmapped)\n");
     }
 
-    // Liten stack-dump ur userspace (kan hjälpa att se returadresser/parametrar)
+    // Liten stack-dump (endast om den aktuella stack-sidan är mappad)
     if (page_present(f->esp)) {
-        printf("[user stack]");
+        printf("[stack]");
         hexdump_bytes((const void*)f->esp, 32);
     }
 
-    // Stoppa här så du hinner läsa loggen
-    for(;;) asm volatile("hlt");
+    // Stanna här så loggen hinner läsas
+    for (;;)
+        asm volatile("hlt");
 }
 
 void fault_handler(struct stack_frame *frame)
 {
-    if(frame->int_no < 32)
-    {/*
-        set_color(MAKE_COLOR(FG_YELLOW, BG_RED));
-        puts("ERROR! ");
-        set_color(MAKE_COLOR(FG_WHITE, BG_RED));
-        puts(exception_messages[frame->int_no]);
-        set_color(MAKE_COLOR(FG_YELLOW, BG_RED));
-        puts(" Exception");
-
-        // Print which exception (nr)
-        printf("int_no=%d\n", frame->int_no);
-
-        // Print EIP
-        printf("EIP=%x\n", frame->eip);
-
-        // Print error code (for page fault, gives a lot of info)
-        printf("err_code=%x\n", frame->err_code);
-
-        // Print CR2 (fault addr), only valid for #PF!
-        uint32_t cr2;
-        asm volatile("mov %%cr2, %0" : "=r"(cr2));
-        printf("CR2 (fault addr) = %x\n", cr2);
-        */
-        if(frame->int_no == 14)
-        {    
+    if (frame->int_no < 32)
+    {
+        if (frame->int_no == 14)  // #PF
+        {
             print_page_fault(frame);
         }
-        for(;;);
-    }    
+        for (;;)
+            asm volatile("hlt");
+    }
 }
 
 void dump_idt()
@@ -177,3 +171,4 @@ void dump_idt()
         puts("\n");
     }
 }
+

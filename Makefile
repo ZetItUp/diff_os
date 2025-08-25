@@ -45,6 +45,7 @@ KERNEL_SRC = \
 	kernel/arch/x86_64/cpu/io.c \
 	kernel/arch/x86_64/cpu/pic.c \
 	kernel/arch/x86_64/cpu/timer.c \
+	kernel/arch/x86_64/cpu/tss.c \
 	kernel/drivers/ata.c \
 	kernel/drivers/config.c \
 	kernel/drivers/module_loader.c \
@@ -53,6 +54,7 @@ KERNEL_SRC = \
 	kernel/system/syscall_dir.c \
 	kernel/system/syscall_file.c \
 	kernel/system/threads.c \
+	kernel/system/process.c \
 	kernel/system/scheduler.c \
 	kernel/system/spinlock.c \
 	kernel/dex/dex_loader.c \
@@ -76,7 +78,8 @@ KERNEL_SRC += \
 PROGRAMS_LIST = dterm \
 				hello \
 				ls \
-				ttest
+				ttest \
+				ptest
 
 # Helpers
 KERNEL_SRC += \
@@ -209,6 +212,7 @@ run: all
 		-monitor stdio \
 		-m 64M \
 		-serial file:serial.log \
+		-no-reboot -no-shutdown \
 		-d guest_errors,trace:ioport_* -D qemu.log \
 		-drive id=disk,file=build/diffos.img,if=ide,format=raw \
 		-chardev file,id=dbg,path=/home/zet/os/debugcon.log \

@@ -315,14 +315,16 @@ int system_file_open(const char *abs_path, int oflags, int mode)
 {
     (void)mode;
 
+#ifdef DIFF_DEBUG
+    printf("[KERNEL] abs_path='%s'\n", abs_path);
+#endif
     if(verify_fs_ready() != 0)
     {
         return -1;
     }
-
     char kpath[MAX_FILENAME_LEN];
 
-    if(copy_string_from_user(kpath, abs_path, sizeof(kpath)) != 0)
+    if(copy_string_from_user(kpath, abs_path, sizeof(kpath)) == -1)
     {
         return -1;
     }

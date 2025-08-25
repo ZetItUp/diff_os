@@ -247,18 +247,6 @@ static void debug_dump_header(const ddf_header_t *h, uint32_t file_bytes)
 #endif
 }
 
-#ifdef DIFF_DEBUG
-// Safe helper to look for a string from the module image for logs
-static const char *ddf_get_string(const void *base, const ddf_header_t *h, uint32_t name_off)
-{
-    (void)h;
-
-    const char *strtab = (const char *)((const uint8_t*)base + h->strtab_offset);
-
-    return strtab + name_off;
-}
-#endif
-
 // Relocations
 
 static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_bytes)

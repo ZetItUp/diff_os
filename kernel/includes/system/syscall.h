@@ -4,6 +4,8 @@
 
 #define KERNEL_CS   0x08
 #define KERNEL_DS   0x10
+#define MAX_EXEC_NEST 8
+#define MAX_ARG_LEN   256
 
 enum
 {
@@ -30,6 +32,8 @@ enum
     SYSTEM_THREAD_SLEEP_MS = 20,
     SYSTEM_TIME_MS = 21,
     SYSTEM_THREAD_GET_ID = 22,
+    SYSTEM_PROCESS_SPAWN = 23,
+    SYSTEM_WAIT_PID = 24,
 };
 
 struct syscall_frame 
@@ -62,6 +66,8 @@ struct dirent;
 extern void system_call_stub(void);
 extern FileTable *file_table;
 
+int resolve_exec_path(char *out, size_t out_sz, const char *name);
+
 int system_open_dir(const char *path);
 int system_read_dir(int handle, struct dirent *out);
 int system_close_dir(int handle);
@@ -71,3 +77,7 @@ int system_file_close(int file_descriptor);
 long system_file_seek(int file, long offset, int whence);
 long system_file_read(int file, void *buf, unsigned long count);
 long system_file_write(int file, const void *buf, unsigned long count);
+
+int system_process_spawn(const char *upath, int argc, char **uargv);
+int system_wait_pid(int pid, int *u_status);
+

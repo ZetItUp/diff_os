@@ -2,6 +2,7 @@
 #include "stdint.h"
 #include "stddef.h"
 #include "diff.h"
+#include "system/process.h"
 
 #define DEX_MAGIC           0x58454400  // "DEX\0"
 #define DEX_VERSION_MAJOR   1
@@ -71,5 +72,6 @@ typedef struct
     uint32_t image_size;
 } dex_executable_t;
 
+int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **argv);
 int dex_run(const FileTable *ft, const char *path, int argc, char **argv);
 int dex_load(const void *file_data, size_t file_size, dex_executable_t *out);

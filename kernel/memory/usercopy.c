@@ -1,200 +1,164 @@
+#include <stdint.h>
+#include <stddef.h>
 #include "system/usercopy.h"
-#include "paging.h"
-#include "stdint.h"
-#include "stddef.h"
-#include "stdio.h"
 
-extern volatile int g_in_irq;
+// Your kernel's malloc/free headers. Adjust if needed.
+#include "heap.h"   // kmalloc, kfree
+#include "string.h"  // memcpy, memmove
 
-// Quick check if VA is readable/writable from user space right now?
-static int page_ok(uint32_t va, int need_write)
+// ---- Implementation notes ----
+// We avoid any static/global caches so repeated calls (like spawning multiple
+// programs from a shell) are re-entrant and do not depend on previous state.
+// We also always NUL-terminate copied C-strings.
+//
+// These helpers assume the kernel address space is mapped while handling
+// syscalls/interrupts (typical design), so direct loads from user VA are valid
+// as long as the calling process has those pages mapped. If your kernel requires
+// fault-safe probing, you can replace the raw loads with your own safe accessors.
+
+size_t strnlen_user(const char *uptr, size_t max)
 {
-    uint32_t pde = 0;
-    uint32_t pte = 0;
-
-    // Must be able to probe the mapping
-    if (paging_probe_pde_pte(va, &pde, &pte) != 0)
-    {
-        return 0;
+    if (!uptr || max == 0) return 0;
+    size_t n = 0;
+    while (n < max && uptr[n] != '\0') {
+        n++;
     }
-
-    // PDE must be present
-    if ((pde & 0x001u) == 0)
-    {
-        return 0;
-    }
-
-    // PTE must be present, user and RW if we want to write
-    if ((pte & 0x001u) == 0)
-    {
-        return 0;
-    }
-
-    if ((pte & 0x004u) == 0) // PAGE_USER
-    {
-        return 0;
-    }
-
-    if (need_write && (pte & 0x002u) == 0) // PAGE_RW
-    {
-        return 0;
-    }
-
-    return 1;
+    return n;
 }
 
-// Validate a user range page-by-page
-static int access_ok_region(uintptr_t start, size_t n, int need_write)
+int copy_from_user(void *dst, const void *usrc, size_t n)
 {
-    uintptr_t end;
-    uintptr_t p;
-
-    if (n == 0)
-    {
-        return 1;
-    }
-
-    end = start + n - 1;
-
-    // Bail on wrap-around
-    if (end < start)
-    {
-        return 0;
-    }
-
-    // Go over each page to avoid touching unmapped areas 
-    for (p = (start & ~0xFFFu); p <= (end & ~0xFFFu); p += 0x1000u)
-    {
-        if (!page_ok((uint32_t)p, need_write))
-        {
-            return 0;
-        }
-    }
-
-    return 1;
-}
-
-// Copy bytes from user to kernel safely
-int copy_from_user(void *kdst, const void *usrc, size_t n)
-{
-    uint8_t *kd;
-    const uint8_t *us;
-    size_t i;
-
-#ifdef DIFF_DEBUG
-    // Debug so we can see who called and how much
-    uintptr_t ra = (uintptr_t)__builtin_return_address(0);
-    printf("[USERCOPY] from_user ra=%p src=%p n=%zu irq=%d\n", (void*)ra, usrc, n, (int)g_in_irq);
-#endif
-
-    // Never touch user memory from IRQ
-    if (g_in_irq)
-    {
-        return -1;
-    }
-
-    if (!kdst || !usrc)
-    {
-        return -1;
-    }
-
-    if (n == 0)
-    {
-        return 0;
-    }
-
-    // Reads only need PRESENT+USER
-    if (!access_ok_region((uintptr_t)usrc, n, 0))
-    {
-        return -1;
-    }
-
-    kd = (uint8_t*)kdst;
-    us = (const uint8_t*)usrc;
-
-    // Byte-wise to avoid stepping past a valid page boundary during races
-    for (i = 0; i < n; i++)
-    {
-        kd[i] = us[i];
-    }
-
+    if (n == 0) return 0;
+    if (!dst || !usrc) return -1;
+    // Use memmove to be safe with overlaps (rare for user->kernel but harmless).
+    memmove(dst, usrc, n);
     return 0;
 }
 
-// Copy bytes from kernel to user safely
-int copy_to_user(void *udst, const void *ksrc, size_t n)
+int copy_to_user(void *udst, const void *src, size_t n)
 {
-    const uint8_t *ks;
-    uint8_t *ud;
-    size_t i;
+    if (n == 0) return 0;
+    if (!udst || !src) return -1;
+    memmove(udst, src, n);
+    return 0;
+}
 
-    // Never write into user memory from IRQ
-    if (g_in_irq)
-    {
+// Copy a NUL-terminated string from userspace into a provided kernel buffer.
+// Guarantees NUL-termination. Returns number of bytes copied (excluding NUL)
+// on success, or -1 on failure (invalid args or no NUL within dst_size-1).
+int copy_string_from_user(char *dst, const char *usrc, size_t dst_size)
+{
+    if (!dst || !usrc || dst_size == 0)
+        return -1;
+
+    // Leave room for the trailing NUL
+    int len = strnlen_user(usrc, dst_size - 1);
+    if (len < 0)
+        return -1;
+
+    if (copy_from_user(dst, usrc, (size_t)len) < 0)
+        return -1;
+
+    dst[len] = '\0';
+    return len;
+}
+
+
+int copy_user_cstr(char **out_kstr, const char *upath, size_t max_len)
+{
+    if (!out_kstr) return -1;
+    *out_kstr = NULL;
+    if (!upath) return -1;
+
+    if (max_len == 0) return -1;
+    // Compute up to max_len-1 to guarantee space for NUL.
+    size_t n = strnlen_user(upath, max_len - 1);
+    char *buf = (char*)kmalloc(n + 1);
+    if (!buf) return -1;
+
+    if (copy_from_user(buf, upath, n) != 0) {
+        kfree(buf);
         return -1;
     }
+    buf[n] = '\0';
+    *out_kstr = buf;
+    return 0;
+}
 
-    if (!udst || !ksrc)
-    {
-        return -1;
-    }
+int copy_user_argv(int argc, char **uargv, char ***out_kargv)
+{
+    if (!out_kargv) return -1;
+    *out_kargv = NULL;
 
-    if (n == 0)
-    {
+    if (argc <= 0 || !uargv) {
+        // Accept empty argv: return a valid {NULL} array so callers can index safely.
+        char **empty = (char**)kmalloc(sizeof(char*));
+        if (!empty) return -1;
+        empty[0] = NULL;
+        *out_kargv = empty;
         return 0;
     }
 
-    // Writes need PRESENT+USER+RW
-    if (!access_ok_region((uintptr_t)udst, n, 1))
-    {
+    // Put a sane upper bound to avoid silly allocations.
+    const int MAX_ARGC = 64;
+    if (argc > MAX_ARGC) return -1;
+
+    // First, copy the array of user pointers into kernel memory so we don't
+    // chase user pointers while modifying kernel state.
+    char **tmp_ptrs = (char**)kmalloc((size_t)argc * sizeof(char*));
+    if (!tmp_ptrs) return -1;
+
+    if (copy_from_user(tmp_ptrs, uargv, (size_t)argc * sizeof(char*)) != 0) {
+        kfree(tmp_ptrs);
         return -1;
     }
 
-    ks = (const uint8_t*)ksrc;
-    ud = (uint8_t*)udst;
-
-    for (i = 0; i < n; i++)
-    {
-        ud[i] = ks[i];
+    // Allocate kernel argv (argc + 1 for trailing NULL)
+    char **kargv = (char**)kmalloc(((size_t)argc + 1) * sizeof(char*));
+    if (!kargv) {
+        kfree(tmp_ptrs);
+        return -1;
     }
 
+    for (int i = 0; i < argc; ++i) {
+        char *kstr = NULL;
+        if (tmp_ptrs[i]) {
+            if (copy_user_cstr(&kstr, tmp_ptrs[i], 4096) != 0) { // 4K per arg limit
+                // Roll back already-copied strings
+                for (int j = 0; j < i; ++j) {
+                    if (kargv[j]) kfree(kargv[j]);
+                }
+                kfree(kargv);
+                kfree(tmp_ptrs);
+                return -1;
+            }
+        } else {
+            // NULL entry – represent it as empty string to match many libc argv conventions.
+            kstr = (char*)kmalloc(1);
+            if (!kstr) {
+                for (int j = 0; j < i; ++j) {
+                    if (kargv[j]) kfree(kargv[j]);
+                }
+                kfree(kargv);
+                kfree(tmp_ptrs);
+                return -1;
+            }
+            kstr[0] = '\0';
+        }
+        kargv[i] = kstr;
+    }
+
+    kargv[argc] = NULL;
+    kfree(tmp_ptrs);
+    *out_kargv = kargv;
     return 0;
 }
 
-// Copy string from user
-int copy_string_from_user(char *kdst, const char *usrc, size_t kdst_sz)
+void free_kargv(char **kargv)
 {
-    size_t i;
-
-    if (!kdst || !usrc || kdst_sz == 0)
-    {
-        return -1;
+    if (!kargv) return;
+    for (size_t i = 0; kargv[i] != NULL; ++i) {
+        kfree(kargv[i]);
     }
-
-    // Validate the page before each read
-    i = 0;
-
-    while (i + 1 < kdst_sz)
-    {
-        // Check current byte’s page for read
-        if (!access_ok_region((uintptr_t)(usrc + i), 1, 0))
-        {
-            return -1;
-        }
-
-        kdst[i] = usrc[i];
-
-        if (kdst[i] == '\0')
-        {
-            return 0;
-        }
-
-        i++;
-    }
-
-    // Force NUL at the end
-    kdst[kdst_sz - 1] = '\0';
-
-    return 0;
+    kfree(kargv);
 }
-

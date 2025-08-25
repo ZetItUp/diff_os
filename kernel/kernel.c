@@ -20,6 +20,8 @@
 #include "dex/dex.h"
 #include "system/threads.h"
 #include "system/scheduler.h"
+#include "system/syscall.h"
+#include "system/process.h"
 
 __attribute__((naked, section(".text.start")))
 void _start(void)
@@ -69,7 +71,9 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
     init_paging(ram_mb);
     init_heap(&__heap_start, &__heap_end);
 
+    process_init();
     idt_init();
+    system_call_init();
     pic_remap(0x20, 0x28);
     irq_init();
     timer_install();
@@ -87,7 +91,7 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
 static void init_thread(void* argument)
 {
     (void)argument;
-    asm volatile("sti"); 
+    
     vga_capture_rom_font_early();
     uint8_t h = vga_cell_height();
     vga_cursor_enable(0, h - 1);
@@ -97,23 +101,40 @@ static void init_thread(void* argument)
     display_sys_info();
 
     char* system_config_file = "system/sys.cfg";
-    load_drivers(file_table, system_config_file);
-    
+
+    int shell_spawn_state = 0;
+
     for (;;)
     {
-        char* shell_path = find_shell_path(file_table, system_config_file);
-        if (shell_path)
+        if (shell_spawn_state == 0)
         {
-            int result = dex_run(file_table, shell_path, 0, 0);
-            kfree(shell_path);
-            printf("[KERNEL] Shell exited with code %d, restarting in 1s...\n", result);
+            load_drivers(file_table, system_config_file);
+
+            char* shell_path = find_shell_path(file_table, system_config_file);
+
+            if (!shell_path)
+            {
+                printf("[CRITICAL ERROR] No shell was set!\n");
+                shell_spawn_state = -1;  
+            }
+            else
+            {
+                int pid = dex_spawn_process(file_table, shell_path, 0, 0);
+                kfree(shell_path);
+
+                if (pid > 0)
+                {
+                    shell_spawn_state = 1;
+                }
+                else
+                {
+                    printf("[KERNEL] Failed to spawn shell (pid=%d). Not retrying.\n", pid);
+                    shell_spawn_state = -1;
+                }
+            }
         }
-        else
-        {
-            printf("[ERROR] No shell was set! Retrying in 1s...\n");
-        }
-        
-        sleep_ms(1000);
+
+        thread_yield();
     }
 }
 

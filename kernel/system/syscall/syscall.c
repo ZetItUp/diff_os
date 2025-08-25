@@ -6,6 +6,7 @@
 #include "system/usercopy.h"
 #include "system/scheduler.h"
 #include "system/threads.h"
+#include "system/process.h"
 #include "console.h"
 #include "stdio.h"
 #include "paging.h"
@@ -13,9 +14,6 @@
 #include "dex/dex.h"
 #include "diff.h"
 #include "timer.h"
-
-#define MAX_EXEC_NEST 8
-#define MAX_ARG_LEN   128
 
 struct dirent;
 
@@ -38,7 +36,7 @@ static void user_exit_trampoline(void)
 }
 
 // Try common locations and build an absolute path
-static int resolve_exec_path(char *out, size_t out_sz, const char *name)
+int resolve_exec_path(char *out, size_t out_sz, const char *name)
 {
     if (!name || !name[0])
     {
@@ -138,6 +136,9 @@ static int system_print(const char *s)
         }
 
         putch(c);
+#ifdef DIFF_DEBUG
+        printf("[WRITE] pid=%d\n", process_current()->pid);
+#endif
     }
 
     return 0;
@@ -178,10 +179,17 @@ static int system_exec_dex(
     return 0;
 }
 
-// Restore parent or jump to the halt trampoline
+// System exit call
 static int system_exit(struct syscall_frame *f, int code)
 {
-    (void)code;
+        process_t *p = process_current();
+
+    if (p && p->pid != 0)
+    {
+        process_exit_current(code);
+
+        return 0;
+    }
 
     if (s_parent_sp > 0)
     {
@@ -316,7 +324,7 @@ int system_call_dispatch(struct syscall_frame *f)
 
             char kname[256];
 
-            if (copy_string_from_user(kname, upath, sizeof(kname)) != 0)
+            if (copy_string_from_user(kname, upath, sizeof(kname)) < 0)
             {
                 ret = -1;
 
@@ -375,7 +383,7 @@ int system_call_dispatch(struct syscall_frame *f)
 
                 char *dst = argbuf + (size_t)i * (size_t)MAX_ARG_LEN;
 
-                if (copy_string_from_user(dst, uargp, (size_t)MAX_ARG_LEN) != 0)
+                if (copy_string_from_user(dst, uargp, (size_t)MAX_ARG_LEN) < 0)
                 {
                     ret = -1;
 
@@ -488,6 +496,21 @@ int system_call_dispatch(struct syscall_frame *f)
             thread_t *t = current_thread();
 
             ret = t ? t->thread_id : -1;
+
+            break;
+        }
+        case SYSTEM_PROCESS_SPAWN:
+        {
+            ret = system_process_spawn((const char*)arg0, arg1, (char**)arg2);
+
+            break;
+        }
+        case SYSTEM_WAIT_PID:
+        {
+            int pid = arg0;
+            int *u_status = (int*)(uintptr_t)arg1;
+
+            ret = system_wait_pid(pid, u_status);
 
             break;
         }

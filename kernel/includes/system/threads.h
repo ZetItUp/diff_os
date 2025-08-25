@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-// Types
+struct process;
 
 typedef enum
 {
@@ -30,14 +30,16 @@ typedef struct thread
     int thread_id;
     thread_state_t state;
     cpu_context_t context;
+    
     uint32_t kernel_stack_base;
     uint32_t kernel_stack_top;
+    
     struct thread* next;
-    void* wait_object;
+    struct process *owner_process;
 } thread_t;
-
-// API
 
 int thread_create(void (*entry)(void*), void* argument, size_t kernel_stack_bytes);
 thread_t* current_thread(void);
 void thread_exit(void) __attribute__((noreturn));
+int thread_create_for_process(struct process *owner, void (*entry)(void*), void *argument, size_t kernel_stack_bytes);
+

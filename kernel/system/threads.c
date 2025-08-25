@@ -1,67 +1,123 @@
-#include "system/scheduler.h"
 #include "system/threads.h"
+#include "system/scheduler.h"
+#include "system/process.h"
+#include "interfaces.h"
+#include "stdio.h"
+#include "paging.h"
 #include "heap.h"
 #include "string.h"
 
-static int next_thread_id = 1;
-
 extern void thread_entry_thunk(void);
+
+static int g_next_tid = 1;
+
+static void* kstack_alloc(size_t bytes)
+{
+    if (bytes < 4096)
+    {
+        bytes = 4096;
+    }
+
+    void* p = kmalloc(bytes);
+    if (!p)
+    {
+        printf("[THREAD] kmalloc(%u) failed\n", (unsigned)bytes);
+
+        return (void*)0;
+    }
+
+    memset(p, 0, bytes);
+
+    return p;
+}
+
+static void init_thread_context(thread_t* t, void (*entry)(void*), void* argument)
+{
+    uint32_t esp = t->kernel_stack_top;
+
+    /* Align stack for good measure */
+    esp &= ~0xFu;
+
+    /*
+        We expect context_switch() to set ESP to t->context.esp and RET.
+        RET must jump to thread_entry_thunk, and on entry the stack must be:
+            [esp+0] = entry function (void (*)(void*))
+            [esp+4] = argument pointer (void*)
+        Therefore we prebuild:
+            [esp+0] = &thread_entry_thunk       (RET target)
+            [esp+4] = entry
+            [esp+8] = argument
+        After RET pops the thunk address, the thunk sees [esp]=entry, [esp+4]=arg.
+    */
+    esp -= 12;
+    *(uint32_t*)(esp + 0) = (uint32_t)(void*)&thread_entry_thunk;
+    *(uint32_t*)(esp + 4) = (uint32_t)(void*)entry;
+    *(uint32_t*)(esp + 8) = (uint32_t)(void*)argument;
+
+    /* Callee-saved registers (defensive init) */
+    t->context.edi = 0;
+    t->context.esi = 0;
+    t->context.ebx = 0;
+    t->context.ebp = 0;
+
+    /* Debug-only: eip mirrors the thunk; real control flow is via RET */
+    t->context.eip = (uint32_t)(void*)&thread_entry_thunk;
+    t->context.esp = esp;
+}
 
 int thread_create(void (*entry)(void*), void* argument, size_t kernel_stack_bytes)
 {
-    if (kernel_stack_bytes < 4096)
-    {
-        kernel_stack_bytes = 4096;  // Make sure stack is at least one page
-    }
+    return thread_create_for_process(process_current(), entry, argument, kernel_stack_bytes);
+}
 
-    thread_t* thread = (thread_t*)kmalloc(sizeof(thread_t));
-
-    if (!thread)
+int thread_create_for_process(
+    struct process* owner,
+    void (*entry)(void*),
+    void* argument,
+    size_t kernel_stack_bytes
+)
+{
+    if (!entry)
     {
+
         return -1;
     }
 
-    memset(thread, 0, sizeof(*thread));
+    thread_t* t = (thread_t*)kmalloc(sizeof(thread_t));
+    if (!t)
+    {
 
-    uint8_t* stack = (uint8_t*)kmalloc(kernel_stack_bytes + 4096);  // Extra page for guard or alignment
+        return -2;
+    }
 
+    memset(t, 0, sizeof(*t));
+
+    t->thread_id = g_next_tid++;
+    t->state = THREAD_NEW;
+    t->owner_process = owner;
+
+    void* stack = kstack_alloc(kernel_stack_bytes);
     if (!stack)
     {
-        kfree(thread);
+        kfree(t);
 
-        return -1;
+        return -3;
     }
 
-    memset(stack, 0, kernel_stack_bytes);
+    t->kernel_stack_base = (uint32_t)(uintptr_t)stack;
+    t->kernel_stack_top = t->kernel_stack_base + (uint32_t)kernel_stack_bytes;
 
-    thread->thread_id = next_thread_id++;
-    thread->state = THREAD_RUNNABLE;
+    init_thread_context(t, entry, argument);
 
-    thread->kernel_stack_base = (uint32_t)(uintptr_t)stack;
-    thread->kernel_stack_top = (uint32_t)(uintptr_t)stack + (uint32_t)kernel_stack_bytes;
+    if (owner)
+    {
+        owner->live_threads++;
+    }
 
-    uint32_t* sp = (uint32_t*)(uintptr_t)thread->kernel_stack_top;
+    t->state = THREAD_RUNNABLE;
 
-    // Align stack to 16 bytes
-    sp = (uint32_t*)((uint32_t)(uintptr_t)sp & ~0xF);
+    scheduler_add_thread(t);
 
-    // Build fake stack frame so thread_entry_thunk can run correctly
-    *(--sp) = (uint32_t)(uintptr_t)argument;           // Argument for entry function
-    *(--sp) = (uint32_t)(uintptr_t)thread_entry_thunk; // Return address for when entry finishes
-    *(--sp) = 0;                                       // Saved EBP
-    *(--sp) = (uint32_t)(uintptr_t)entry;              // Put entry in EBX so thunk can pick it up
-    *(--sp) = 0;                                       // ESI
-    *(--sp) = 0;                                       // EDI
-
-    thread->context.esp = (uint32_t)(uintptr_t)sp;
-    thread->context.ebx = (uint32_t)(uintptr_t)entry;
-    thread->context.esi = 0;
-    thread->context.edi = 0;
-    thread->context.ebp = 0;
-    thread->context.eip = (uint32_t)(uintptr_t)thread_entry_thunk;
-
-    scheduler_add_thread(thread);
-
-    return thread->thread_id;
+    return t->thread_id;
 }
 

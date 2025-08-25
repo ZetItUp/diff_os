@@ -24,12 +24,16 @@ extern volatile int g_in_irq;
 
 int disk_read(uint32_t sector, uint32_t count, void* buffer)
 {
-    return ata_read(sector, count, buffer);
+    int r = ata_read(sector, count, buffer);
+
+    return r;
 }
 
 int disk_write(uint32_t sector, uint32_t count, const void* buffer)
 {
-    return ata_write(sector, count, buffer);
+    int r = ata_write(sector, count, buffer);
+
+    return r;
 }
 
 // Superblock and tables
@@ -37,34 +41,47 @@ int disk_write(uint32_t sector, uint32_t count, const void* buffer)
 int read_file_table(const SuperBlock* sb)
 {
     size_t table_bytes;
-    size_t bitmap_bytes;
+    size_t bitmap_bytes_disk;
+    size_t bitmap_bytes_mem;
+    size_t bitmap_bytes_alloc;
+    size_t on_disk_entries;
     FileTable* new_table;
     uint8_t* new_bitmap;
     int r;
 
     // Sizes on disk in bytes
     table_bytes = (size_t)sb->file_table_size * SECTOR_SIZE;
-    bitmap_bytes = (size_t)sb->file_table_bitmap_size * SECTOR_SIZE;
+    bitmap_bytes_disk = (size_t)sb->file_table_bitmap_size * SECTOR_SIZE;
 
-    // Must fit the structure we expect
-    if (table_bytes < sizeof(FileTable))
+    // Each FileEntry is packed 320 bytes; require at least one and exact multiple
+    if (table_bytes < sizeof(FileEntry) || (table_bytes % sizeof(FileEntry)) != 0)
     {
-        printf("[Diff FS] ERROR: file_table too small (%u < %u)\n",
-               (unsigned)table_bytes, (unsigned)sizeof(FileTable));
+        printf("[Diff FS] ERROR: file_table size invalid on disk (bytes=%u, entry=%u)\n",
+               (unsigned)table_bytes, (unsigned)sizeof(FileEntry));
 
         return -1;
     }
 
-    // Read the file table
-    new_table = (FileTable*)kmalloc(table_bytes);
+    on_disk_entries = table_bytes / sizeof(FileEntry);
+
+#ifdef DIFF_DEBUG
+    printf("FileTable sizeof=%u, on-disk bytes=%u (%u entries)\n",
+           (unsigned)sizeof(FileTable), (unsigned)table_bytes, (unsigned)on_disk_entries);
+#endif
+    // Always allocate full in-memory table (for MAX_FILES), zero it,
+    // then read the smaller on-disk table into the beginning.
+    new_table = (FileTable*)kmalloc(sizeof(FileTable));
 
     if (!new_table)
     {
-        printf("[Diff FS] ERROR: OOM for file_table (%u bytes)\n", (unsigned)table_bytes);
+        printf("[Diff FS] ERROR: OOM for file_table (%u bytes)\n", (unsigned)sizeof(FileTable));
 
         return -1;
     }
 
+    memset(new_table, 0, sizeof(FileTable));
+
+    // Read only what exists on disk (table_bytes)
     r = disk_read(sb->file_table_sector, sb->file_table_size, new_table);
 
     if (r < 0)
@@ -75,16 +92,31 @@ int read_file_table(const SuperBlock* sb)
         return -1;
     }
 
-    // Read the file bitmap
-    new_bitmap = (uint8_t*)kmalloc(bitmap_bytes);
+    // Prepare file entry bitmap:
+    // - in-memory we want enough bits for MAX_FILES
+    // - but we must be able to read however many bytes exist on disk
+    bitmap_bytes_mem = (size_t)((MAX_FILES + 7) / 8);
+    bitmap_bytes_alloc = (bitmap_bytes_disk > bitmap_bytes_mem) ? bitmap_bytes_disk : bitmap_bytes_mem;
 
-    if (!new_bitmap)
+    if (bitmap_bytes_alloc == 0)
     {
-        printf("[Diff FS] ERROR: OOM for file_bitmap (%u bytes)\n", (unsigned)bitmap_bytes);
+        printf("[Diff FS] ERROR: file_table bitmap size is zero on disk\n");
         kfree(new_table);
 
         return -1;
     }
+
+    new_bitmap = (uint8_t*)kmalloc(bitmap_bytes_alloc);
+
+    if (!new_bitmap)
+    {
+        printf("[Diff FS] ERROR: OOM for file_bitmap (%u bytes)\n", (unsigned)bitmap_bytes_alloc);
+        kfree(new_table);
+
+        return -1;
+    }
+
+    memset(new_bitmap, 0, bitmap_bytes_alloc);
 
     r = disk_read(sb->file_table_bitmap_sector, sb->file_table_bitmap_size, new_bitmap);
 
@@ -96,8 +128,8 @@ int read_file_table(const SuperBlock* sb)
 
         return -1;
     }
-    
-    // Lock and update so both pointers change at the same time
+
+    // Publish atomically
     spin_lock(&file_table_lock);
     file_table = new_table;
     file_bitmap = new_bitmap;
@@ -175,7 +207,9 @@ static int ascii_stricmp(const char* a, const char* b)
 
         if (ca != cb || ca == '\0' || cb == '\0')
         {
-            return (int)ca - (int)cb;
+            int diff = (int)ca - (int)cb;
+
+            return diff;
         }
     }
 }
@@ -184,6 +218,12 @@ static int ascii_stricmp(const char* a, const char* b)
 
 static uint32_t detect_root_id(const FileTable* table)
 {
+    // Prefer explicit root id if provided by superblock
+    if (superblock.root_dir_id != 0)
+    {
+        return superblock.root_dir_id;
+    }
+
     // Find an entry that looks like root
     for (int i = 0; i < MAX_FILES; i++)
     {
@@ -479,7 +519,9 @@ void clear_bitmap_bit(uint8_t* bitmap, int index)
 int is_bitmap_bit_set(const uint8_t* bitmap, int index)
 {
     // True if taken
-    return (bitmap[index / 8] & (uint8_t)(1 << (index % 8))) != 0;
+    int v = (bitmap[index / 8] & (uint8_t)(1 << (index % 8))) != 0;
+
+    return v;
 }
 
 int find_free_entry(const uint8_t* bitmap, int max_files)

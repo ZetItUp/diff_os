@@ -284,7 +284,7 @@ int system_open_dir(const char *path)
 
     if(path)
     {
-        if(copy_string_from_user(kpath, path, sizeof(kpath)) != 0)
+        if(copy_string_from_user(kpath, path, sizeof(kpath)) < 0)
         {
             return -1;
         }

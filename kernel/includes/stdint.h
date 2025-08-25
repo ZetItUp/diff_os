@@ -21,9 +21,11 @@ typedef unsigned long long uint64_t;
 #if defined(__x86_64__) || defined(_M_X64)
 typedef uint64_t          uintptr_t;
 typedef int64_t           intptr_t;
+typedef int64_t           ssize_t;
 #else
 typedef uint32_t          uintptr_t;
 typedef int32_t           intptr_t;
+typedef int32_t           ssize_t;
 #endif
 
 // Standard limits 

@@ -21,7 +21,8 @@
 
 #define MAX_EXL_IMPORTS 256
 
-static exl_t exl_files[MAX_EXL_FILES];
+static exl_t  exl_files[MAX_EXL_FILES];
+static uint32_t exl_cr3s[MAX_EXL_FILES];   /* CR3-tag per inläst EXL */
 static size_t exl_count = 0;
 
 static char loading_names[MAX_EXL_FILES][EXL_NAME_LENGTH];
@@ -29,13 +30,19 @@ static size_t loading_depth = 0;
 
 extern FileTable *file_table;
 
-/* ---------------- Debug helpers ---------------- */
+/* === small helpers === */
+static inline uint32_t read_cr3_local(void)
+{
+    uint32_t v;
+    __asm__ __volatile__("mov %%cr3, %0" : "=r"(v));
+    return v;
+}
+
 static void debug_print_hdr(const dex_header_t *h)
 {
 #ifndef DIFF_DEBUG
     (void)h;
 #endif
-
     DDBG("=== DEX HEADER DEBUG ===\n");
     DDBG("magic=0x%08x  ver=%u.%u\n", h->magic, h->version_major, h->version_minor);
     DDBG("entry_off=0x%08x\n", h->entry_offset);
@@ -50,24 +57,11 @@ static void debug_print_hdr(const dex_header_t *h)
     DDBG("========================\n");
 }
 
-/* ---------------- Bounds helpers ---------------- */
 static int range_ok(uint32_t off, uint32_t sz, uint32_t max)
 {
-    if (sz == 0)
-    {
-        return 1;
-    }
-
-    if (off > max)
-    {
-        return 0;
-    }
-
-    if (max - off < sz)
-    {
-        return 0;
-    }
-
+    if (sz == 0) return 1;
+    if (off > max) return 0;
+    if (max - off < sz) return 0;
     return 1;
 }
 
@@ -75,58 +69,32 @@ static int ptr_in_range(const void *p, const uint8_t *base, uint32_t size)
 {
     uint32_t v = (uint32_t)p;
     uint32_t b = (uint32_t)base;
-
     return (v >= b) && (v < b + size);
 }
 
 /* ---------------- Safe path/name helpers ---------------- */
 static const char *basename_ptr_safe(const char *path)
 {
-    if (!path)
-    {
-        return "";
-    }
-
+    if (!path) return "";
     const char *base = path;
-
-    for (const char *p = path; *p; ++p)
-    {
-        if (*p == '/' || *p == '\\')
-        {
-            base = p + 1;
-        }
-    }
-
+    for (const char *p = path; *p; ++p) if (*p == '/' || *p == '\\') base = p + 1;
     return base;
 }
 
 static void canon_exl_name(const char *in, char *out, size_t out_sz)
 {
-    if (!in || !*in)
-    {
-        (void)strlcpy(out, "diffc.exl", out_sz);
-        return;
-    }
-
+    if (!in || !*in) { (void)strlcpy(out, "diffc.exl", out_sz); return; }
     const char *base = basename_ptr_safe(in);
     (void)strlcpy(out, base, out_sz);
-
     size_t len = strlen(out);
-
-    if (len < 4 || strcmp(out + (len - 4), ".exl") != 0)
-    {
-        (void)strlcat(out, ".exl", out_sz);
-    }
+    if (len < 4 || strcmp(out + (len - 4), ".exl") != 0) (void)strlcat(out, ".exl", out_sz);
 }
 
 static int exl_name_equals(const char *a, const char *b)
 {
-    char ca[EXL_NAME_LENGTH];
-    char cb[EXL_NAME_LENGTH];
-
+    char ca[EXL_NAME_LENGTH], cb[EXL_NAME_LENGTH];
     canon_exl_name(a, ca, sizeof(ca));
     canon_exl_name(b, cb, sizeof(cb));
-
     return strcmp(ca, cb) == 0;
 }
 
@@ -134,15 +102,8 @@ static int is_loading(const char *name)
 {
     char norm[EXL_NAME_LENGTH];
     canon_exl_name(name, norm, sizeof(norm));
-
     for (size_t i = 0; i < loading_depth; ++i)
-    {
-        if (exl_name_equals(loading_names[i], norm))
-        {
-            return 1;
-        }
-    }
-
+        if (exl_name_equals(loading_names[i], norm)) return 1;
     return 0;
 }
 
@@ -171,13 +132,37 @@ static void pop_loading(const char *name)
         if (exl_name_equals(loading_names[i], norm))
         {
             for (size_t j = i + 1; j < loading_depth; ++j)
-            {
-                /* safe move up: use strlcpy to guarantee NUL */
                 (void)strlcpy(loading_names[j - 1], loading_names[j], EXL_NAME_LENGTH);
-            }
             loading_depth--;
             return;
         }
+    }
+}
+
+/* ---------------- EXL cache invalidation (per CR3) ---------------- */
+void exl_invalidate_for_cr3(uint32_t cr3)
+{
+    if (!cr3) return;
+
+    size_t i = 0;
+    while (i < exl_count)
+    {
+        if (exl_cr3s[i] == cr3)
+        {
+            /* Frigör kernel-kopior (umalloc-området tillhör user-CR3 och rivs av paging_destroy_address_space) */
+            if (exl_files[i].symbol_table) kfree((void*)exl_files[i].symbol_table);
+            if (exl_files[i].strtab)       kfree((void*)exl_files[i].strtab);
+
+            /* Komprimera listan genom att flytta sista posten hit */
+            if (i != exl_count - 1)
+            {
+                exl_files[i] = exl_files[exl_count - 1];
+                exl_cr3s[i]  = exl_cr3s[exl_count - 1];
+            }
+            exl_count--;
+            continue; /* stanna på samma index, vi har flyttat in en ny post */
+        }
+        i++;
     }
 }
 
@@ -188,38 +173,27 @@ static void* resolve_local_symbol(const dex_header_t *hdr,
                                   uint8_t *image,
                                   const char *symbol)
 {
-    if (!symtab || !strtab || !symbol || !*symbol)
-    {
-        return NULL;
-    }
-
+    if (!symtab || !strtab || !symbol || !*symbol) return NULL;
     for (size_t i = 0; i < hdr->symbol_table_count; ++i)
     {
         const dex_symbol_t *s = &symtab[i];
         const char *nm = strtab + s->name_offset;
-
         if (strcmp(nm, symbol) == 0)
-        {
             return (void*)((uint32_t)image + s->value_offset);
-        }
     }
-
     return NULL;
 }
 
 void* resolve_exl_symbol(const char* exl_name, const char* symbol)
 {
-    if (!symbol || !*symbol)
-    {
-        return NULL;
-    }
+    if (!symbol || !*symbol) return NULL;
+
+    uint32_t cur_cr3 = read_cr3_local();
 
     for (size_t i = 0; i < exl_count; ++i)
     {
-        if (!exl_name_equals(exl_files[i].name, exl_name))
-        {
-            continue;
-        }
+        if (exl_cr3s[i] != cur_cr3) continue;              /* matcha adressrymd */
+        if (!exl_name_equals(exl_files[i].name, exl_name)) continue;
 
         const exl_t *lib = &exl_files[i];
 
@@ -229,9 +203,7 @@ void* resolve_exl_symbol(const char* exl_name, const char* symbol)
             const char *nm = lib->strtab + sym->name_offset;
 
             if (strcmp(nm, symbol) == 0)
-            {
                 return (void*)((uint32_t)lib->image_base + sym->value_offset);
-            }
         }
     }
 
@@ -239,13 +211,16 @@ void* resolve_exl_symbol(const char* exl_name, const char* symbol)
 }
 
 /* ---------------- Relocation ---------------- */
-static int do_relocate_exl(uint8_t *image, uint32_t total_sz,
-                           const dex_header_t *hdr,
-                           const dex_import_t *imp,
-                           const dex_reloc_t  *rel,
-                           const dex_symbol_t *symtab,
-                           const char *strtab,
-                           const char *self_name)
+static int do_relocate_exl(
+    uint8_t *image,
+    uint32_t total_sz,
+    const dex_header_t *hdr,
+    const dex_import_t *imp,
+    const dex_reloc_t  *rel,
+    const dex_symbol_t *symtab,
+    const char *strtab,
+    const char *self_name
+)
 {
     if (hdr->import_table_count > MAX_EXL_IMPORTS)
     {
@@ -253,7 +228,19 @@ static int do_relocate_exl(uint8_t *image, uint32_t total_sz,
         return -1;
     }
 
-    void *import_ptrs[MAX_EXL_IMPORTS];
+    void **import_ptrs = NULL;
+
+    if (hdr->import_table_count)
+    {
+        size_t bytes = (size_t)hdr->import_table_count * sizeof(void*);
+        import_ptrs = (void**)kmalloc(bytes);
+        if (!import_ptrs)
+        {
+            printf("[EXL] kmalloc(import_ptrs=%u) failed\n", (unsigned)bytes);
+            return -2;
+        }
+        memset(import_ptrs, 0, bytes);
+    }
 
     DDBG("--- IMPORTS DEBUG ---\n");
 
@@ -266,28 +253,22 @@ static int do_relocate_exl(uint8_t *image, uint32_t total_sz,
         if (exl_name_equals(exl, self_name))
         {
             p = resolve_local_symbol(hdr, symtab, strtab, image, sym);
-            if (p)
-            {
-                DDBG("[EXL] resolved locally %s:%s -> %p\n", exl, sym, p);
-            }
+            if (p) DDBG("[EXL] resolved locally %s:%s -> %p\n", exl, sym, p);
         }
 
         if (!p && is_loading(exl))
-        {
             p = resolve_local_symbol(hdr, symtab, strtab, image, sym);
-        }
 
         if (!p)
-        {
             p = resolve_exl_symbol(exl, sym);
-        }
 
         if (!p && !exl_name_equals(exl, self_name))
         {
             if (!load_exl(file_table, exl))
             {
                 printf("[EXL] cannot load dependency: %s\n", exl);
-                return -2;
+                if (import_ptrs) kfree(import_ptrs);
+                return -3;
             }
             p = resolve_exl_symbol(exl, sym);
         }
@@ -295,13 +276,15 @@ static int do_relocate_exl(uint8_t *image, uint32_t total_sz,
         if (!p)
         {
             printf("[EXL] unresolved %s:%s\n", exl, sym);
-            return -3;
+            if (import_ptrs) kfree(import_ptrs);
+            return -4;
         }
 
         if (ptr_in_range(p, image, total_sz))
         {
             printf("[EXL] FATAL ERROR: import '%s' resolves inside EXL image (%p)\n", sym, p);
-            return -4;
+            if (import_ptrs) kfree(import_ptrs);
+            return -5;
         }
 
         import_ptrs[i] = p;
@@ -319,7 +302,8 @@ static int do_relocate_exl(uint8_t *image, uint32_t total_sz,
         if (!range_ok(off, 4, total_sz))
         {
             printf("[EXL] reloc OOR: off=0x%08x (total=%u)\n", off, total_sz);
-            return -5;
+            if (import_ptrs) kfree(import_ptrs);
+            return -6;
         }
 
         uint8_t *target = image + off;
@@ -329,117 +313,35 @@ static int do_relocate_exl(uint8_t *image, uint32_t total_sz,
         switch (typ)
         {
             case DEX_ABS32:
-            {
-                if (idx >= hdr->import_table_count)
-                {
-                    printf("[EXL] ABS32 idx OOR (%u)\n", idx);
-                    return -6;
-                }
-
+                if (idx >= hdr->import_table_count) { if (import_ptrs) kfree(import_ptrs); return -7; }
                 *(uint32_t*)target = (uint32_t)import_ptrs[idx];
                 DDBG("[ABS32] @%08x: %08x -> %08x (S=%p)\n", site_la, old, *(uint32_t*)target, import_ptrs[idx]);
                 break;
-            }
 
             case DEX_PC32:
-            {
-                if (idx >= hdr->import_table_count)
-                {
-                    printf("[EXL] PC32 idx OOR (%u)\n", idx);
-                    return -7;
-                }
-
-                uint32_t S = (uint32_t)import_ptrs[idx];
-                int32_t disp = (int32_t)S - (int32_t)(site_la + 4);
-                *(int32_t*)target = disp;
-                DDBG("[PC32]  @%08x: P=%08x S=%08x -> disp=%d (old=%08x new=%08x)\n", site_la, site_la + 4, S, disp, old, *(uint32_t*)target);
+                if (idx >= hdr->import_table_count) { if (import_ptrs) kfree(import_ptrs); return -8; }
+                *(int32_t*)target = (int32_t)( (uint32_t)import_ptrs[idx] - (site_la + 4) );
+                DDBG("[PC32]  @%08x: P=%08x S=%08x -> disp=%d (old=%08x new=%08x)\n",
+                     site_la, site_la + 4, (uint32_t)import_ptrs[idx],
+                     *(int32_t*)target, old, *(uint32_t*)target);
                 break;
-            }
 
             case DEX_RELATIVE:
-            {
-                if (old > total_sz)
-                {
-                    DDBG("[REL] warn: addend=%08x > image_size=%08x\n", old, total_sz);
-                }
-
                 *(uint32_t*)target = old + (uint32_t)image;
-                DDBG("[REL]   @%08x: %08x -> %08x (base=%08x)\n", site_la, old, *(uint32_t*)target, (uint32_t)image);
+                DDBG("[REL]   @%08x: %08x -> %08x (base=%08x)\n",
+                     site_la, old, *(uint32_t*)target, (uint32_t)image);
                 break;
-            }
-
-#ifdef DEX_PLT32
-            case DEX_PLT32:
-            {
-                if (idx >= hdr->import_table_count)
-                {
-                    printf("[EXL] PLT32 idx OOR (%u)\n", idx);
-                    return -9;
-                }
-
-                uint32_t S2 = (uint32_t)import_ptrs[idx];
-                int32_t disp2 = (int32_t)S2 - (int32_t)(site_la + 4);
-                *(int32_t*)target = disp2;
-                DDBG("[PLT32] @%08x -> disp=%d (S=%08x)\n", site_la, disp2, S2);
-                break;
-            }
-#endif
-
-#ifdef DEX_GOT32
-            case DEX_GOT32:
-            {
-                if (idx >= hdr->import_table_count)
-                {
-                    printf("[EXL] GOT32 idx OOR (%u)\n", idx);
-                    return -10;
-                }
-
-                *(uint32_t*)target = (uint32_t)import_ptrs[idx];
-                DDBG("[GOT32] @%08x: %08x -> %08x\n", site_la, old, *(uint32_t*)target);
-                break;
-            }
-#endif
-
-#ifdef DEX_GLOB_DAT
-            case DEX_GLOB_DAT:
-            {
-                if (idx >= hdr->import_table_count)
-                {
-                    printf("[EXL] GLOB_DAT idx OOR (%u)\n", idx);
-                    return -11;
-                }
-
-                *(uint32_t*)target = (uint32_t)import_ptrs[idx];
-                DDBG("[GLOB]  @%08x: %08x -> %08x\n", site_la, old, *(uint32_t*)target);
-                break;
-            }
-#endif
-
-#ifdef DEX_JMP_SLOT
-            case DEX_JMP_SLOT:
-            {
-                if (idx >= hdr->import_table_count)
-                {
-                    printf("[EXL] JMP_SLOT idx OOR (%u)\n", idx);
-                    return -12;
-                }
-
-                *(uint32_t*)target = (uint32_t)import_ptrs[idx];
-                DDBG("[JMP]   @%08x: %08x -> %08x\n", site_la, old, *(uint32_t*)target);
-                break;
-            }
-#endif
 
             default:
-            {
                 printf("[EXL] UNKNOWN reloc type: %u @ off=0x%08x (old=%08x)\n", typ, off, old);
+                if (import_ptrs) kfree(import_ptrs);
                 return -13;
-            }
         }
 
         DDBG("new=0x%08x\n", *(uint32_t*)target);
     }
 
+    if (import_ptrs) kfree(import_ptrs);
     return 0;
 }
 
@@ -455,11 +357,23 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     char tmp_name[EXL_NAME_LENGTH];
     canon_exl_name(exl_name, tmp_name, sizeof(tmp_name));
 
+    uint32_t cur_cr3 = read_cr3_local();
+
+    /* Hitta redan laddat EXL i *samma CR3* */
     for (size_t i = 0; i < exl_count; ++i)
     {
+        if (exl_cr3s[i] != cur_cr3) continue;
         if (exl_name_equals(exl_files[i].name, tmp_name))
         {
-            return &exl_files[i];
+            /* Stale-skydd: om image-basen inte längre är giltig i den här adressrymden,
+               invalidera hela CR3-cachen och ladda om. */
+            const exl_t *lib = &exl_files[i];
+            if (lib->image_base && paging_check_user_range((uint32_t)lib->image_base, 4) == 0)
+                return lib;
+
+            DDBG("[EXL] stale cache for CR3=%08x, invalidating\n", cur_cr3);
+            exl_invalidate_for_cr3(cur_cr3);
+            break;
         }
     }
 
@@ -577,10 +491,7 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     memcpy(image + hdr->rodata_offset, filebuf + hdr->rodata_offset, ro_sz);
     memcpy(image + hdr->data_offset,   filebuf + hdr->data_offset,   data_sz);
 
-    if (bss_sz)
-    {
-        memset(image + hdr->data_offset + data_sz, 0, bss_sz);
-    }
+    if (bss_sz) memset(image + hdr->data_offset + data_sz, 0, bss_sz);
 
     const dex_import_t *imp = (const dex_import_t*)(filebuf + hdr->import_table_offset);
     const dex_reloc_t  *rel = (const dex_reloc_t *)(filebuf + hdr->reloc_table_offset);
@@ -601,16 +512,12 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     paging_update_flags((uint32_t)(image + hdr->text_offset), PAGE_ALIGN_UP(text_sz), 0, PAGE_RW);
 
     if (data_sz || bss_sz)
-    {
         paging_update_flags((uint32_t)(image + hdr->data_offset), PAGE_ALIGN_UP(data_sz + bss_sz), PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
-    }
 
     paging_set_user((uint32_t)image, total_sz);
 
     if (paging_check_user_range((uint32_t)image, total_sz) != 0)
-    {
         printf("[EXL] WARN: not all pages are USER\n");
-    }
 
     dex_symbol_t *symtab_copy = NULL;
     char *strtab_copy = NULL;
@@ -634,10 +541,7 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
         strtab_copy = kmalloc(hdr->strtab_size);
         if (!strtab_copy)
         {
-            if (symtab_copy)
-            {
-                kfree(symtab_copy);
-            }
+            if (symtab_copy) kfree(symtab_copy);
             printf("[EXL] strtab alloc fail\n");
             kfree(filebuf);
             kfree(image);
@@ -647,7 +551,7 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
         memcpy(strtab_copy, (const void*)(filebuf + hdr->strtab_offset), hdr->strtab_size);
     }
 
-    exl_t *lib = &exl_files[exl_count++];
+    exl_t *lib = &exl_files[exl_count];
     memset(lib, 0, sizeof(*lib));
     (void)strlcpy(lib->name, tmp_name, sizeof(lib->name));
 
@@ -658,10 +562,14 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     lib->symbol_count = hdr->symbol_table_count;
     lib->strtab       = strtab_copy;
 
+    exl_cr3s[exl_count] = cur_cr3;     /* CR3-tagga posten */
+    exl_count++;
+
     kfree(filebuf);
     pop_loading(tmp_name);
 
-    DDBG("[EXL] loaded '%s' base=%p size=%u (.text RX, .data/.bss RW)\n", lib->name, lib->image_base, lib->image_size);
+    DDBG("[EXL] loaded '%s' base=%p size=%u (.text RX, .data/.bss RW) cr3=%08x\n",
+         lib->name, lib->image_base, lib->image_size, cur_cr3);
 
 #ifdef DIFF_DEBUG
     uint32_t entry = (uint32_t)image + hdr->entry_offset;

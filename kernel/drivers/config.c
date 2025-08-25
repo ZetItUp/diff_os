@@ -13,8 +13,8 @@
 typedef struct driver_record
 {
     ddf_module_t *module;
-    char name[64];
-    char path[256];
+    char name[MAX_FILENAME_LEN];
+    char path[MAX_FILENAME_LEN];
 } driver_record_t;
 
 static driver_record_t g_drivers[MAX_DRIVERS];
@@ -200,7 +200,7 @@ void load_drivers(const FileTable* table, const char* cfg_path)
     char *cursor;
     int in_drivers;
     int done_drivers;
-    char driver_path[128];
+    char driver_path[256];
 
     remove_all_drivers();
 

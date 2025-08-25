@@ -2,10 +2,11 @@
 
 #include "dex/dex.h"
 #include "stddef.h"
+#include "stdint.h"
 
-#define MAX_EXL_FILES       8
-#define MAX_EXL_SYMBOLS     128
-#define EXL_NAME_LENGTH     64
+#define MAX_EXL_FILES       32
+#define MAX_EXL_SYMBOLS     256
+#define EXL_NAME_LENGTH     256
 
 typedef struct
 {
@@ -20,3 +21,7 @@ typedef struct
 
 const exl_t* load_exl(const FileTable *ft, const char *exl_name);
 void* resolve_exl_symbol(const char* exl_name, const char* symbol);
+
+/* Invalidate all cached EXL entries bound to a specific CR3. */
+void exl_invalidate_for_cr3(uint32_t cr3);
+

@@ -1,4 +1,5 @@
 #include <system/command_registry.h>
+#include <system/process.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@ static const char *g_shell_name   = "Different Terminal";
 static const unsigned g_ver_major = 1;
 static const unsigned g_ver_minor = 0;
 
+static int g_last_status = 0;
 static char g_cwd[256] = "/";
 static void split_into_parts(const char *p, char parts[][64], int *count);
 
@@ -349,7 +351,7 @@ static int run_external(int argc, char **argv)
     }
 
     int new_argc = argc + 1;
-    char *new_args[new_argc];
+    char *new_args[new_argc + 1]; // Make sure we have enough buffer size
 
     new_args[0] = argv[0];
     new_args[1] = g_cwd;
@@ -359,9 +361,35 @@ static int run_external(int argc, char **argv)
         new_args[i + 1] = argv[i];
     }
 
+    int pid = process_spawn(path, new_argc, new_args);
+
     new_args[new_argc] = NULL;
 
-    return exec_dex(path, new_argc, new_args);
+    if(pid < 0)
+    {
+        printf("[SYSTEM] Could not start %s\n", path);
+
+        return -1;
+    }
+
+    int status = 0;
+    int wait = process_wait(pid, &status);
+
+    if(wait < 0)
+    {
+        printf("[SYSTEM] Failed to wait for process %d\n", pid);
+
+        return -1;
+    }
+
+    g_last_status = status;
+
+    if(status != 0)
+    {
+        printf("%s exited with %d\n", argv[0], status);
+    }
+
+    return status;
 }
 
 

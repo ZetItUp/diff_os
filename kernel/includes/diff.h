@@ -3,7 +3,7 @@
 
 // Types
 
-#define MAX_FILENAME_LEN 64
+#define MAX_FILENAME_LEN 256
 #define MAX_FILES 256
 
 typedef enum
@@ -46,6 +46,7 @@ typedef struct
 typedef struct
 {
     FileEntry entries[MAX_FILES];
+    int count;
 } FileTable;
 
 // Globals

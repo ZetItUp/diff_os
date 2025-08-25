@@ -5,7 +5,7 @@
 
 #define SECTOR_SIZE 512
 #define MAX_FILES 256
-#define MAX_FILENAME_LEN 64
+#define MAX_FILENAME_LEN 256
 
 typedef enum 
 {

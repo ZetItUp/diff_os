@@ -14,6 +14,19 @@ SUPERBLOCK_LBA  equ 2048
 SUPERBLOCK_SEG  equ 0x1000
 FILETABLE_SEG   equ 0x3000
 
+; ---- DiffFS on-disk layout constants ----
+FILE_ENTRY_SIZE         equ 0x140       ; sizeof(FileEntry) = 320 bytes
+ENTRY_OFF_ENTRY_ID      equ 0x000       ; uint32
+ENTRY_OFF_PARENT_ID     equ 0x004       ; uint32
+ENTRY_OFF_TYPE          equ 0x008       ; uint32 (1=file, 2=dir)
+ENTRY_OFF_NAME          equ 0x00C       ; char[256]
+ENTRY_OFF_START_SECTOR  equ 0x10C       ; uint32
+ENTRY_OFF_SECTOR_COUNT  equ 0x110       ; uint32
+
+ENTRY_TYPE_FILE         equ 1
+ENTRY_TYPE_DIR          equ 2
+MAX_FILES_TABLE         equ 256
+
 file_lba_low:       dw 0                ; LBA low word
 file_lba_high:      dw 0                ; LBA high word
 file_remain:        dw 0                ; Remaining Sectors
@@ -67,43 +80,131 @@ start_loader:
     mov ax, SUPERBLOCK_SEG
     mov es, ax
 
+    ; SuperBlock offsets:
+    ; 0x0C: file_table_sector (low 16)
+    ; 0x0E: file_table_sector (high 16)
+    ; 0x10: file_table_size   (low 16)  [IN SECTORS]
+    ; 0x12: file_table_size   (high 16)
     mov ax, [es:0x0C]                   ; Filetable LBA low
     mov [file_lba_low], ax
     mov ax, [es:0x0E]                   ; Filetable LBA high
     mov [file_lba_high], ax
-    mov ax, [es:0x10]                   ; Total sectors
+    mov ax, [es:0x10]                   ; Filetable size (sectors), LOW16
     mov [file_remain], ax
 
-    ; Read the file table in chunks
+    ; Read the file table in chunks into 0x3000:0000
     mov word [buffer_segment], FILETABLE_SEG
     call read_large_file
     
-    ; Get the kernel from the file table
+    ; ---------------------------
+    ; Scan /system for kernel.bin
+    ; ---------------------------
     mov ax, FILETABLE_SEG
     mov es, ax
 
-    ; Kernel entry = Entry 2 (offset 2 * sizeof(FileEntry))
-    ; sizeof(FileEntry) = 128 bytes (0x80)
-    mov bx, 0x100                       ; (2 * 0x80) = 0x100
+    ; Find entry_id for directory "system"
+    xor di, di                          ; DI = system_dir_id (low16), 0 if not found
+    mov cx, MAX_FILES_TABLE
+    xor bp, bp                          ; BP = entry offset within table
 
-    ; Start sector (4 bytes) at offset 0x40 
-    mov ax, [es:bx+0x4C]
+.find_system_loop:
+    ; type == DIR ?
+    mov ax, [es:bp+ENTRY_OFF_TYPE]
+    cmp ax, ENTRY_TYPE_DIR
+    jne .next_sys
+
+    ; name == "system" ?
+    cmp byte [es:bp+ENTRY_OFF_NAME+0], 's'
+    jne .next_sys
+    cmp byte [es:bp+ENTRY_OFF_NAME+1], 'y'
+    jne .next_sys
+    cmp byte [es:bp+ENTRY_OFF_NAME+2], 's'
+    jne .next_sys
+    cmp byte [es:bp+ENTRY_OFF_NAME+3], 't'
+    jne .next_sys
+    cmp byte [es:bp+ENTRY_OFF_NAME+4], 'e'
+    jne .next_sys
+    cmp byte [es:bp+ENTRY_OFF_NAME+5], 'm'
+    jne .next_sys
+    cmp byte [es:bp+ENTRY_OFF_NAME+6], 0
+    jne .next_sys
+
+    ; Found "system" dir -> DI = entry_id (low16)
+    mov di, [es:bp+ENTRY_OFF_ENTRY_ID]
+    jmp .have_system
+
+.next_sys:
+    add bp, FILE_ENTRY_SIZE
+    loop .find_system_loop
+
+.have_system:
+    ; If not found -> fail
+    test di, di
+    jnz .search_kernel
+    jmp fail_load
+
+.search_kernel:
+    ; Find file "kernel.bin" with parent_id == DI
+    mov cx, MAX_FILES_TABLE
+    xor bp, bp
+
+.find_kernel_loop:
+    ; type == FILE ?
+    mov ax, [es:bp+ENTRY_OFF_TYPE]
+    cmp ax, ENTRY_TYPE_FILE
+    jne .next_kernel
+
+    ; parent_id match?
+    mov ax, [es:bp+ENTRY_OFF_PARENT_ID]
+    cmp ax, di
+    jne .next_kernel
+
+    ; name == "kernel.bin" ?
+    cmp byte [es:bp+ENTRY_OFF_NAME+0], 'k'
+    jne .next_kernel
+    cmp byte [es:bp+ENTRY_OFF_NAME+1], 'e'
+    jne .next_kernel
+    cmp byte [es:bp+ENTRY_OFF_NAME+2], 'r'
+    jne .next_kernel
+    cmp byte [es:bp+ENTRY_OFF_NAME+3], 'n'
+    jne .next_kernel
+    cmp byte [es:bp+ENTRY_OFF_NAME+4], 'e'
+    jne .next_kernel
+    cmp byte [es:bp+ENTRY_OFF_NAME+5], 'l'
+    jne .next_kernel
+    cmp byte [es:bp+ENTRY_OFF_NAME+6], '.'
+    jne .next_kernel
+    cmp byte [es:bp+ENTRY_OFF_NAME+7], 'b'
+    jne .next_kernel
+    cmp byte [es:bp+ENTRY_OFF_NAME+8], 'i'
+    jne .next_kernel
+    cmp byte [es:bp+ENTRY_OFF_NAME+9], 'n'
+    jne .next_kernel
+    cmp byte [es:bp+ENTRY_OFF_NAME+10], 0
+    jne .next_kernel
+
+    ; ---- Found kernel entry: load its LBA & size ----
+    mov ax, [es:bp+ENTRY_OFF_START_SECTOR]     ; LBA low16
     mov [file_lba_low], ax
-    mov ax, [es:bx+0x4E]
+    mov ax, [es:bp+ENTRY_OFF_START_SECTOR+2]   ; LBA high16
     mov [file_lba_high], ax
 
-    ; Sector count at offset 0x44
-    mov ax, [es:bx+0x50]
+    mov ax, [es:bp+ENTRY_OFF_SECTOR_COUNT]     ; sector count (low16)
     mov [file_remain], ax
-    mov [kernel_sectors], ax            ; Store for Protected Mode
-    mov ah, 0x0E
-    mov al, 'Q'
-    int 0x10
-    ; Read kernel
-    mov word [buffer_segment], 0x1000   ; 0x1000:0000 = 1MB
-    call read_large_file
-    
+    mov [kernel_sectors], ax                   ; Store for PM move
+    jmp .have_kernel
 
+.next_kernel:
+    add bp, FILE_ENTRY_SIZE
+    jmp .find_kernel_loop
+
+    ; Not found
+    jmp fail_load
+
+.have_kernel:
+    ; Read kernel to 0x1000:0000 (phys 1MB)
+    mov word [buffer_segment], 0x1000
+    call read_large_file
     call switch_pm
 .halt:
     cli
@@ -162,7 +263,7 @@ read_large_file:
     mov dx, cx
     mov ax, dx
     
-    ; Update buffer segment
+    ; Update buffer segment: add (sectors * 512) / 16 = sectors * 32 paragraphs
     mov ax, dx
     shl ax, 5
     add [buffer_segment], ax
@@ -178,7 +279,6 @@ read_large_file:
     inc word [file_lba_high]
 
 .skip:
-
     ; Update remain
     mov ax, [file_remain]
     sub ax, dx
@@ -219,6 +319,7 @@ switch_pm:
     mov eax, cr0
     or eax, 1                           ; Set PM bit to 1
     mov cr0, eax
+    
     jmp CODE_SEG:init_pm                ; Far jump into init_pm
 
 ; 32-bit Protected Mode Initialization
@@ -266,7 +367,7 @@ init_pm:
     ; Send E820 info to the kernel by pushing pointer + count
     push dword [mem_entry_count]
     push dword e820_buffer
-
+    
     jmp CODE_SEG:0x100000               ; Jump to 1MB in RAM, Kernel should be here now.
 
 [BITS 16]
@@ -327,12 +428,9 @@ gdt_code:
 
     db 10011010b                        ; Access Byte: 
                                         ; Present, Ring 0, Code, Readable, Accessed
-                                        ; 1, 00 , 1, 1, 0 , 1 , 0
-                                        ; P, DPL, S, E, DC, RW, A
 
     db 11001111b                        ; Flags + Limit 16-19:
                                         ; 4KB Granularity, 32-bit, high limit nibble
-                                        ; G, D/B, L, AVL + limit (16-19)
 
     db 0x0                              ; Base Address 24-31    = 0
 
@@ -343,8 +441,6 @@ gdt_data:
 
     db 10010010b                        ; Access Byte:
                                         ; Present, Ring 0, Data, Writeable
-                                        ; 1, 00 , 1, 0, 0 , 1 , 0
-                                        ; P, DPL, S, E, DC, RW, A
     
     db 11001111b                        ; Flags + Limit 16-19, same as gdt_code
     db 0x0                              ; Base Address 24-31    = 0
@@ -419,3 +515,4 @@ kernel_sectors dd 0
 ; Messages
 msg_load_fail   db 'ERROR: Kernel missing',0
 msg_halt        db 'System Halted',0
+
