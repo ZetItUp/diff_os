@@ -3,15 +3,7 @@
 #include "heap.h"
 #include "stdio.h"
 
-/*
- * System config (strict SHELL section)
- * - Only reads keys inside [SHELL] (case-insensitive).
- * - Handles BOM, CR/LF, whitespace, inline comments (# or ;), quoted values.
- * - Normalizes cfg_path (trim + ensure leading '/'), collapses '//' in result.
- * - Returns kmalloc'ed path on success (caller frees), else NULL.
- * - Allman brace style; declarations at block start; English comments.
- */
-
+// Collapse multiple slashes in a path string
 static void collapse_slashes(char *s)
 {
     char *r;
@@ -43,16 +35,18 @@ static void collapse_slashes(char *s)
     *w = '\0';
 }
 
+// Convert ASCII character to lowercase if uppercase
 static int ascii_tolower(int c)
 {
     if (c >= 'A' && c <= 'Z')
     {
         return c - 'A' + 'a';
     }
+
     return c;
 }
 
-/* Trims trailing CR/LF/spaces and strips inline comments (# or ;) */
+// Strip inline comments and trailing whitespace
 static void rstrip_and_decomment(char *s)
 {
     size_t n;
@@ -86,7 +80,7 @@ static void rstrip_and_decomment(char *s)
     }
 }
 
-/* Left-trim spaces/tabs in-place. */
+// Remove leading spaces and tabs
 static void ltrim_inplace(char *s)
 {
     char *p;
@@ -114,7 +108,7 @@ static void ltrim_inplace(char *s)
     }
 }
 
-/* Return next NUL-terminated line from *it (in-place), trimming and decommenting. */
+// Return next line and strip comments and whitespace
 static char* next_line(char **it)
 {
     char *s;
@@ -163,11 +157,10 @@ static char* next_line(char **it)
     return line;
 }
 
+// Copy substring to a new heap string
 static char* dup_unquoted_slice(const char *p, size_t len)
 {
-    char *out;
-
-    out = (char *)kmalloc(len + 1);
+    char *out = (char *)kmalloc(len + 1);
     if (!out)
     {
         return NULL;
@@ -177,11 +170,12 @@ static char* dup_unquoted_slice(const char *p, size_t len)
     {
         memcpy(out, p, len);
     }
+
     out[len] = '\0';
     return out;
 }
 
-/* Parse a value (quoted or plain) to a heap string; make absolute and collapse slashes. */
+// Parse a value string to a heap string and normalize path
 static char* parse_value_to_heap(const char *val_start)
 {
     const char *p;
@@ -229,18 +223,19 @@ static char* parse_value_to_heap(const char *val_start)
     ltrim_inplace(res);
     rstrip_and_decomment(res);
 
+    // Ensure leading slash
     if (res[0] != '/')
     {
         char *out;
-        size_t L;
+        size_t L = strlen(res);
 
-        L = strlen(res);
         out = (char *)kmalloc(L + 2);
         if (!out)
         {
             kfree(res);
             return NULL;
         }
+
         out[0] = '/';
         memcpy(out + 1, res, L + 1);
         kfree(res);
@@ -251,14 +246,11 @@ static char* parse_value_to_heap(const char *val_start)
     return res;
 }
 
-/* Case-insensitive check if line starts with key= ; returns pointer to value in *val_out */
+// Compare key with line in case-insensitive way
 static int key_equals_ci(const char *line, const char *key, const char **val_out)
 {
-    const char *p;
-    const char *k;
-
-    p = line;
-    k = key;
+    const char *p = line;
+    const char *k = key;
 
     while (*p == ' ' || *p == '\t')
     {
@@ -300,6 +292,7 @@ static int key_equals_ci(const char *line, const char *key, const char **val_out
     return 1;
 }
 
+// Find the configured shell path in a config file
 char* find_shell_path(const FileTable *table, const char *cfg_path)
 {
     char norm_cfg[256];
@@ -312,7 +305,7 @@ char* find_shell_path(const FileTable *table, const char *cfg_path)
     int in_shell;
     char *result;
 
-    /* Normalize cfg_path: trim + ensure leading slash */
+    // Normalize path
     (void)strlcpy(norm_cfg, cfg_path, sizeof(norm_cfg));
     ltrim_inplace(norm_cfg);
     rstrip_and_decomment(norm_cfg);
@@ -320,7 +313,6 @@ char* find_shell_path(const FileTable *table, const char *cfg_path)
     if (norm_cfg[0] != '/')
     {
         char tmp[256];
-
         (void)snprintf(tmp, sizeof(tmp), "/%s", norm_cfg);
         (void)strlcpy(norm_cfg, tmp, sizeof(norm_cfg));
     }
@@ -351,7 +343,7 @@ char* find_shell_path(const FileTable *table, const char *cfg_path)
 
     cfg_data[bytes_read] = '\0';
 
-    /* Strip UTF-8 BOM if present */
+    // Strip BOM if present
     if ((unsigned char)cfg_data[0] == 0xEF &&
         (unsigned char)cfg_data[1] == 0xBB &&
         (unsigned char)cfg_data[2] == 0xBF)
@@ -374,14 +366,13 @@ char* find_shell_path(const FileTable *table, const char *cfg_path)
             continue;
         }
 
-        /* Section header */
+        // Section header
         if (*line == '[')
         {
-            char *r;
+            char *r = line;
             const char *sec;
             size_t len;
 
-            r = line;
             while (*r && *r != ']')
             {
                 r++;
@@ -410,7 +401,7 @@ char* find_shell_path(const FileTable *table, const char *cfg_path)
             continue;
         }
 
-        /* Only accept keys while inside [SHELL] */
+        // Only parse keys inside [SHELL]
         if (in_shell)
         {
             if (key_equals_ci(line, "path", &val) ||
@@ -420,7 +411,7 @@ char* find_shell_path(const FileTable *table, const char *cfg_path)
                 result = parse_value_to_heap(val);
                 if (!result)
                 {
-                    printf("[SHELL] OOM parsing path value\n");
+                    printf("[SHELL] Out of memory parsing path value\n");
                 }
                 break;
             }

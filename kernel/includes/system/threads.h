@@ -9,7 +9,7 @@ struct process;
 typedef enum
 {
     THREAD_NEW = 0,
-    THREAD_RUNNABLE,
+    THREAD_READY,
     THREAD_RUNNING,
     THREAD_SLEEPING,
     THREAD_ZOMBIE

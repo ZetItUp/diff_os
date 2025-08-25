@@ -14,12 +14,6 @@ Content of /
  DIRECTORY              0  system/
 --------------------------------------------------
 
-/> hello
-Hello World!
-
-/> echo Tips
-Tips
-
 /> ls
 Content of /
 ==================================================
@@ -38,7 +32,7 @@ Content of /
  DIRECTORY              0  system/
 --------------------------------------------------
 
-/> cd system
+/> s cd system
 
 /system> ls
 Content of system/
@@ -64,4 +58,150 @@ Content of system/
  FILE                 184  sys.cfg
 --------------------------------------------------
 
-/system> 
+/system> ls
+Content of system/
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ DIRECTORY              0  drivers/
+ DIRECTORY              0  exls/
+ FILE                 152  commands.map
+ FILE               65912  kernel.bin
+ FILE                 184  sys.cfg
+--------------------------------------------------
+
+/system> cd ..
+
+/> ls
+Content of /
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ DIRECTORY              0  programs/
+ DIRECTORY              0  system/
+--------------------------------------------------
+
+/> ls
+Content of /
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ DIRECTORY              0  programs/
+ DIRECTORY              0  system/
+--------------------------------------------------
+
+/> ls
+Content of /
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ DIRECTORY              0  programs/
+ DIRECTORY              0  system/
+--------------------------------------------------
+
+/> ls
+Content of /
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ DIRECTORY              0  programs/
+ DIRECTORY              0  system/
+--------------------------------------------------
+
+/> ls
+Content of /
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ DIRECTORY              0  programs/
+ DIRECTORY              0  system/
+--------------------------------------------------
+
+/> ls
+Content of /
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ DIRECTORY              0  programs/
+ DIRECTORY              0  system/
+--------------------------------------------------
+
+/> ls
+Content of /
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ DIRECTORY              0  programs/
+ DIRECTORY              0  system/
+--------------------------------------------------
+
+/> cd ..
+
+/> ls
+Content of /
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ DIRECTORY              0  programs/
+ DIRECTORY              0  system/
+--------------------------------------------------
+
+/> cd programs
+
+/programs> ls
+Content of programs/
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ DIRECTORY              0  dterm/
+ DIRECTORY              0  hello/
+ DIRECTORY              0  ls/
+ DIRECTORY              0  ptest/
+ DIRECTORY              0  ttest/
+--------------------------------------------------
+
+/programs> cd ls
+
+/programs/ls> ls
+Content of programs/ls/
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ FILE                3408  ls.dex
+--------------------------------------------------
+
+/programs/ls> cd ..
+
+/programs> cd ptest
+
+/programs/ptest> ls
+Content of programs/ptest/
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ FILE                 586  ptest.dex
+--------------------------------------------------
+
+/programs/ptest> ptest
+Process Testing Program
+Process Testing Ended
+
+/programs/ptest> cd .
+
+/programs/ptest> cd ..
+
+/programs> cd..
+Unknown command: cd..
+
+/programs> cd ..
+
+/> ls
+Content of /
+==================================================
+ Type         Size (bytes)  Name
+--------------------------------------------------
+ DIRECTORY              0  programs/
+ DIRECTORY              0  system/
+--------------------------------------------------
+
+/> 

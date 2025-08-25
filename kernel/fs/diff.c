@@ -44,7 +44,6 @@ int read_file_table(const SuperBlock* sb)
     size_t bitmap_bytes_disk;
     size_t bitmap_bytes_mem;
     size_t bitmap_bytes_alloc;
-    size_t on_disk_entries;
     FileTable* new_table;
     uint8_t* new_bitmap;
     int r;
@@ -62,12 +61,6 @@ int read_file_table(const SuperBlock* sb)
         return -1;
     }
 
-    on_disk_entries = table_bytes / sizeof(FileEntry);
-
-#ifdef DIFF_DEBUG
-    printf("FileTable sizeof=%u, on-disk bytes=%u (%u entries)\n",
-           (unsigned)sizeof(FileTable), (unsigned)table_bytes, (unsigned)on_disk_entries);
-#endif
     // Always allocate full in-memory table (for MAX_FILES), zero it,
     // then read the smaller on-disk table into the beginning.
     new_table = (FileTable*)kmalloc(sizeof(FileTable));

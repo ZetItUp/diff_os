@@ -1,15 +1,15 @@
-#include "dex/dex.h"
-#include "dex/exl.h"
+#include "stdint.h"
+#include "stddef.h"
+#include "stdio.h"
+#include "string.h"
+#include "heap.h"
+#include "paging.h"
+#include "system/usercopy.h"
 #include "system/process.h"
 #include "system/threads.h"
 #include "system/scheduler.h"
-#include "system/usercopy.h"
-#include "paging.h"
-#include "heap.h"
-#include "string.h"
-#include "stdio.h"
-#include "stdint.h"
-#include "stddef.h"
+#include "dex/dex.h"
+#include "dex/exl.h"
 
 #ifdef DIFF_DEBUG
 #define DDBG(...) printf(__VA_ARGS__)
@@ -18,47 +18,61 @@
 #endif
 
 extern void enter_user_mode(uint32_t entry_eip, uint32_t user_stack_top) __attribute__((noreturn));
+
+// Read CR3 of current CPU
 static inline uint32_t read_cr3_local(void)
 {
-    uint32_t v;
-
-    __asm__ __volatile__("mov %%cr3, %0" : "=r"(v));
-
-    return v;
+    uint32_t value;
+    __asm__ __volatile__("mov %%cr3, %0" : "=r"(value));
+    return value;
 }
 
-/* Forward declarations */
+// Forward declarations
 static void user_bootstrap(void *arg);
 
-/* -------------------------------------------------------------------------- */
-/* Process object (private, not exposed in header)                            */
-/* -------------------------------------------------------------------------- */
-
+// Process state
 static process_t *g_current = NULL;
 static process_t *g_all_head = NULL;
 static int g_next_pid = 1;
 
-static void process_unlink_from_all(process_t *p) {
-    extern process_t *g_all_head; // finns redan i process.c
-    if (!p) return;
+// Unlink process from global list
+static void process_unlink_from_all(process_t *p)
+{
+    if (!p)
+    {
+        return;
+    }
 
-    if (g_all_head == p) {
+    if (g_all_head == p)
+    {
         g_all_head = p->next;
-    } else {
-        for (process_t *it = g_all_head; it; it = it->next) {
-            if (it->next == p) {
+    }
+    else
+    {
+        for (process_t *it = g_all_head; it; it = it->next)
+        {
+            if (it->next == p)
+            {
                 it->next = p->next;
                 break;
             }
         }
     }
+
     p->next = NULL;
 }
-static void process_destroy(process_t *p) {
-    if (!p) return;
 
-    // Adressrymden ska redan vara orörd av trådar vid det här laget
-    if (p->cr3) {
+// Destroy process and free resources
+static void process_destroy(process_t *p)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    if (p->cr3)
+    {
+        // Drop address space
         exl_invalidate_for_cr3(p->cr3);
         paging_destroy_address_space(p->cr3);
         p->cr3 = 0;
@@ -68,16 +82,17 @@ static void process_destroy(process_t *p) {
     p->waiter = NULL;
 
     process_unlink_from_all(p);
-
-    // process_t allokerades med kmalloc => frigör
     kfree(p);
 }
+
+// Link process into global list
 static void process_link(process_t *p)
 {
     p->next = g_all_head;
     g_all_head = p;
 }
 
+// Allocate zeroed process object
 static process_t *process_alloc(void)
 {
     process_t *p = (process_t *)kmalloc(sizeof(process_t));
@@ -87,42 +102,41 @@ static process_t *process_alloc(void)
     }
 
     memset(p, 0, sizeof(*p));
-
     return p;
 }
+
+// Switch to user address space and jump to user mode
 static void user_bootstrap(void *arg)
 {
     user_boot_args_t *a = (user_boot_args_t *)arg;
 
-    uint32_t eip = a->eip;
-    uint32_t esp = a->esp;
-    uint32_t cr3 = a->cr3;
+    uint32_t entry_eip = a->eip; // Entry instruction pointer
+    uint32_t user_esp = a->esp;  // User stack pointer
+    uint32_t user_cr3 = a->cr3;  // Address space
 
     kfree(a);
 
-    paging_switch_address_space(cr3);
+    // Activate user address space
+    paging_switch_address_space(user_cr3);
 
-    enter_user_mode(eip, esp);
+    // Enter user mode and never return
+    enter_user_mode(entry_eip, user_esp);
 
-    /* Should never return; if it does, terminate the thread. */
+    // Safety fallback
     thread_exit();
 }
 
-
-/* -------------------------------------------------------------------------- */
-/* Public API                                                                 */
-/* -------------------------------------------------------------------------- */
-
+// Initialize process system with a kernel process
 void process_init(void)
 {
     process_t *k = process_alloc();
     if (!k)
     {
         printf("[PROC] FATAL: out of memory in process_init\n");
-
         return;
     }
 
+    // Set kernel process fields
     k->pid = 0;
     k->state = PROCESS_RUNNING;
     k->cr3 = read_cr3_local();
@@ -132,12 +146,14 @@ void process_init(void)
     k->main_thread = NULL;
     k->waiter = NULL;
 
+    // Link and set as current
     process_link(k);
     g_current = k;
 
     DDBG("[PROC] init: kernel pid=%d cr3=%08x\n", k->pid, k->cr3);
 }
 
+// Create a kernel process with one thread
 process_t *process_create_kernel(void (*entry)(void *), void *argument, size_t kstack_bytes)
 {
     if (!entry)
@@ -151,6 +167,7 @@ process_t *process_create_kernel(void (*entry)(void *), void *argument, size_t k
         return NULL;
     }
 
+    // Inherit current address space
     p->pid = g_next_pid++;
     p->state = PROCESS_READY;
     p->cr3 = read_cr3_local();
@@ -162,19 +179,19 @@ process_t *process_create_kernel(void (*entry)(void *), void *argument, size_t k
 
     process_link(p);
 
-    int tid = thread_create_for_process(p, entry, argument, kstack_bytes);
-    if (tid < 0)
+    // Create main thread
+    int thread_id = thread_create_for_process(p, entry, argument, kstack_bytes);
+    if (thread_id < 0)
     {
-        printf("[PROC] create_kernel: thread_create_for_process failed (%d)\n", tid);
-        /* Keep the process linked for debugging, but mark as dead. */
+        printf("[PROC] create_kernel: thread_create_for_process failed (%d)\n", thread_id);
         p->state = PROCESS_DEAD;
-
         return NULL;
     }
 
     return p;
 }
 
+// Create a user process in a provided address space
 process_t *process_create_user_with_cr3(uint32_t user_eip, uint32_t user_esp, uint32_t cr3, size_t kstack_bytes)
 {
     process_t *p = process_alloc();
@@ -194,11 +211,11 @@ process_t *process_create_user_with_cr3(uint32_t user_eip, uint32_t user_esp, ui
 
     process_link(p);
 
+    // Package bootstrap data
     user_boot_args_t *args = (user_boot_args_t *)kmalloc(sizeof(user_boot_args_t));
     if (!args)
     {
         p->state = PROCESS_DEAD;
-
         return NULL;
     }
 
@@ -206,56 +223,59 @@ process_t *process_create_user_with_cr3(uint32_t user_eip, uint32_t user_esp, ui
     args->esp = user_esp;
     args->cr3 = cr3;
 
-    int tid = thread_create_for_process(p, user_bootstrap, args, kstack_bytes);
-    if (tid < 0)
+    // Create bootstrap thread that enters user mode
+    int thread_id = thread_create_for_process(p, user_bootstrap, args, kstack_bytes);
+    if (thread_id < 0)
     {
-        printf("[PROC] create_user: thread_create_for_process failed (%d)\n", tid);
+        printf("[PROC] create_user: thread_create_for_process failed (%d)\n", thread_id);
         p->state = PROCESS_DEAD;
         kfree(args);
-
         return NULL;
     }
 
     return p;
 }
 
+// Create a user process with a new address space
 process_t *process_create_user(uint32_t user_eip, uint32_t user_esp, size_t kstack_bytes)
 {
-    uint32_t cr3 = paging_new_address_space();
-    if (!cr3)
+    uint32_t new_cr3 = paging_new_address_space();
+    if (!new_cr3)
     {
         printf("[PROC] create_user: paging_new_address_space failed\n");
-
         return NULL;
     }
 
-    return process_create_user_with_cr3(user_eip, user_esp, cr3, kstack_bytes);
+    return process_create_user_with_cr3(user_eip, user_esp, new_cr3, kstack_bytes);
 }
 
+// Exit current process via its last thread
 void process_exit_current(int exit_code)
 {
     process_t *p = process_current();
-    if (p) {
-        // Spara exitstatus så föräldern kan läsa den i wait().
+    if (p)
+    {
+        // Store exit code for wait()
         p->exit_code = exit_code;
-        // Sätt INTE state här; schemaläggaren gör processen ZOMBIE
-        // när sista tråden dör (live_threads -> 0) och väcker eventuell waiter.
     }
 
-    // Avsluta den aktuella tråden – schemaläggaren sköter resten.
+    // End current thread, scheduler will handle process state
     thread_exit();
 }
 
+// Get current process
 process_t *process_current(void)
 {
     return g_current;
 }
 
+// Set current process
 void process_set_current(process_t *p)
 {
     g_current = p;
 }
 
+// Get pid of a process
 int process_pid(const process_t *p)
 {
     if (!p)
@@ -266,6 +286,7 @@ int process_pid(const process_t *p)
     return p->pid;
 }
 
+// Get CR3 of a process
 uint32_t process_cr3(const process_t *p)
 {
     if (!p)
@@ -276,6 +297,7 @@ uint32_t process_cr3(const process_t *p)
     return p->cr3;
 }
 
+// Find process by pid
 process_t *process_find_by_pid(int pid)
 {
     for (process_t *it = g_all_head; it; it = it->next)
@@ -289,35 +311,48 @@ process_t *process_find_by_pid(int pid)
     return NULL;
 }
 
-/* Wait for a specific child PID to terminate (ZOMBIE).
- * Writes exit_code to user pointer if provided.
- * Returns child's pid on success, -1 on error. */
+// Wait for a child to become zombie and reap it
 int system_wait_pid(int pid, int *u_status)
 {
-    process_t *self  = process_current();
+    process_t *self = process_current();
     process_t *child = process_find_by_pid(pid);
 
-    if (!self || !child) return -1;
-    if (child->parent != self) return -1;
+    if (!self || !child)
+    {
+        return -1;
+    }
+    if (child->parent != self)
+    {
+        return -1;
+    }
 
-    // En waiter per barn
-    if (child->waiter && child->waiter != current_thread()) return -1;
+    // One waiter per child
+    if (child->waiter && child->waiter != current_thread())
+    {
+        return -1;
+    }
     child->waiter = current_thread();
 
-    // Vänta tills sista tråden dött och processen blivit ZOMBIE
-    while (child->state != PROCESS_ZOMBIE || child->live_threads != 0) {
+    // Block until the child is zombie and has no live threads
+    while (child->state != PROCESS_ZOMBIE || child->live_threads != 0)
+    {
         scheduler_block_current_until_wakeup();
     }
 
     int status = child->exit_code;
 
-    // Gör den slutliga reap:en här
+    // Final reap
     process_destroy(child);
 
-    if (u_status) *u_status = status;
+    if (u_status)
+    {
+        *u_status = status;
+    }
+
     return pid;
 }
 
+// Spawn a user process from a path and argv from userspace
 int system_process_spawn(const char *upath, int argc, char **uargv)
 {
     // Copy path from user
@@ -327,17 +362,18 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
         return -1;
     }
 
-
-    // Copy argv[] from user (may be NULL if argc==0)
+    // Copy argv from user
     char **kargv = NULL;
     if (copy_user_argv(argc, uargv, &kargv) != 0)
     {
         kfree(kpath);
-
         return -1;
     }
 
+    // Create process
     int pid = dex_spawn_process(file_table, kpath, argc, kargv);
+
+    // Free temporary buffers
     free_kargv(kargv);
     kfree(kpath);
 
