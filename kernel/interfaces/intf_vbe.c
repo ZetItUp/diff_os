@@ -1,5 +1,6 @@
 #include "graphics/vbe_graphics.h"
 #include "graphics/vbe_text.h"
+#include "system/usercopy.h"
 #include "interfaces.h"
 #include "stdint.h"
 #include "paging.h"
@@ -8,7 +9,94 @@
 #include "string.h"
 #include "io.h"
 
+#ifndef VBE_DISPI_IOPORT_INDEX
+#define VBE_DISPI_IOPORT_INDEX 0x01CE
+#define VBE_DISPI_IOPORT_DATA  0x01CF
+#define VBE_DISPI_INDEX_ID      0x0
+#define VBE_DISPI_INDEX_XRES    0x1
+#define VBE_DISPI_INDEX_YRES    0x2
+#define VBE_DISPI_INDEX_BPP     0x3
+#define VBE_DISPI_INDEX_ENABLE  0x4
+#define VBE_DISPI_INDEX_BANK    0x5
+#define VBE_DISPI_INDEX_VIRT_WIDTH  0x6
+#define VBE_DISPI_INDEX_VIRT_HEIGHT 0x7
+#define VBE_DISPI_INDEX_X_OFFSET    0x8
+#define VBE_DISPI_INDEX_Y_OFFSET    0x9
+
+#define VBE_DISPI_ID5           0xB0C5
+#define VBE_DISPI_ENABLED       0x01
+#define VBE_DISPI_LFB_ENABLED   0x40
+#define VBE_DISPI_NOCLEARMEM    0x80
+#endif
+
 vbe_exports_t g_vbe = {0};
+
+static inline void vbe_write_reg(uint16_t idx, uint16_t val) 
+{
+    outw(VBE_DISPI_IOPORT_INDEX, idx);
+    outw(VBE_DISPI_IOPORT_DATA,  val);
+}
+
+static inline uint16_t vbe_read_reg(uint16_t idx) 
+{
+    outw(VBE_DISPI_IOPORT_INDEX, idx);
+
+    return inw(VBE_DISPI_IOPORT_DATA);
+}
+static inline void vbe_enable(uint16_t flags) 
+{
+    vbe_write_reg(VBE_DISPI_INDEX_ENABLE, flags);
+}
+
+int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_wh)
+{
+    if (g_vbe.frame_buffer == NULL || g_vbe.bpp != 32)
+    {
+        return -1;
+    }
+
+    console_use_vbe(0);
+    
+    int w = (packed_wh >> 16) & 0xFFFF;
+    int h =  packed_wh         & 0xFFFF;
+
+    if (w <= 0 || h <= 0 || pitch_bytes <= 0)
+    {
+        return -1;
+    }
+
+    // Clamp against current mode
+    uint32_t max_w = (uint32_t)w;
+    uint32_t max_h = (uint32_t)h;
+
+    if (max_w > g_vbe.width)  max_w = g_vbe.width;
+    if (max_h > g_vbe.height) max_h = g_vbe.height;
+
+    // Bytes per row to copy (cap by LFB pitch to avoid overrun)
+    uint32_t row_bytes = max_w * 4u;
+
+    if (row_bytes > g_vbe.pitch)
+    {
+        row_bytes = g_vbe.pitch;
+    }
+
+    uint8_t *dst_base = (uint8_t*)g_vbe.frame_buffer;
+    const uint8_t *src_user = (const uint8_t*)user_ptr;
+
+    for (uint32_t y = 0; y < max_h; y++)
+    {
+        void *dst = dst_base + y * g_vbe.pitch;
+        const void *src = src_user + (uint32_t)y * (uint32_t)pitch_bytes;
+
+        // copy_from_user(dst_kernel, src_user, n) -> 0 on success
+        if (copy_from_user(dst, src, row_bytes) != 0)
+        {
+            return -1;
+        }
+    }
+
+    return 0;
+}
 
 void vbe_register(uint32_t phys_base, uint32_t width, uint32_t height, uint32_t bpp, uint32_t pitch)
 {
@@ -139,5 +227,104 @@ void vbe_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t argb
             row[x + xx] = argb;
         }
     }
+}
+
+int vbe_set_mode(uint32_t w, uint32_t h, uint32_t bpp)
+{
+    if (!(bpp == 8 || bpp == 15 || bpp == 16 || bpp == 24 || bpp == 32))
+        return -1;
+    
+    if (w == 0 || h == 0 || w > 8192 || h > 8192) 
+        return -1;
+
+    vbe_write_reg(VBE_DISPI_INDEX_ID, VBE_DISPI_ID5);
+    vbe_enable(0); 
+
+    // synlig yta
+    vbe_write_reg(VBE_DISPI_INDEX_XRES, (uint16_t)w);
+    vbe_write_reg(VBE_DISPI_INDEX_YRES, (uint16_t)h);
+    vbe_write_reg(VBE_DISPI_INDEX_BPP,  (uint16_t)bpp);
+
+    // spegla till virtuell yta
+    vbe_write_reg(VBE_DISPI_INDEX_VIRT_WIDTH,  (uint16_t)w);
+    vbe_write_reg(VBE_DISPI_INDEX_VIRT_HEIGHT, (uint16_t)h);
+    vbe_write_reg(VBE_DISPI_INDEX_X_OFFSET, 0);
+    vbe_write_reg(VBE_DISPI_INDEX_Y_OFFSET, 0);
+    vbe_write_reg(VBE_DISPI_INDEX_BANK, 0);
+
+    vbe_enable((uint16_t)(VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED | VBE_DISPI_NOCLEARMEM));
+
+    uint16_t rw = vbe_read_reg(VBE_DISPI_INDEX_XRES);
+    uint16_t rh = vbe_read_reg(VBE_DISPI_INDEX_YRES);
+    uint16_t rb = vbe_read_reg(VBE_DISPI_INDEX_BPP);
+    
+    if (rw != (uint16_t)w || rh != (uint16_t)h || rb != (uint16_t)bpp) 
+        return -1;
+
+    uint16_t vwid = vbe_read_reg(VBE_DISPI_INDEX_VIRT_WIDTH);
+    uint16_t vhgt = vbe_read_reg(VBE_DISPI_INDEX_VIRT_HEIGHT);
+    uint16_t min_w = (uint16_t)w, min_h = (uint16_t)h;
+    int need_fix = 0;
+    
+    if (vwid == 0 || vwid < min_w || vwid > 8192) 
+    { 
+        vwid = min_w; 
+        need_fix = 1; 
+    }
+    
+    if (vhgt == 0 || vhgt < min_h || vhgt > 8192) 
+    { 
+        vhgt = min_h; 
+        need_fix = 1; 
+    }
+    
+    if (need_fix) 
+    {
+        vbe_enable(0);
+        vbe_write_reg(VBE_DISPI_INDEX_VIRT_WIDTH,  vwid);
+        vbe_write_reg(VBE_DISPI_INDEX_VIRT_HEIGHT, vhgt);
+        vbe_write_reg(VBE_DISPI_INDEX_X_OFFSET, 0);
+        vbe_write_reg(VBE_DISPI_INDEX_Y_OFFSET, 0);
+        vbe_write_reg(VBE_DISPI_INDEX_BANK, 0);
+        vbe_enable((uint16_t)(VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED | VBE_DISPI_NOCLEARMEM));
+    }
+
+    return 0;
+}
+
+int system_video_mode_set(int w, int h, int bpp)
+{
+    if (!(bpp == 8 || bpp == 15 || bpp == 16 || bpp == 24 || bpp == 32))
+        return -1;
+    
+    if (w == 0 || h == 0 || w > 8192 || h > 8192) 
+        return -1;
+    
+    if (g_vbe.phys_base == 0) 
+        return -1;
+
+    if (vbe_set_mode(w, h, bpp) != 0) 
+        return -1;
+
+    console_use_vbe(0);
+
+    uint16_t rx = vbe_read_reg(VBE_DISPI_INDEX_XRES);
+    uint16_t ry = vbe_read_reg(VBE_DISPI_INDEX_YRES);
+    uint16_t rbpp = vbe_read_reg(VBE_DISPI_INDEX_BPP);
+    uint16_t vwid = vbe_read_reg(VBE_DISPI_INDEX_VIRT_WIDTH);
+    uint16_t vhgt = vbe_read_reg(VBE_DISPI_INDEX_VIRT_HEIGHT);
+
+    if (vwid == 0 || vwid < rx || vwid > 8192) 
+        vwid = rx;
+    
+    if (vhgt == 0 || vhgt < ry || vhgt > 8192) 
+        vhgt = ry;
+
+    uint32_t bpp_bytes = ((uint32_t)rbpp + 7u) / 8u;
+    uint32_t pitch_bytes = (uint32_t)vwid * bpp_bytes;
+
+    vbe_register(g_vbe.phys_base, rx, ry, rbpp, pitch_bytes);
+
+    return 0;
 }
 

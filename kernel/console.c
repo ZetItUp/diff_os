@@ -727,3 +727,19 @@ void set_cursor_pos(unsigned short x, unsigned short y)
     outb(0x3D5, (unsigned char)((pos >> 8) & 0xFF));
 }
 
+int console_toggle_graphics_mode(void)
+{
+    s_vbe_console_active = !s_vbe_console_active;
+
+    if(s_vbe_console_active == 1)
+    {
+        console_flush_log();
+    }
+
+    return s_vbe_console_active;
+}
+
+int console_get_graphics_mode(void)
+{
+    return s_vbe_console_active;
+}

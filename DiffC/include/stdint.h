@@ -26,6 +26,10 @@ typedef uint32_t          uintptr_t;
 typedef int32_t           intptr_t;
 #endif
 
+// “Max-width”
+typedef long long          intmax_t;
+typedef unsigned long long uintmax_t;
+
 // Standard limits 
 #define INT8_MIN   (-128)
 #define INT8_MAX   (127)

@@ -20,7 +20,7 @@ TOOLS_DIR = tools
 DRIVERS_DIR = drivers
 IMAGE = $(TARGET)
 
-DEBUG ?=0
+DEBUG ?=1
 ifeq ($(DEBUG),1)
 CFLAGS += -DDIFF_DEBUG
 endif
@@ -79,7 +79,8 @@ PROGRAMS_LIST = dterm \
 				hello \
 				ls \
 				ttest \
-				ptest
+				ptest \
+				brktest
 
 # Helpers
 KERNEL_SRC += \

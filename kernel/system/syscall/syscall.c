@@ -513,6 +513,49 @@ int system_call_dispatch(struct syscall_frame *f)
             ret = system_wait_pid(pid, u_status);
 
             break;
+        } 
+        case SYSTEM_FILE_STAT:
+        {
+            ret = system_file_stat((const char*)arg0, (filesystem_stat_t*)arg1);
+
+            break;
+        }
+        case SYSTEM_FILE_FSTAT:
+        {
+            ret = system_file_fstat(arg0, (filesystem_stat_t*)arg1);
+
+            break;
+        }
+        case SYSTEM_VIDEO_PRESENT:
+        {
+            // arg0 = user point, arg1 = pitch bytes, arg2 = (w << 16) | h
+            ret = system_video_present_user((const void*)arg0, arg1, arg2);
+
+            break;
+        }
+        case SYSTEM_VIDEO_MODE_SET:
+        {
+            ret = system_video_mode_set((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2);
+
+            break;
+        }
+        case SYSTEM_BREAK:
+        {
+            ret = system_brk_set((void*)arg0);
+
+            break;
+        }
+        case SYSTEM_VIDEO_TOGGLE_GRAPHICS_MODE:
+        {
+            ret = console_toggle_graphics_mode();
+            
+            break;
+        }
+        case SYSTEM_VIDEO_GET_GRAPHICS_MODE:
+        {
+            ret = console_get_graphics_mode();
+
+            break;
         }
         default:
         {

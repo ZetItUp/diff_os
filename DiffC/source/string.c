@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdlib.h>
 
 int strcmp(const char *s1, const char *s2)
 {
@@ -9,6 +10,75 @@ int strcmp(const char *s1, const char *s2)
     }
 
     return *(const unsigned char*)s1 - *(const unsigned char*)s2;
+}
+
+char *strrchr(const char *s, int c)
+{
+    const char *p = s;   
+    const char *last = 0;
+
+    if (!s)
+    {
+        return 0;
+    }
+
+    if ((char)c == '\0')
+    {
+        while (*p)
+        {
+            p++;
+        }
+
+        return (char *)p;
+    }
+
+    while (*p)
+    {
+        if (*p == (char)c)
+        {
+            last = p;
+        }
+
+        p++;
+    }
+
+    return (char *)last;
+}
+
+char *strdup(const char *s)
+{
+    const char *src;       // Source pointer
+    char *dst;             // Destination pointer
+    unsigned int len = 0;  // Byte length
+
+    if (!s)
+    {
+        return 0;
+    }
+
+    // Count length.
+    src = s;
+    while (*src++)
+    {
+        len++;
+    }
+
+    dst = (char *)malloc((size_t)len + 1u);
+
+    if (!dst)
+    {
+        return 0;
+    }
+
+    // Copy including terminator.
+    src = s;
+
+    for (unsigned int i = 0; i <= len; i++)
+    {
+        dst[i] = src[i];
+    }
+
+    return dst;
 }
 
 size_t strspn(const char *s, const char *accept)
@@ -233,4 +303,100 @@ char *strcat(char *dst, const char *src)
     }
 
     return ret;
+}
+
+char *strstr(const char *haystack, const char *needle)
+{
+    char first = *needle;    
+    const char *h = haystack; 
+
+    if (first == '\0')
+    {
+
+        return (char *)haystack;
+    }
+
+    while (*h)
+    {
+        if (*h == first)
+        {
+            const char *h1 = h + 1;      
+            const char *n1 = needle + 1; 
+
+            while (*h1 && *n1 && *h1 == *n1)
+            {
+                h1++;
+                n1++;
+            }
+
+            if (*n1 == '\0')
+            {
+
+                return (char *)h;
+            }
+        }
+
+        h++;
+    }
+
+
+    return 0;
+}
+
+int strcasecmp(const char *s1, const char *s2)
+{
+    unsigned char c1; // First char
+    unsigned char c2; // Second char
+
+    // Defensive: treat NULL as empty
+    if (!s1 || !s2)
+    {
+        return (s1 == s2) ? 0 : (s1 ? 1 : -1);
+    }
+
+    for (;;)
+    {
+        c1 = tolower((unsigned char)*s1++);
+        c2 = tolower((unsigned char)*s2++);
+
+        if (c1 != c2 || c1 == '\0')
+        {
+
+            return (int)c1 - (int)c2;
+        }
+    }
+}
+
+int strncasecmp(const char *s1, const char *s2, size_t n)
+{
+    unsigned char c1; // First char
+    unsigned char c2; // Second char
+
+    // Zero length means equal
+    if (n == 0)
+    {
+
+        return 0;
+    }
+
+    // Defensive: treat NULL as empty
+    if (!s1 || !s2)
+    {
+
+        return (s1 == s2) ? 0 : (s1 ? 1 : -1);
+    }
+
+    for (; n > 0; --n)
+    {
+        c1 = tolower((unsigned char)*s1++);
+        c2 = tolower((unsigned char)*s2++);
+
+        if (c1 != c2 || c1 == '\0')
+        {
+
+            return (int)c1 - (int)c2;
+        }
+    }
+
+    return 0;
 }

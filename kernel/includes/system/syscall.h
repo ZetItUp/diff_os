@@ -34,6 +34,13 @@ enum
     SYSTEM_THREAD_GET_ID = 22,
     SYSTEM_PROCESS_SPAWN = 23,
     SYSTEM_WAIT_PID = 24,
+    SYSTEM_FILE_STAT = 25,
+    SYSTEM_FILE_FSTAT = 26,
+    SYSTEM_VIDEO_PRESENT = 27,
+    SYSTEM_VIDEO_MODE_SET = 28,
+    SYSTEM_BREAK = 29,
+    SYSTEM_VIDEO_TOGGLE_GRAPHICS_MODE = 30,
+    SYSTEM_VIDEO_GET_GRAPHICS_MODE = 31,
 };
 
 struct syscall_frame 
@@ -78,6 +85,13 @@ long system_file_seek(int file, long offset, int whence);
 long system_file_read(int file, void *buf, unsigned long count);
 long system_file_write(int file, const void *buf, unsigned long count);
 
+int system_file_stat(const char *abs_path, filesystem_stat_t *user_st);
+int system_file_fstat(int file, filesystem_stat_t *user_st);
+
+int system_brk_set(void *new_break);
+void system_brk_init_window(uintptr_t image_base, uintptr_t image_size);
+
 int system_process_spawn(const char *upath, int argc, char **uargv);
 int system_wait_pid(int pid, int *u_status);
-
+int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_wh);
+int system_video_mode_set(int w, int h, int bpp);

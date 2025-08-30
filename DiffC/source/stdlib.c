@@ -6,6 +6,19 @@ void exit(int code)
     system_exit(code);
 }
 
+int system(const char *cmd)
+{
+    // TODO: Implement this
+    (void)cmd;
+
+    return -1;
+}
+
+int abs(int x)
+{
+    return (x < 0) ? -x : x;
+}
+
 void itoa(int value, char *str, int base)
 {
     char *p = str;
@@ -88,4 +101,28 @@ void utohex(uintptr_t val, char* buf, int outlen)
     }
  
     buf[digits] = 0;
+}
+
+// Return non-negative magnitude
+double fabs(double x)
+{
+    // Return non-negative magnitude
+
+    return x < 0.0 ? -x : x;
+}
+
+// Return non-negative magnitude
+float fabsf(float x)
+{
+    // Return non-negative magnitude
+
+    return x < 0.0f ? -x : x;
+}
+
+// Return non-negative magnitude
+long double fabsl(long double x)
+{
+    // Return non-negative magnitude
+
+    return x < 0.0L ? -x : x;
 }

@@ -6,6 +6,20 @@
 #define MAX_FILENAME_LEN 256
 #define MAX_FILES 256
 
+#ifndef FILESYSTEM_MAX_OPEN
+#define FILESYSTEM_MAX_OPEN 64
+#endif
+
+#ifndef SEEK_SET
+#define SEEK_SET 0
+#endif
+#ifndef SEEK_CUR
+#define SEEK_CUR 1
+#endif
+#ifndef SEEK_END
+#define SEEK_END 2
+#endif
+
 typedef enum
 {
     ENTRY_TYPE_INVALID = 0,
@@ -49,6 +63,18 @@ typedef struct
     int count;
 } FileTable;
 
+typedef struct FileHandle
+{
+    uint32_t entry_index;  // Index into file_table entries
+    uint32_t offset;       // Current read offset
+    int in_use;            // 1 if slot is allocated
+} FileHandle;
+
+typedef struct filesystem_stat_t
+{
+    uint32_t size; // File size in bytes
+} filesystem_stat_t;
+
 // Globals
 
 extern FileTable* file_table;
@@ -73,6 +99,13 @@ int find_entry_by_path(const FileTable* table, const char* path);
 // File I/O
 
 int read_file(const FileTable* table, const char* path, void* buffer); // returns bytes read or negative error
+
+int filesystem_close(int fd);
+int filesystem_open(const char *path);
+int filesystem_read(int fd, void *buffer, uint32_t count);
+int32_t filesystem_lseek(int fd, int32_t off, int whence);
+int filesystem_stat(const char *path, filesystem_stat_t *st);
+int filesystem_fstat(int fd, filesystem_stat_t *st);
 
 // Bitmaps
 

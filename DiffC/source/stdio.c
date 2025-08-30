@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <syscall.h>
+#include <ctype.h>
 #include <limits.h>
 
 #ifndef va_copy
@@ -20,6 +21,13 @@
 #define USERSPACE_MIN 0x40000000
 #define USERSPACE_MAX 0xC0000000
 
+struct filesink 
+{
+    FILE *f;
+    char buf[256];
+    size_t len;
+};
+
 static inline int is_valid_userspace_ptr(const void *p, size_t len)
 {
     uint32_t addr = (uint32_t)p;
@@ -31,6 +39,44 @@ static inline int is_valid_userspace_ptr(const void *p, size_t len)
 static inline const char *safe_str(const char *s)
 {
     return is_valid_userspace_ptr(s, 1) ? s : "(null)";
+}
+
+static FILE *coerce_stream(FILE *stream, FILE *tmp_out, int want_write)
+{
+    /* Är det redan ett giltigt userspace-objekt? */
+    if (is_valid_userspace_ptr(stream, sizeof(FILE))) {
+        return stream;
+    }
+
+    /* Annars, tolka värdet som ett fd (t.ex. 0/1/2) */
+    int fd = (int)(uintptr_t)stream;
+    tmp_out->file_descriptor = fd;
+    tmp_out->flags = FILE_CAN_READ | FILE_CAN_WRITE; /* enkel default */
+    tmp_out->error = 0;
+    tmp_out->eof   = 0;
+    tmp_out->ungot = -1;
+
+    if (want_write && !(tmp_out->flags & FILE_CAN_WRITE)) {
+        tmp_out->flags |= FILE_CAN_WRITE;
+    }
+
+    return tmp_out;
+}
+
+static void file_putch(int ch, void *ctx)
+{
+    struct filesink *s = (struct filesink*)ctx;
+    
+    if (s->len < sizeof(s->buf)) 
+    {
+        s->buf[s->len++] = (char)ch;
+    }
+    
+    if (s->len == sizeof(s->buf)) 
+    {
+        (void)fwrite(s->buf, 1, s->len, s->f);
+        s->len = 0;
+    }
 }
 
 /* ====== FILE-handling ====== */
@@ -535,7 +581,11 @@ int ungetc(int c, FILE *file)
 
 int fputc(int c, FILE *file)
 {
+    FILE tmp;
+    file = coerce_stream(file, &tmp, /*want_write=*/1);
+
     unsigned char ch = (unsigned char)c;
+
     return (fwrite(&ch, 1, 1, file) == 1) ? c : EOF;
 }
 
@@ -560,8 +610,11 @@ char *fgets(char *s, int size, FILE *file)
 
 int fputs(const char *s, FILE *file)
 {
-    if (!s || !file) return EOF;
-    
+    if (!s) return EOF;
+
+    FILE tmp;
+    file = coerce_stream(file, &tmp, /*want_write=*/1);
+
     size_t len = strlen(s);
     return (fwrite(s, 1, len, file) == len) ? 0 : EOF;
 }
@@ -588,4 +641,460 @@ int fflush(FILE *file)
 {
     (void)file;
     return 0; // No buffering in this implementation
+}
+
+int remove(const char *path)
+{
+    // TODO: Implement
+    (void)path;
+
+    return 0;
+}
+
+int rename(const char *oldpath, const char *newpath)
+{
+    // TODO: Implement
+    (void)oldpath;
+    (void)newpath;
+
+    return 0;
+}
+
+
+int sscanf(const char *str, const char *fmt, ...)
+{
+    const char *p = str;
+    const char *f = fmt;
+    int asgn = 0;
+    int nread = 0;
+
+    va_list ap;
+    va_start(ap, fmt);
+
+    while (*f)
+    {
+        if (isspace((unsigned char)*f))
+        {
+            while (isspace((unsigned char)*f))
+            {
+                f++;
+            }
+
+            while (isspace((unsigned char)*p))
+            {
+                p++;
+                nread++;
+            }
+
+            continue;
+        }
+
+        if (*f != '%')
+        {
+            if (*p != *f)
+            {
+                break;
+            }
+
+            p++;
+            f++;
+            nread++;
+
+            continue;
+        }
+
+        f++;
+
+        int suppress = 0;
+        int width = 0;
+        int lflag = 0;
+
+        if (*f == '*')
+        {
+            suppress = 1;
+            f++;
+        }
+
+        while (*f >= '0' && *f <= '9')
+        {
+            width = width * 10 + (*f - '0');
+            f++;
+        }
+
+        if (*f == 'h')
+        {
+            lflag = -1;
+            f++;
+
+            if (*f == 'h')
+            {
+                f++;
+            }
+        }
+        else if (*f == 'l')
+        {
+            lflag = 1;
+            f++;
+
+            if (*f == 'l')
+            {
+                lflag = 2;
+                f++;
+            }
+        }
+
+        int c = *f++;
+
+        if (c == 0)
+        {
+            break;
+        }
+
+        if (c != 'c' && c != '[' && c != 'n' && c != '%')
+        {
+            while (isspace((unsigned char)*p))
+            {
+                p++;
+                nread++;
+            }
+        }
+
+        if (c == '%')
+        {
+            if (*p != '%')
+            {
+                break;
+            }
+
+            p++;
+            nread++;
+
+            continue;
+        }
+
+        if (c == 'n')
+        {
+            if (!suppress)
+            {
+                int *outn = va_arg(ap, int *);
+                *outn = nread;
+            }
+
+            continue;
+        }
+
+        if (c == 'c')
+        {
+            int cnt = width ? width : 1;
+
+            if (!suppress)
+            {
+                char *outc = va_arg(ap, char *);
+
+                for (int i = 0; i < cnt; i++)
+                {
+                    if (*p == 0)
+                    {
+                        va_end(ap);
+
+                        return asgn ? asgn : -1;
+                    }
+
+                    outc[i] = *p++;
+                    nread++;
+                }
+            }
+            else
+            {
+                for (int i = 0; i < cnt; i++)
+                {
+                    if (*p == 0)
+                    {
+                        va_end(ap);
+
+                        return asgn ? asgn : -1;
+                    }
+
+                    p++;
+                    nread++;
+                }
+            }
+
+            asgn++;
+
+            continue;
+        }
+
+        if (c == 's')
+        {
+            int cnt = 0;
+
+            if (!width)
+            {
+                width = 0x7fffffff;
+            }
+
+            const char *start = p;
+
+            while (*p && !isspace((unsigned char)*p) && cnt < width)
+            {
+                p++;
+                cnt++;
+            }
+
+            if (cnt == 0)
+            {
+                va_end(ap);
+
+                return asgn ? asgn : -1;
+            }
+
+            if (!suppress)
+            {
+                char *outs = va_arg(ap, char *);
+
+                for (int i = 0; i < cnt; i++)
+                {
+                    outs[i] = start[i];
+                }
+
+                outs[cnt] = '\0';
+                asgn++;
+            }
+
+            nread += cnt;
+
+            continue;
+        }
+
+        if (c == 'd' || c == 'u' || c == 'x' || c == 'X' || c == 'o' || c == 'i' || c == 'p')
+        {
+            int base = 10;
+
+            if (c == 'u')
+            {
+                base = 10;
+            }
+            else if (c == 'x' || c == 'X' || c == 'p')
+            {
+                base = 16;
+            }
+            else if (c == 'o')
+            {
+                base = 8;
+            }
+            else if (c == 'i')
+            {
+                base = 0;
+            }
+
+            char tmp[128];
+            const char *start = p;
+            const char *src = p;
+            char *endp = (char *)p;
+
+            if (width)
+            {
+                int k = 0;
+
+                while (src[k] && k < width && k < (int)sizeof(tmp) - 1)
+                {
+                    tmp[k] = src[k];
+                    k++;
+                }
+
+                tmp[k] = '\0';
+                src = tmp;
+            }
+
+            if (c == 'u' || c == 'x' || c == 'X' || c == 'o' || c == 'p')
+            {
+                unsigned long long v = strtoull(src, &endp, base);
+
+                if (endp == src)
+                {
+                    va_end(ap);
+
+                    return asgn ? asgn : -1;
+                }
+
+                if (!suppress)
+                {
+                    if (c == 'p')
+                    {
+                        void **outp = va_arg(ap, void **);
+                        *outp = (void *)(uintptr_t)v;
+                    }
+                    else if (lflag == 2)
+                    {
+                        unsigned long long *ou = va_arg(ap, unsigned long long *);
+                        *ou = v;
+                    }
+                    else if (lflag == 1)
+                    {
+                        unsigned long *ou = va_arg(ap, unsigned long *);
+                        *ou = (unsigned long)v;
+                    }
+                    else if (lflag == -1)
+                    {
+                        unsigned short *ou = va_arg(ap, unsigned short *);
+                        *ou = (unsigned short)v;
+                    }
+                    else
+                    {
+                        unsigned int *ou = va_arg(ap, unsigned int *);
+                        *ou = (unsigned int)v;
+                    }
+
+                    asgn++;
+                }
+            }
+            else
+            {
+                long long v = strtoll(src, &endp, base);
+
+                if (endp == src)
+                {
+                    va_end(ap);
+
+                    return asgn ? asgn : -1;
+                }
+
+                if (!suppress)
+                {
+                    if (lflag == 2)
+                    {
+                        long long *oi = va_arg(ap, long long *);
+                        *oi = v;
+                    }
+                    else if (lflag == 1)
+                    {
+                        long *oi = va_arg(ap, long *);
+                        *oi = (long)v;
+                    }
+                    else if (lflag == -1)
+                    {
+                        short *oi = va_arg(ap, short *);
+                        *oi = (short)v;
+                    }
+                    else
+                    {
+                        int *oi = va_arg(ap, int *);
+                        *oi = (int)v;
+                    }
+
+                    asgn++;
+                }
+            }
+
+            if (width)
+            {
+                p = start + (endp - (char *)src);
+            }
+            else
+            {
+                p = endp;
+            }
+
+            nread = (int)(p - str);
+
+            continue;
+        }
+
+        if (c == 'f')
+        {
+            char tmp[128];
+            const char *start = p;
+            const char *src = p;
+            char *endp = (char *)p;
+
+            if (width)
+            {
+                int k = 0;
+
+                while (src[k] && k < width && k < (int)sizeof(tmp) - 1)
+                {
+                    tmp[k] = src[k];
+                    k++;
+                }
+
+                tmp[k] = '\0';
+                src = tmp;
+            }
+
+            double dv = strtod(src, &endp);
+
+            if (endp == src)
+            {
+                va_end(ap);
+
+                return asgn ? asgn : -1;
+            }
+
+            if (!suppress)
+            {
+                if (lflag == 1)
+                {
+                    double *od = va_arg(ap, double *);
+                    *od = dv;
+                }
+                else
+                {
+                    float *of = va_arg(ap, float *);
+                    *of = (float)dv;
+                }
+
+                asgn++;
+            }
+
+            if (width)
+            {
+                p = start + (endp - (char *)src);
+            }
+            else
+            {
+                p = endp;
+            }
+
+            nread = (int)(p - str);
+
+            continue;
+        }
+
+        break;
+    }
+
+    va_end(ap);
+
+    return asgn;
+}
+
+int fprintf(FILE *stream, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int r = vfprintf(stream, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+int vfprintf(FILE *stream, const char *fmt, va_list ap)
+{
+    if (!is_valid_userspace_ptr(fmt, 1)) {
+        return -1;
+    }
+
+    FILE tmp;
+    struct filesink sink;
+    sink.f = coerce_stream(stream, &tmp, /*want_write=*/1);
+    sink.len = 0;
+
+    int out = vcbprintf(file_putch, &sink, fmt, ap);
+
+    if (sink.len) {
+        (void)fwrite(sink.buf, 1, sink.len, sink.f);
+        sink.len = 0;
+    }
+
+    return out;
 }

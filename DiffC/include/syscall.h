@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <dirent.h>
+#include <system/stat.h>
 
 #define SYSCALL_VECTOR      0x66        // Different OS Specific
                                         
@@ -34,6 +35,13 @@ enum
     SYSTEM_THREAD_GET_ID = 22,
     SYSTEM_PROCESS_SPAWN = 23,
     SYSTEM_WAIT_PID = 24,
+    SYSTEM_FILE_STAT = 25,
+    SYSTEM_FILE_FSTAT = 26,
+    SYSTEM_VIDEO_PRESENT = 27,
+    SYSTEM_VIDEO_MODE_SET = 28,
+    SYSTEM_BREAK = 29,
+    SYSTEM_VIDEO_TOGGLE_GRAPHICS_MODE = 30,
+    SYSTEM_VIDEO_GET_GRAPHICS_MODE = 31,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -231,3 +239,41 @@ static inline int system_wait_pid(int pid, int *status)
 {
     return do_sys(SYSTEM_WAIT_PID, pid, (int)status, 0, 0);
 }
+
+static inline int system_file_stat(const char *path, fs_stat_t *fs_stat)
+{
+    return do_sys(SYSTEM_FILE_STAT, (int)path, (int)fs_stat, 0, 0);
+} 
+
+static inline int system_file_fstat(int fd, fs_stat_t *fs_stat)
+{
+    return do_sys(SYSTEM_FILE_FSTAT, fd, (int)fs_stat, 0, 0);
+}
+
+static inline int system_video_present(const void *argb32, int pitch_bytes, int w, int h)
+{
+    int packed = ((w & 0xFFFF) << 16) | (h & 0xFFFF);
+
+    return do_sys(SYSTEM_VIDEO_PRESENT, (int)(uintptr_t)argb32, pitch_bytes, packed, 0);
+}
+
+static inline int system_video_mode_set(int w, int h, int bpp)
+{
+    return do_sys(SYSTEM_VIDEO_MODE_SET, (w << 16) | (h & 0xFFFF), bpp, 0, 0);
+}
+
+static inline void* system_brk(void *new_end)
+{
+    return (void*)(uintptr_t)do_sys(SYSTEM_BREAK, (int)(uintptr_t)new_end, 0, 0, 0);
+}
+
+static inline int system_video_toggle_graphics_mode(void)
+{
+    return do_sys(SYSTEM_VIDEO_TOGGLE_GRAPHICS_MODE, 0, 0, 0, 0);
+}
+
+static inline int system_video_get_graphics_mode(void)
+{
+    return do_sys(SYSTEM_VIDEO_GET_GRAPHICS_MODE, 0, 0, 0, 0);
+}
+

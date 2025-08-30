@@ -210,7 +210,6 @@ process_t *process_create_user_with_cr3(uint32_t user_eip, uint32_t user_esp, ui
     p->waiter = NULL;
 
     process_link(p);
-
     // Package bootstrap data
     user_boot_args_t *args = (user_boot_args_t *)kmalloc(sizeof(user_boot_args_t));
     if (!args)
@@ -369,7 +368,6 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
         kfree(kpath);
         return -1;
     }
-
     // Create process
     int pid = dex_spawn_process(file_table, kpath, argc, kargv);
 

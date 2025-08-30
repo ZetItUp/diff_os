@@ -1,6 +1,7 @@
 #include "dex/dex.h"
 #include "dex/exl.h"
 #include "system/process.h"
+#include "system/syscall.h"
 #include "diff.h"
 #include "string.h"
 #include "stdint.h"
@@ -32,6 +33,16 @@ extern void paging_destroy_address_space(uint32_t cr3);
 static inline int is_user_va(uint32_t a)
 {
     return (a >= USER_MIN) && (a < USER_MAX);
+}
+
+static void commit_initial_heap(uintptr_t base, uintptr_t size, uintptr_t want)
+{
+    if (want > size) 
+    {
+        want = size;
+    }
+    
+    system_brk_set((void *)(base + want));
 }
 
 // Safe range check for file sections
@@ -123,6 +134,7 @@ static uint32_t build_user_stack(
         return 0;
     }
 
+    paging_reserve_range((uintptr_t)stk, STK_SZ);
     paging_update_flags(
         (uint32_t)stk,
         STK_SZ,
@@ -217,7 +229,6 @@ static uint32_t build_user_stack(
 }
 
 // Imports and relocations
-
 static int resolve_imports_user(
     const dex_header_t *hdr,
     const dex_import_t *imp,
@@ -227,21 +238,23 @@ static int resolve_imports_user(
     uint32_t image_sz
 )
 {
-    if (hdr->import_table_count > 256)
+    uint32_t cnt = hdr->import_table_count;
+
+    // Import table was already validated against file_size in dex_load().
+    // Only sanity-limit the count here.
+    if (cnt > 4096)
     {
-        printf("[DEX] Too many imports (%u)\n", hdr->import_table_count);
+        printf("[DEX] Too many imports (%u)\n", cnt);
         return -1;
     }
 
-    for (uint32_t i = 0; i < hdr->import_table_count; ++i)
+    for (uint32_t i = 0; i < cnt; ++i)
     {
         const char *exl = strtab + imp[i].exl_name_offset;
         const char *sym = strtab + imp[i].symbol_name_offset;
 
-        // Try resolve from already loaded EXL
         void *addr = resolve_exl_symbol(exl, sym);
 
-        // Load EXL lazily if missing
         if (!addr)
         {
             const exl_t *lib = load_exl(file_table, exl);
@@ -259,14 +272,14 @@ static int resolve_imports_user(
             return -3;
         }
 
-        // Forbid pointers into the image to prevent self aliasing
+        // Forbid imports that point inside this image
         if (ptr_in_image(addr, image, image_sz))
         {
             printf("[DEX] Import %s:%s resolves inside image %p\n", exl, sym, addr);
             return -4;
         }
 
-        // Enforce user address space for imports
+        // Force user VA
         if (!is_user_va((uint32_t)addr))
         {
             printf("[DEX] Import %s:%s -> kernel VA %p\n", exl, sym, addr);
@@ -291,19 +304,17 @@ static int relocate_image(
 {
     void **import_ptrs = NULL;
 
-    if (hdr->import_table_count > 256)
+    if (hdr->import_table_count > 4096)
     {
         printf("[DEX] Too many imports (%u)\n", hdr->import_table_count);
-        
         return -1;
     }
 
-    // Allocate import pointer array if needed
     if (hdr->import_table_count)
     {
         size_t bytes = (size_t)hdr->import_table_count * sizeof(void *);
         import_ptrs = (void **)kmalloc(bytes);
-        
+
         if (!import_ptrs)
         {
             printf("[DEX] kmalloc import_ptrs=%u failed\n", (unsigned)bytes);
@@ -470,6 +481,7 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
         return -1;
     }
 
+    paging_free_all_user();
     hdr = (const dex_header_t *)file_data;
 
     // Validate magic
@@ -524,6 +536,7 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
         return -4;
     }
 
+    paging_reserve_range((uintptr_t)image, total_sz);
     // Map as user and ensure fresh view
     paging_set_user((uint32_t)image, total_sz);
     paging_flush_tlb();
@@ -570,7 +583,7 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
                    (uint32_t)file_size)))
     {
         printf("[DEX] Table offsets or sizes out of file\n");
-        kfree(image);
+        ufree(image, total_sz);
 
         return -5;
     }
@@ -596,7 +609,7 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
     // Apply relocations and imports
     if (relocate_image(hdr, imp, rel, stab, image, total_sz) != 0)
     {
-        kfree(image);
+        ufree(image, total_sz);
 
         return -6;
     }
@@ -652,7 +665,6 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
 
         return -1;
     }
-
     // Locate file
     file_index = find_entry_by_path(ft, path);
     if (file_index < 0)
@@ -672,6 +684,7 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
 
     // Read whole file into temporary buffer
     buffer = (uint8_t *)kmalloc(fe->file_size_bytes);
+    
     if (!buffer)
     {
         printf("[DEX] ERROR: Unable to allocate %u bytes\n", fe->file_size_bytes);
@@ -721,6 +734,16 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     DDBG("[DEX] run: entry=%08x stub=%08x sp=%08x (no process)\n",
          (uint32_t)dex.dex_entry, (uint32_t)stub, user_sp);
 
+    
+    uintptr_t heap_base = (((uintptr_t)stub + 0xFFFu) & ~0xFFFu);  // Page-align above stub
+    uintptr_t heap_size  = 64u << 20;                              // 64 MB window
+
+    system_brk_init_window(heap_base, heap_size);
+
+    // Reserve demand-zero window before committing initial brk
+    paging_reserve_range(heap_base, heap_size);
+    commit_initial_heap(heap_base, heap_size, 8u << 20);
+    
     // Jump to user mode
     enter_user_mode((uint32_t)stub, user_sp);
 
@@ -769,22 +792,32 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
         return -3;
     }
 
-    // Read whole file into temporary buffer
+    // Read whole file into temporary kernel buffer
     buffer = (uint8_t *)kmalloc(fe->file_size_bytes);
     if (!buffer)
     {
         printf("[DEX] ERROR: Unable to allocate %u bytes\n", fe->file_size_bytes);
-
         return -4;
     }
 
+    printf("Trying to read_file(%p, %s, buffer)\n", ft, path);
+    printf("Buffer attempted to allocate: %d bytes\n", fe->file_size_bytes);
+
+    /* --- IMPORTANT: temporarily mark the kernel buffer as USER so read_file,
+     * which likely uses copy_to_user(), will accept the destination. --- */
+    paging_update_flags((uint32_t)buffer, fe->file_size_bytes, PAGE_USER, 0);
+
     if (read_file(ft, path, buffer) < 0)
     {
+        /* Undo USER bit before bailing */
+        paging_update_flags((uint32_t)buffer, fe->file_size_bytes, 0, PAGE_USER);
         printf("[DEX] ERROR: Failed to read file: %s\n", path);
         kfree(buffer);
-
         return -5;
     }
+
+    /* Remove USER again immediately (no need to expose kernel pages) */
+    paging_update_flags((uint32_t)buffer, fe->file_size_bytes, 0, PAGE_USER);
 
     // Create child address space
     cr3_parent = read_cr3_local();
@@ -799,6 +832,9 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
 
     // Switch to child and load image and stack in child space
     paging_switch_address_space(cr3_child);
+
+    // Reset per-address-space user reservations *inside* child space
+    paging_user_heap_reset();
 
     load_rc = dex_load(buffer, fe->file_size_bytes, &dex);
     if (load_rc != 0)
@@ -852,6 +888,15 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
          entry_va, (uint32_t)stub, user_sp);
 #endif
 
+    uintptr_t heap_base = (((uintptr_t)stub + 0xFFFu) & ~0xFFFu);  // Page-align above stub
+    uintptr_t heap_size = 64u << 20;                               // 64 MB window
+
+    system_brk_init_window(heap_base, heap_size);
+
+    // Reserve demand-zero window before committing initial brk
+    paging_reserve_range(heap_base, heap_size);
+    commit_initial_heap(heap_base, heap_size, 8u << 20);
+    
     // Return to parent address space before creating process object
     paging_switch_address_space(cr3_parent);
 
@@ -866,7 +911,7 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
         kfree(buffer);
         printf("[DEX] ERROR: process_create_user_with_as failed");
 
-        return -11;
+        return -12;
     }
 
     pid = process_pid(p);

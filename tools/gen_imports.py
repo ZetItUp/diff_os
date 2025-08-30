@@ -5,30 +5,22 @@ import json
 import subprocess
 from pathlib import Path
 
-USAGE = "Usage: gen_imports.py <elf_path> <out_dir> [libmap_json] [default_exl=diffc]"
-
+USAGE = "Usage: gen_imports.py <elf_path> <out_dir> [libmap_json] [default_exl=diffc.exl]"
 
 def load_libmap(path):
     if not path or not os.path.exists(path):
-
         return {}
-
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-
     sym_to_exl = {}
-
     if all(isinstance(v, list) for v in data.values()):
         for exl, syms in data.items():
-
             for s in syms:
                 sym_to_exl[str(s)] = exl
     else:
         for s, exl in data.items():
             sym_to_exl[str(s)] = str(exl)
-
     return sym_to_exl
-
 
 def get_undefined_symbols(elf_path):
     try:
@@ -38,37 +30,28 @@ def get_undefined_symbols(elf_path):
             capture_output=True,
             text=True
         )
-
         syms = []
-
         for line in res.stdout.splitlines():
             line = line.strip()
-
             if not line:
                 continue
-
             parts = line.split()
             sym = parts[-1]
             syms.append(sym)
-
         return sorted(set(syms))
-
     except FileNotFoundError:
         print("error: i386-elf-nm not found in PATH", file=sys.stderr)
-
         return []
-
 
 def main():
     if len(sys.argv) < 3:
         print(USAGE, file=sys.stderr)
-
         sys.exit(2)
 
-    elf_path = sys.argv[1]
-    out_dir = sys.argv[2]
-    libmap_json = sys.argv[3] if len(sys.argv) >= 4 else None
-    default_exl = sys.argv[4] if len(sys.argv) >= 5 else "diffc"
+    elf_path      = sys.argv[1]
+    out_dir       = sys.argv[2]
+    libmap_json   = sys.argv[3] if len(sys.argv) >= 4 else None
+    default_exl   = sys.argv[4] if len(sys.argv) >= 5 else "diffc.exl"
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
@@ -76,7 +59,6 @@ def main():
     sym_to_exl_map = load_libmap(libmap_json)
 
     sym2lib = {}
-
     for s in syms:
         exl = sym_to_exl_map.get(s, default_exl)
         sym2lib[s] = exl
@@ -95,7 +77,6 @@ def main():
             f.write("\n".join(libs) + "\n")
 
     print(f"[INFO] {Path(elf_path).name}: imports={len(syms)} libs={','.join(libs)}")
-
 
 if __name__ == "__main__":
     main()

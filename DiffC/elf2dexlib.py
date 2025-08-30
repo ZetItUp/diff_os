@@ -208,8 +208,9 @@ class ELF:
                 else:
                     self.dynsyms.append(sym)
 
-        if not self.symtabs and not self.dynsyms:
-            fail("Ingen symboltabell hittad (.symtab/.dynsym saknas)")
+        # Om inga symboler alls – tillåt, men då blir det 0 exports.
+        # (Vi stödjer ändå relocs via rå-addender.)
+        # Inget fail här.
 
     def _read_cstr(self, blob: bytes, off: int) -> str:
         if off < 0 or off >= len(blob):
@@ -289,16 +290,13 @@ def build_exl(input_path: Path, output_path: Path, libname: str, verbose: bool) 
 
     # --- Packa segment ---
     def pack_segment(secs):
-        # return (image_off_start, bytes_blob, {sec_idx: img_base})
-        # start offset sätts senare; här bygger vi bara blob och relativa place
         blob = bytearray()
         mapping = {}
         cur = 0
         for s in secs:
-            # align per sektionens sh_addralign (min 1)
             align = s["align"] if s["align"] > 0 else 1
             if align & (align - 1) != 0:
-                # om konstig align (ej 2-potens) – aligna upp till närmaste 2-potens >= align
+                # bumpa upp till närmaste 2-potens
                 pow2 = 1
                 while pow2 < align:
                     pow2 <<= 1
@@ -416,7 +414,7 @@ def build_exl(input_path: Path, output_path: Path, libname: str, verbose: bool) 
             add_export(name_off, value_off, is_func)
             info(verbose, f"[EXPORT] {name} -> off=0x{value_off:08x} ({'func' if is_func else 'obj'})")
 
-    # Imports (torde bli 0 för din lib, men vi stödjer om något dyker upp)
+    # Imports
     exl_imports = []
     import_map = {}
     def add_import(exl_nm: str, sym_nm: str, is_func: bool) -> int:
@@ -435,9 +433,11 @@ def build_exl(input_path: Path, output_path: Path, libname: str, verbose: bool) 
         return idx
 
     reloc_table = []
+    reloc_sites = set()  # img_off där vi redan lagt reloc
 
     def add_reloc(img_off: int, idx: int, dex_type: int) -> None:
         reloc_table.append((u32(img_off, "reloc off"), u32(idx, "reloc idx"), u32(dex_type, "reloc type"), 0))
+        reloc_sites.add(u32(img_off, "reloc site"))
 
     # Reloc iteration
     def iter_reloc_sections():
@@ -471,6 +471,7 @@ def build_exl(input_path: Path, output_path: Path, libname: str, verbose: bool) 
             return (base + sym["value"]) & 0xffffffff
         return -1
 
+    # ----- Pass 1: ELF-REL/RELA -> initiala patchar + DEX-relocs -----
     for rsec in iter_reloc_sections():
         tgt_secidx = rsec["info"]
         tgt_buf, rel_base = get_target_buf_and_base(tgt_secidx)
@@ -521,7 +522,7 @@ def build_exl(input_path: Path, output_path: Path, libname: str, verbose: bool) 
                 if S != -1:
                     init = (S + A) & 0xffffffff
                     struct.pack_into("<I", tgt_buf, r_offset, init)
-                    add_reloc(img_off, 0, DEX_RELATIVE)
+                    add_reloc(img_off, 0, DEX_RELATIVE)  # loader adderar image_base
                     info(verbose, f"[ABS32 rel] @{img_off:08x} init=0x{init:08x} sym='{name}'")
                 else:
                     if (not sym) or (not name):
@@ -539,11 +540,64 @@ def build_exl(input_path: Path, output_path: Path, libname: str, verbose: bool) 
             else:
                 fail(f"Oväntad reloc typ={r_type} i {rsec['name']}")
 
-    # --- Slutliga bytes/offsets ---
+    # ===== Pass 2: svep i .rodata/.data för råa fil-offsets (lägger DEX_RELATIVE) =====
     text = bytes(text_buf)
     ro   = bytes(ro_buf)
     dat  = bytes(data_buf)
 
+    # Filintervall som räknas som "sektioner" (exkluderar header)
+    sec_ranges = []
+    if len(text):
+        sec_ranges.append((text_off, text_off + len(text)))
+    if len(ro):
+        sec_ranges.append((ro_off, ro_off + len(ro)))
+    if len(dat):
+        sec_ranges.append((data_off, data_off + len(dat)))
+
+    def in_section_file_ranges(x: int) -> bool:
+        for (lo, hi) in sec_ranges:
+            if lo <= x < hi:
+                return True
+        return False
+
+    # motsv. loaderns "dex_file_span_end"
+    end_span = align_up(max(
+        (data_off + len(dat) + bss_sz),
+        (ro_off + len(ro)),
+        (text_off + len(text)),
+        (text_off + 0x10)  # entry_off blir .text-start
+    ), FILE_ALIGN)
+
+    def sweep_region_for_offsets(buf: bytearray, region_base_off: int, tag: str) -> int:
+        if not buf:
+            return 0
+        patched = 0
+        # 4-bytes ordnat svep
+        for off in range(0, len(buf) - 3, 4):
+            img_off = region_base_off + off
+            # Skippa om redan reloc på exakt plats
+            if img_off in reloc_sites:
+                continue
+            val = struct.unpack_from("<I", buf, off)[0]
+            # Heuristik: värdet måste peka in i någon filsektion (exkl. header)
+            if in_section_file_ranges(val):
+                add_reloc(img_off, 0, DEX_RELATIVE)
+                patched += 1
+                if verbose:
+                    print(f"[DATA-SWEEP] {tag} +0x{off:06x} (img@0x{img_off:08x}) val=0x{val:08x} -> add DEX_RELATIVE")
+        return patched
+
+    patched_ro  = sweep_region_for_offsets(ro_buf,   ro_off,   ".rodata")
+    patched_dat = sweep_region_for_offsets(data_buf, data_off, ".data")
+    if verbose:
+        print(f"[DATA-SWEEP] .rodata patched={patched_ro}, .data patched={patched_dat}")
+
+    # Slutliga bytes (kan ha ändrats av svepet om du vill packa in initvärden)
+    text = bytes(text_buf)
+    ro   = bytes(ro_buf)
+    dat  = bytes(data_buf)
+
+    # --- Tabellplaceringar ---
     cur = align_up(data_off + len(dat), FILE_ALIGN)
     import_off = cur;  cur += 16 * len(exl_imports)
     reloc_off  = cur;  cur += 16 * len(reloc_table)
@@ -632,7 +686,7 @@ def main() -> None:
     ap.add_argument("input_elf")
     ap.add_argument("output_exl")
     ap.add_argument("libname", help="EXL-namn, t.ex. diffc.exl")
-    ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--verbose", "-v", action="store_true")
     args = ap.parse_args()
 
     inp = Path(args.input_elf)
