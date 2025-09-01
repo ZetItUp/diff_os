@@ -3,6 +3,11 @@
 #include "stddef.h"
 #include "stdint.h"
 
+/* KERNEL_PT_POOL: antal sidtabeller i statisk pool (default 1024) */
+#ifndef KERNEL_PT_POOL
+#define KERNEL_PT_POOL 128
+#endif
+
 #define PAGE_PRESENT    0x1
 #define PAGE_RW         0x2
 #define PAGE_USER       0x4
@@ -53,7 +58,7 @@
  * Identity-mapped low memory is kernel-only; treat user space as >= 4 MiB.
  */
 #undef  USER_MIN
-#define USER_MIN 0x00400000u
+#define USER_MIN 0x40000000u
 
 #ifndef USER_MAX
 #define USER_MAX 0x7FFF0000u
@@ -109,7 +114,10 @@ int paging_handle_demand_fault(uintptr_t fault_va);
 int paging_handle_cow_fault(uintptr_t fault_va);
 int paging_ensure_pagetable(uint32_t va, uint32_t flags);
 int paging_reserve_range(uintptr_t start, size_t size);
+
 void paging_free_all_user(void);
+void paging_free_all_user_in(uint32_t cr3_phys);
+
 void paging_user_heap_reset(void);
 uintptr_t paging_kernel_cr3_phys(void);
 uint32_t paging_new_address_space(void);
@@ -125,4 +133,5 @@ void paging_dump_mapping(uint32_t va);
 void dump_pde_pte(uint32_t lin);
 int  page_present(uint32_t lin);
 void dump_err_bits(uint32_t err);
+
 

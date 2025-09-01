@@ -6,6 +6,7 @@
 #include "stdio.h"
 #include "paging.h"
 #include "system/syscall.h"
+#include "system/process.h"
 
 #define ISR_STUB(i) extern void isr##i(void);
 #define XISR(n) ISR_STUB(n)
@@ -108,7 +109,26 @@ void fault_handler(struct stack_frame *frame)
 {
     if (frame->int_no >= 32) return;
 
-    if (frame->int_no == 14) { // #PF
+    if (frame->int_no == 13) // #GP
+    {
+        uint32_t err = frame->err_code;
+        uint32_t idx = (err >> 3) & 0x1FFF;
+        int ext = err & 1;
+        int idt = (err >> 1) & 1;
+        int ti  = (err >> 2) & 1;
+
+        printf("==== General Protection Fault ====\n");
+        printf("EIP=%08x CS=%04x EFLAGS=%08x\n", frame->eip, frame->cs, frame->eflags);
+        printf("CR3=%08x ERR=%08x (ext=%d, table=%s, %s, index=%u)\n",
+               read_cr3_local(), err,
+               ext, idt ? "IDT" : (ti ? "LDT" : "GDT"),
+               ti ? "LDT" : "GDT", idx);
+        printf("SS=%04x ESP=%08x DS=%04x ES=%04x FS=%04x GS=%04x\n",
+               frame->ss, frame->useresp, frame->ds, frame->es, frame->fs, frame->gs);
+
+        for(;;) asm volatile("hlt");
+    }
+    else if (frame->int_no == 14) { // #PF
         uint32_t cr2, cr3;
         asm volatile("mov %%cr2,%0" : "=r"(cr2));
         asm volatile("mov %%cr3,%0" : "=r"(cr3));
@@ -119,8 +139,10 @@ void fault_handler(struct stack_frame *frame)
         uint32_t err = frame->err_code;
 
         int handled = paging_handle_page_fault(cr2, err);
-        if (handled) {
-            return; // klart, fortsätt exekvering
+
+        if (handled) 
+        {
+            return;
         }
 
         // Ohanterad -> skriv info och stoppa

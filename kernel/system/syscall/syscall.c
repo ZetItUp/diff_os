@@ -98,7 +98,12 @@ static int system_console_get_color(uint32_t *out)
     }
 
     console_get_colors_kernel(&fg, &bg);
-    *out = (uint32_t)fg | ((uint32_t)bg << 8);
+    uint32_t val = (uint32_t)fg | ((uint32_t)bg << 8);
+
+    if(copy_to_user(out, &val, sizeof(val)) != 0)
+    {
+        return -1;
+    }
 
     return 0;
 }
@@ -182,13 +187,21 @@ static int system_exec_dex(
 // System exit call
 static int system_exit(struct syscall_frame *f, int code)
 {
-        process_t *p = process_current();
+    process_t *p = process_current();
 
     if (p && p->pid != 0)
     {
+#ifdef DIFF_DEBUG
+        printf("[SYSCALL] EXIT pid=%d code=%d\n", p->pid, code);
+#endif
         process_exit_current(code);
 
-        return 0;
+        thread_yield();
+
+        for (;;)
+        {
+            asm volatile("hlt");
+        }
     }
 
     if (s_parent_sp > 0)
@@ -204,7 +217,6 @@ static int system_exit(struct syscall_frame *f, int code)
     f->useresp = (uint32_t)(s_exit_kstack + sizeof(s_exit_kstack) - 16);
     f->ss = KERNEL_DS;
     f->ds = f->es = f->fs = f->gs = KERNEL_DS;
-
     return 0;
 }
 

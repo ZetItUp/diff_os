@@ -23,6 +23,10 @@ enter_user_mode:
     mov     eax, [esp + 4]          ; eax = user EIP
     mov     ecx, [esp + 8]          ; ecx = user ESP
 
+    ; Check if user stack is valid (optional check)
+    ; Ideally, you want to ensure that the user stack is mapped and accessible
+    ; Could use paging_check_user_range to verify the stack area here
+
     ; Build IRET frame: SS, ESP, EFLAGS, CS, EIP
     push    dword USER_DS           ; SS
     push    ecx                     ; ESP
@@ -37,4 +41,3 @@ enter_user_mode:
     call    thread_exit
     hlt
     jmp     $
-

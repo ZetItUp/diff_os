@@ -42,4 +42,4 @@ int thread_create(void (*entry)(void*), void* argument, size_t kernel_stack_byte
 thread_t* current_thread(void);
 void thread_exit(void) __attribute__((noreturn));
 int thread_create_for_process(struct process *owner, void (*entry)(void*), void *argument, size_t kernel_stack_bytes);
-
+void threads_reap_one(thread_t *t);

@@ -2,53 +2,72 @@
 #include "stdio.h"
 #include "string.h"
 #include "stdint.h"
+#include "paging.h"
 
-#define ALIGNMENT 8
-#define ALIGN(n) (((n) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
+/* ---------------- Internal helpers ---------------- */
 
-// Heap state
 block_header_t* heap_base = NULL;
 char* heap_limit = NULL;
 
-// Fix heap if the first block looks broken
+/* Save IRQ flags and disable interrupts */
+static inline uint32_t heap_irq_save_cli(void)
+{
+    uint32_t flags;
+    __asm__ __volatile__("pushf; pop %0; cli" : "=r"(flags) :: "memory");
+    return flags;
+}
+
+/* Restore IRQ flags */
+static inline void heap_irq_restore(uint32_t flags)
+{
+    __asm__ __volatile__("push %0; popf" :: "r"(flags) : "memory", "cc");
+}
+
+/* Payload pointer after header */
+static inline uint8_t* payload_ptr(block_header_t* b)
+{
+    return (uint8_t*)b + HEAP_BLOCK_SIZE;
+}
+
+/* Check if pointer is inside heap range */
+static int in_heap_range(const void* p)
+{
+    if (!heap_base || !heap_limit) return 0;
+    return (p >= (const void*)heap_base) && (p < (const void*)heap_limit);
+}
+
+/* Quick sanity check of block layout */
+static int shallow_ok(const block_header_t* b)
+{
+    if (!in_heap_range(b)) return 0;
+    const char* end_hdr = (const char*)b + HEAP_BLOCK_SIZE;
+    if (end_hdr > heap_limit) return 0;
+    if (end_hdr + b->size > heap_limit) return 0;
+    return 1;
+}
+
+/* If first block looks broken, rebuild a single free block */
 static void heap_repair_if_broken(void)
 {
-    if (!heap_base || !heap_limit)
-    {
-        return;
-    }
-
-    if ((char*)heap_base + HEAP_BLOCK_SIZE > heap_limit)
-    {
-        return;
-    }
+    if (!heap_base || !heap_limit) return;
+    if ((char*)heap_base + HEAP_BLOCK_SIZE > heap_limit) return;
 
     int broken = 0;
 
-    if (heap_base->size == 0)
-    {
-        broken = 1;
-    }
+    if (heap_base->size == 0) broken = 1;
+    if ((char*)heap_base + HEAP_BLOCK_SIZE + heap_base->size > heap_limit) broken = 1;
 
-    if ((char*)heap_base + HEAP_BLOCK_SIZE + heap_base->size > heap_limit)
-    {
+    if (heap_base->next &&
+        ((void*)heap_base->next < (void*)heap_base || (void*)heap_base->next >= (void*)heap_limit))
         broken = 1;
-    }
 
-    if (heap_base->next && ((void*)heap_base->next < (void*)heap_base || (void*)heap_base->next >= (void*)heap_limit))
-    {
+    if (heap_base->prev &&
+        ((void*)heap_base->prev < (void*)heap_base || (void*)heap_base->prev >= (void*)heap_limit))
         broken = 1;
-    }
-
-    if (heap_base->prev && ((void*)heap_base->prev < (void*)heap_base || (void*)heap_base->prev >= (void*)heap_limit))
-    {
-        broken = 1;
-    }
 
     if (broken)
     {
         size_t total = (size_t)(heap_limit - (char*)heap_base);
-
         heap_base->size = total - HEAP_BLOCK_SIZE;
         heap_base->free = 1;
         heap_base->prev = NULL;
@@ -56,183 +75,117 @@ static void heap_repair_if_broken(void)
     }
 }
 
-// Save IRQ flags and disable interrupts
-static inline uint32_t heap_irq_save_cli(void)
-{
-    uint32_t flags;
-
-    __asm__ volatile("pushf; pop %0; cli" : "=r"(flags) :: "memory");
-
-    return flags;
-}
-
-// Restore IRQ flags
-static inline void heap_irq_restore(uint32_t flags)
-{
-    __asm__ volatile("push %0; popf" :: "r"(flags) : "memory", "cc");
-}
-
-// Get payload pointer after header
-static inline uint8_t* payload_ptr(block_header_t* b)
-{
-    return (uint8_t*)b + HEAP_BLOCK_SIZE;
-}
-
-// Check if pointer is inside heap range
-static int in_heap_range(const void* p)
-{
-    if (!heap_base)
-    {
-        return 0;
-    }
-
-    if (p < (const void*)heap_base)
-    {
-        return 0;
-    }
-
-    if (p >= (const void*)heap_limit)
-    {
-        return 0;
-    }
-
-    return 1;
-}
-
-// Quick sanity check of block layout
-static int shallow_ok(const block_header_t* b)
-{
-    if (!in_heap_range(b))
-    {
-        return 0;
-    }
-
-    if ((const char*)b + HEAP_BLOCK_SIZE > heap_limit)
-    {
-        return 0;
-    }
-
-    if ((const char*)b + HEAP_BLOCK_SIZE + b->size > heap_limit)
-    {
-        return 0;
-    }
-
-    return 1;
-}
-
-// Split a block if it is too large
+/* Split a block if it is too large */
 static void split_block(block_header_t* b, size_t need)
 {
-    size_t want = ALIGN(need);
+    size_t want = HEAP_ALIGN_UP(need);
 
-    if (b->size <= want + HEAP_BLOCK_SIZE + ALIGNMENT)
-    {
-        return;
-    }
+    /* Not enough room for a split + new header + minimal payload */
+    if (b->size <= want + HEAP_BLOCK_SIZE + HEAP_ALIGN) return;
+
+    /* Defensive overflow/consistency checks */
+    if (want > b->size) return;
+    if (!shallow_ok(b)) return;
 
     block_header_t* nb = (block_header_t*)((uint8_t*)b + HEAP_BLOCK_SIZE + want);
+    /* Hard guard: never create headers in user space */
+    if ((uintptr_t)nb >= (uintptr_t)USER_MIN) return;
     size_t remain = b->size - want - HEAP_BLOCK_SIZE;
 
-    if (!shallow_ok(b))
-    {
-        return;
-    }
+    /* New header must lie entirely inside the heap window */
+    if (!in_heap_range(nb)) return;
+    if ((const char*)nb + HEAP_BLOCK_SIZE > heap_limit) return;
 
-    if ((const char*)nb + HEAP_BLOCK_SIZE + remain > heap_limit)
-    {
-        return;
-    }
+    /* Entire new block (header + payload) must fit */
+    if ((const char*)nb + HEAP_BLOCK_SIZE + remain > heap_limit) return;
 
     nb->size = remain;
     nb->free = 1;
     nb->prev = b;
     nb->next = b->next;
-
-    if (nb->next)
-    {
-        nb->next->prev = nb;
-    }
+    if (nb->next) nb->next->prev = nb;
 
     b->size = want;
     b->next = nb;
 }
 
-// Merge free blocks if possible
+/* Merge free blocks if possible */
 static void coalesce(block_header_t* b)
 {
-    if (!b)
-    {
-        return;
-    }
+    if (!b) return;
 
-    // Forward merge
+    /* Forward merge */
     if (b->next && b->free && b->next->free)
     {
         block_header_t* n = b->next;
-
-        if (!shallow_ok(b) || !shallow_ok(n))
-        {
-            return;
-        }
+        if (!shallow_ok(b) || !shallow_ok(n)) return;
 
         b->size += HEAP_BLOCK_SIZE + n->size;
         b->next = n->next;
-
-        if (b->next)
-        {
-            b->next->prev = b;
-        }
+        if (b->next) b->next->prev = b;
     }
 
-    // Backward merge
+    /* Backward merge */
     if (b->prev && b->prev->free && b->free)
     {
         block_header_t* p = b->prev;
-
-        if (!shallow_ok(p) || !shallow_ok(b))
-        {
-            return;
-        }
+        if (!shallow_ok(p) || !shallow_ok(b)) return;
 
         p->size += HEAP_BLOCK_SIZE + b->size;
         p->next = b->next;
-
-        if (p->next)
-        {
-            p->next->prev = p;
-        }
+        if (p->next) p->next->prev = p;
     }
 }
 
-// Initialize the heap with a memory range
+/* ---------------- Public API ---------------- */
+
+/* Initialize the heap with a memory range [start, end). No clamping to USER_MIN here. */
 void init_heap(void* start, void* end)
 {
     if (!start || !end || end <= start)
     {
         printf("[HEAP ERROR] Invalid heap range %p-%p\n", start, end);
-
         return;
     }
 
-    size_t heap_sz = (size_t)((char*)end - (char*)start);
+    uintptr_t s = (uintptr_t)start;
+    uintptr_t e = (uintptr_t)end;
 
-    if (heap_sz < HEAP_BLOCK_SIZE + ALIGNMENT)
+    /* Align bounds: start up, end down */
+    s = HEAP_ALIGN_UP(s);
+    e &= ~((uintptr_t)HEAP_ALIGN - 1);
+
+    /* Clamp kernel heap to stay strictly below the user window */
+    if (e > (uintptr_t)USER_MIN)
     {
-        printf("[HEAP ERROR] Heap too small (%zu bytes)\n", heap_sz);
-
+        printf("[HEAP] clamping end from %p to %p to avoid USER_MIN\n", (void*)e, (void*)USER_MIN);
+        e = (uintptr_t)USER_MIN;
+    }
+    if (s >= e)
+    {
+        printf("[HEAP ERROR] Heap range after clamp invalid %p-%p\n", (void*)s, (void*)e);
         return;
     }
 
-    heap_base = (block_header_t*)start;
-    heap_limit = (char*)end;
+    if (e <= s + HEAP_BLOCK_SIZE)
+    {
+        printf("[HEAP ERROR] Heap too small after alignment (%zu bytes)\n", (size_t)(e - s));
+        return;
+    }
 
+    heap_base  = (block_header_t*)s;
+    heap_limit = (char*)e;
+
+    size_t heap_sz = (size_t)(heap_limit - (char*)heap_base);
     heap_base->size = heap_sz - HEAP_BLOCK_SIZE;
     heap_base->free = 1;
     heap_base->prev = NULL;
     heap_base->next = NULL;
+
+    printf("[HEAP] init %p-%p (%zu bytes usable)\n",
+           heap_base, heap_limit, (size_t)heap_base->size);
 }
 
-// Allocate memory
 void* kmalloc(size_t size)
 {
     uint32_t f = heap_irq_save_cli();
@@ -241,29 +194,22 @@ void* kmalloc(size_t size)
     if (size == 0 || !heap_base)
     {
         heap_irq_restore(f);
-
         return NULL;
     }
 
-    size_t need = ALIGN(size);
-
+    size_t need = HEAP_ALIGN_UP(size);
     heap_repair_if_broken();
 
     block_header_t* cur = heap_base;
-
     while (cur)
     {
-        if (!shallow_ok(cur))
-        {
-            break;
-        }
+        if (!shallow_ok(cur)) break;
 
         if (cur->free && cur->size >= need)
         {
             split_block(cur, need);
             cur->free = 0;
             out = payload_ptr(cur);
-
             break;
         }
 
@@ -271,11 +217,9 @@ void* kmalloc(size_t size)
     }
 
     heap_irq_restore(f);
-
     return out;
 }
 
-// Free memory
 void kfree(void* ptr)
 {
     uint32_t f = heap_irq_save_cli();
@@ -283,14 +227,12 @@ void kfree(void* ptr)
     if (!ptr || !heap_base)
     {
         heap_irq_restore(f);
-
         return;
     }
 
     if (!in_heap_range(ptr))
     {
         heap_irq_restore(f);
-
         return;
     }
 
@@ -299,14 +241,12 @@ void kfree(void* ptr)
     if (!shallow_ok(b))
     {
         heap_irq_restore(f);
-
         return;
     }
 
     if (b->free)
     {
         heap_irq_restore(f);
-
         return;
     }
 
@@ -316,13 +256,11 @@ void kfree(void* ptr)
     heap_irq_restore(f);
 }
 
-// Print a dump of the heap layout
 void heap_dump(void)
 {
     if (!heap_base)
     {
         printf("[HEAP DUMP] Heap not initialized\n");
-
         return;
     }
 
@@ -338,26 +276,19 @@ void heap_dump(void)
         if (!shallow_ok(cur))
         {
             printf("[HEAP DUMP] Invalid block at %p\n", cur);
-
             break;
         }
 
         printf("Block %d: %p size=%zu %s\n", i++, cur, cur->size, cur->free ? "(free)" : "(used)");
 
-        if (cur->free)
-        {
-            freeb += cur->size;
-        }
-        else
-        {
-            used += cur->size;
-        }
+        if (cur->free)  freeb += cur->size;
+        else            used  += cur->size;
 
         cur = cur->next;
     }
 
     size_t total = (size_t)(heap_limit - (char*)heap_base);
-    size_t over = total - used - freeb;
+    size_t over  = total - used - freeb;
 
     printf("\nSUMMARY:\n");
     printf("Total heap space: %zu bytes\n", total);
@@ -366,4 +297,5 @@ void heap_dump(void)
     printf("Overhead: %zu bytes\n", over);
     printf("--- END DUMP ---\n\n");
 }
+
 

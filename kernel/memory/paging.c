@@ -25,8 +25,11 @@
 #define ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((a) - 1))
 #define ALIGN_DOWN(x, a) ((x) & ~((a) - 1))
 
-__attribute__((aligned(4096))) uint32_t page_directory[1024];
-__attribute__((aligned(4096))) uint32_t kernel_page_tables[64][PAGE_ENTRIES];
+__attribute__((aligned(4096))) uint32_t page_directory[PAGE_ENTRIES];
+#ifndef KERNEL_PT_POOL
+#define KERNEL_PT_POOL 128
+#endif
+__attribute__((aligned(4096))) uint32_t kernel_page_tables[KERNEL_PT_POOL][PAGE_ENTRIES];
 
 extern char __heap_start;
 extern char __heap_end;
@@ -55,6 +58,7 @@ static uresv_t uresv_list[MAX_USER_RESERVATIONS];
 static int uresv_count = 0;
 
 static int pt_next = 1;
+static int pt_bootstrap_next = 1;
 extern volatile int g_in_irq;
 
 static volatile int g_dbg_allow_irq_userpeek = 0;
@@ -565,9 +569,9 @@ void init_paging(uint32_t ram_mb)
     if (blocks_reserved > (int)MAX_BLOCKS) blocks_reserved = (int)MAX_BLOCKS;
     for (int b = 0; b < blocks_reserved; b++) set_block(b);
 
-    // Zappa user-PDEs
-    uint32_t keep_until = ALIGN_UP((uint32_t)(uintptr_t)&__heap_end + PAGE_SIZE_4KB, BLOCK_SIZE);
-    uint32_t udi_start = (keep_until >> 22);
+    // Zappa user-PDEs (bara användarområdet)
+    uint32_t keep_until = ALIGN_UP((uint32_t)(uintptr_t)&__heap_end + PAGE_SIZE_4KB, BLOCK_SIZE); /* behålls, ej använd som gräns */
+    uint32_t udi_start = (USER_MIN >> 22);
     uint32_t udi_end   = ((USER_MAX - 1) >> 22);
     for (uint32_t di = udi_start; di <= udi_end; di++) page_directory[di] = 0;
 
@@ -579,7 +583,11 @@ void init_paging(uint32_t ram_mb)
 
     // Spara kernel-CR3-phys (för API)
     asm volatile("mov %%cr3, %0" : "=r"(s_kernel_cr3_phys));
+
+    // Spara basnivå för PT-poolen efter kernel-identity och init
+    pt_bootstrap_next = pt_next;
 }
+
 
 // Map a range using 4MB or 4KB pages
 int map_page(uint32_t virt_addr, uint32_t size)
@@ -1099,6 +1107,10 @@ int paging_unmap_user_range(uintptr_t vaddr, size_t bytes)
 // Handle demand-zero fault inside reserved region
 int paging_handle_demand_fault(uintptr_t fault_va)
 {
+    if(!page_is_present(fault_va))
+    {
+        paging_dump_mapping(fault_va);
+    }
     uint32_t fva = (uint32_t)fault_va;
     if (!is_user_addr_inline(fva)) return -1;
 
@@ -1282,56 +1294,45 @@ int paging_check_user_range(uint32_t addr, uint32_t size)
 
         if (paging_probe_pde_pte(va, &pde, &pte) != 0)
         {
-            uint32_t page_base = ALIGN_DOWN(va, PAGE_SIZE_4KB);
-
-            if(reservations_contains(page_base))
+            if (!reservations_contains(ALIGN_DOWN(va, PAGE_SIZE_4KB)))
             {
-                continue;
+                printf("[PG-FAIL] VA=%08x PDE not present\n", va);
+                return -1;
             }
-
-            printf("[PG-FAIL] VA=%08x PDE not present\n", va);
-            return -1;
+            continue;
         }
 
         if (!(pde & PAGE_PRESENT))
         {
-            uint32_t page_base = ALIGN_DOWN(va, PAGE_SIZE_4KB);
-
-            if(reservations_contains(page_base))
+            if (!reservations_contains(ALIGN_DOWN(va, PAGE_SIZE_4KB)))
             {
-                continue;
+                printf("[PG-FAIL] VA=%08x PDE not present\n", va);
+                return -1;
             }
-            printf("[PG-FAIL] VA=%08x PDE not present\n", va);
-            return -1;
+            continue;
         }
 
         if (pde & PAGE_PS)
         {
             if (!(pde & PAGE_USER))
             {
-                uint32_t page_base = ALIGN_DOWN(va, PAGE_SIZE_4KB);
-
-                if(reservations_contains(page_base))
+                if (!reservations_contains(ALIGN_DOWN(va, PAGE_SIZE_4KB)))
                 {
-                    continue;
+                    printf("[PG-FAIL] VA=%08x 4MB page not USER\n", va);
+                    return -1;
                 }
-                printf("[PG-FAIL] VA=%08x 4MB page not USER\n", va);
-                return -1;
             }
             continue;
         }
 
         if (!(pte & PAGE_PRESENT))
         {
-            uint32_t page_base = ALIGN_DOWN(va, PAGE_SIZE_4KB);
-
-            if (reservations_contains(page_base))
+            if (!reservations_contains(ALIGN_DOWN(va, PAGE_SIZE_4KB)))
             {
-                continue;
+                printf("[PG-FAIL] VA=%08x PTE not present\n", va);
+                return -1;
             }
-
-            printf("[PG-FAIL] VA=%08x PTE not present\n", va);
-            return -1;
+            continue;
         }
 
         if (!(pte & PAGE_USER))
@@ -1521,42 +1522,29 @@ uint32_t paging_new_address_space(void)
         return 0;
     }
 
+    /* Mappa in nya PD temporärt och seed-a från nuvarande PD */
     uint32_t *new_pd = (uint32_t*)kmap_phys(pd_phys, 0);
-    for (int i = 0; i < 1024; i++) new_pd[i] = page_directory[i];
+    for (int i = 0; i < 1024; i++)
+        new_pd[i] = page_directory[i];
 
+    /* Rekursiv PD-mappning: hitta PDE/PT för page_directorys VA */
     uint32_t pd_va = (uint32_t)(uintptr_t)page_directory;
     uint32_t pd_di = pd_va >> 22;
 
+    /* Zappa ENDAST användarrummet, och aldrig under kernel+heap-änden */
     uint32_t keep_until = ALIGN_UP((uint32_t)(uintptr_t)&__heap_end + PAGE_SIZE_4KB, BLOCK_SIZE);
-    uint32_t protect_max_di = (keep_until >> 22);
-
-    uint32_t udi_start = (USER_MIN >> 22);
-    uint32_t udi_end   = ((USER_MAX - 1) >> 22);
-
+    uint32_t udi_start  = (keep_until >> 22);
+    if (udi_start < (USER_MIN >> 22))
+        udi_start = (USER_MIN >> 22);
+    uint32_t udi_end    = ((USER_MAX - 1) >> 22);
     for (uint32_t di = udi_start; di <= udi_end; di++)
-    {
-        if (di <= protect_max_di) continue;
-        if (di == pd_di)          continue;
         new_pd[di] = 0;
-    }
 
-    // Se till att PD:s egen sida är mappad via kernel-PT (inte PS)
-    uint32_t va_pd = (uint32_t)(uintptr_t)page_directory;
-    uint32_t di = va_pd >> 22;
-    uint32_t ti = (va_pd >> 12) & 0x3FFu;
+    /* Säkerställ att PD-VA pekar via en 4KB-PT, inte 4MB-PS */
+    uint32_t di = pd_di;
+    uint32_t ti = (pd_va >> 12) & 0x3FF;
+
     uint32_t pde = new_pd[di];
-
-    if ((pde & PAGE_PRESENT) && (pde & PAGE_PS))
-    {
-        if (split_large_pde_to_pt(new_pd, di) != 0)
-        {
-            kunmap_phys(0);
-            free_phys_page(pd_phys);
-            return 0;
-        }
-        pde = new_pd[di];
-    }
-
     if (!(pde & PAGE_PRESENT) || (pde & PAGE_PS))
     {
         printf("[PAGING] new_address_space: kernel PT missing or 4MB at di=%u (pde=%08x)\n", di, pde);
@@ -1565,6 +1553,7 @@ uint32_t paging_new_address_space(void)
         return 0;
     }
 
+    /* Sätt PT-entryn som pekar på PD-sidan (rekursiv mappning) */
     uint32_t pt_phys = pde & 0xFFFFF000u;
     uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
     pt[ti] = (pd_phys & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW;
@@ -1607,41 +1596,53 @@ void paging_free_all_user(void)
     for (uint32_t di = udi_start; di <= udi_end; di++)
     {
         uint32_t pde = page_directory[di];
-        if (!(pde & PAGE_PRESENT)) continue;
-
-        if (pde & PAGE_PS)
+        if (!(pde & PAGE_PRESENT))
         {
-            /* Låt unmap_page() göra refcount/bitmap-städet. */
-            unmap_page(di << 22);
             continue;
         }
 
-        /* Vanlig PT – mappa temporärt och frigör alla PTE:er */
+        if (pde & PAGE_PS)
+        {
+            // Release 4MB page
+            uint32_t phys_addr = pde & 0xFFC00000u;
+            int block = (int)(phys_addr / BLOCK_SIZE);
+            clear_block(block);
+            page_directory[di] = 0;
+            continue;
+        }
+
+        // Normal 4KB page table
         uint32_t pt_phys = pde & 0xFFFFF000u;
         uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
-        for (int i = 0; i < 1024; i++)
+
+        for (int ti = 0; ti < 1024; ti++)
         {
-            uint32_t pte = pt[i];
-            if (!(pte & PAGE_PRESENT)) continue;
+            uint32_t pte = pt[ti];
+            if (!(pte & PAGE_PRESENT))
+            {
+                continue;
+            }
+
             uint32_t pa = pte & 0xFFFFF000u;
             int idx = phys_idx_from_pa(pa);
             phys_ref_dec_idx(idx);
-            pt[i] = 0;
+            pt[ti] = 0;
         }
-        kunmap_phys(1);
 
+        kunmap_phys(1);
         page_directory[di] = 0;
 
-        /* Frigör PT:ns fysiska sida om den inte är en av kernel_page_tables[] */
-        if (!(pt_phys >= kpt_start && pt_phys < kpt_end)) {
+        // Free the page table itself if it was dynamically allocated
+        if (!(pt_phys >= kpt_start && pt_phys < kpt_end))
+        {
             free_phys_page(pt_phys);
         }
     }
 
-    /* Globala TLB-shootdown */
+    // Full TLB shootdown
     asm volatile("mov %%cr3, %%eax; mov %%eax, %%cr3" ::: "eax", "memory");
 
-    /* Återställ även user heap/reservationer – matchar API:et */
+    // Reset user heap and reservations
     paging_user_heap_reset();
 }
 
@@ -1650,3 +1651,30 @@ void paging_user_heap_reset(void)
     uheap_next = UHEAP_BASE;
     uresv_count = 0;
 }
+
+void paging_free_all_user_in(uint32_t cr3_phys)
+{
+    // Temporarily switch
+    uint32_t old;
+    asm volatile("mov %%cr3, %0" : "=r"(old));
+    paging_switch_address_space(cr3_phys);
+
+    // Free all VA in [USER_MIN, USER_MAX)
+    for (uint32_t va = USER_MIN; va < USER_MAX; va += PAGE_SIZE_4KB)
+    {
+        if (page_is_present(va))
+        {
+            unmap_page(va);
+        }
+    }
+
+    flush_tlb();
+
+    // Återställ PT-poolen efter att ha rensat användarrymden i den här CR3
+    pt_next = pt_bootstrap_next;
+
+    // Back to old space
+    paging_switch_address_space(old);
+}
+
+

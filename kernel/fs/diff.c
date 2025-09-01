@@ -172,11 +172,19 @@ static int safe_copy_out(void* dst, const void* src, uint32_t n)
             return -3; // EFAULT
         }
 
-        memcpy(dst, src, n);
+        if(copy_to_user(dst, src, n) != 0)
+        {
+            return -4;
+        }
+
         return 0;
     }
 
-    memcpy(dst, src, n);
+    if(copy_to_user(dst, src, n) != 0)
+    {
+        return -5;
+    }
+
     return 0;
 }
 
@@ -198,11 +206,19 @@ static int safe_copy_in(void* dst, const void* src, uint32_t n)
             return -3; // EFAULT
         }
 
-        memcpy(dst, src, n);
+        if(copy_from_user(dst, src, n) != 0)
+        {
+            return -4;
+        }
+
         return 0;
     }
 
-    memcpy(dst, src, n);
+    if(copy_from_user(dst, src, n) != 0)
+    {
+        return -5;
+    }
+
     return 0;
 }
 

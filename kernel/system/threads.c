@@ -117,4 +117,27 @@ int thread_create_for_process(
 
     return t->thread_id;
 }
+// Reap a single zombie thread (free stack + object, dec process count)
+void threads_reap_one(thread_t *t)
+{
+    if (!t)
+    {
+        return;
+    }
+
+    struct process *p = t->owner_process;
+
+    printf("[THREAD] reaping tid=%d pid=%d\n", t->thread_id, p ? p->pid : -1);
+
+    // Free kernel stack
+    if (t->kernel_stack_base)
+    {
+        kfree((void *)(uintptr_t)t->kernel_stack_base);
+        t->kernel_stack_base = 0;
+        t->kernel_stack_top = 0;
+    }
+
+    // Free thread object
+    kfree(t);
+}
 
