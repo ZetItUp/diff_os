@@ -9,9 +9,10 @@
 #endif
 
 #ifndef KMAP_TEMP_VA
-#define KMAP_TEMP_VA 0x003FF000u // Temporary mapping page
+#define KMAP_TEMP_VA 0x003FF000u // Temporary mapping page (low VA)
 #endif
 
+// Legacy high-VA scratch (not used early anymore, kept for later if you want)
 #define KMAP_SCRATCH1 0xFFCFF000
 #define KMAP_SCRATCH2 0xFFCFE000
 
@@ -22,10 +23,11 @@
 #define UMEM_PAGEALIGNED   (1u << 4)
 
 #define PAGE_SIZE_4K  PAGE_SIZE_4KB
-#define ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((a) - 1))
+#define ALIGN_UP(x, a)   (((x) + ((a) - 1)) & ~((a) - 1))
 #define ALIGN_DOWN(x, a) ((x) & ~((a) - 1))
 
 __attribute__((aligned(4096))) uint32_t page_directory[PAGE_ENTRIES];
+
 #ifndef KERNEL_PT_POOL
 #define KERNEL_PT_POOL 128
 #endif
@@ -34,18 +36,21 @@ __attribute__((aligned(4096))) uint32_t kernel_page_tables[KERNEL_PT_POOL][PAGE_
 extern char __heap_start;
 extern char __heap_end;
 
-// Bitmap för 4MB-block och 4KB-sidor
+// Bitmaps och refcounts
 static uint32_t *block_bitmap;
 static uint32_t max_blocks;
 static uint32_t phys_page_bitmap[(MAX_PHYS_PAGES + 31) / 32];
-
-// Refcount per physical page
 static uint16_t phys_page_refcnt[MAX_PHYS_PAGES];
 
+// Scratch-map state
 static uint32_t g_kmap_temp_mapped_phys = 0;
 static uint32_t uheap_next = UHEAP_BASE;
 static uint32_t kmap_va1 = 0;
-static uint32_t kmap_va2 = 0; // Reserv scratch-VAs sätts i init_paging
+static uint32_t kmap_va2 = 0;
+
+// Direkta PT-pekare för scratch (för att undvika rekursion)
+static uint32_t *g_kmap_pt1 = NULL;
+static uint32_t *g_kmap_pt2 = NULL;
 
 typedef struct
 {
@@ -62,27 +67,20 @@ static int pt_bootstrap_next = 1;
 extern volatile int g_in_irq;
 
 static volatile int g_dbg_allow_irq_userpeek = 0;
-
 static uint32_t s_kernel_cr3_phys = 0;
 
 void hexdump_bytes(const void *addr, size_t n);
 
-// Scratch mapping helpers
+// Lokala helpers
 static inline void* kmap_phys(uint32_t phys, int slot);
-static inline void kunmap_phys(int slot);
+static inline void  kunmap_phys(int slot);
+static int          split_large_pde_to_pt(uint32_t *new_pd, uint32_t di);
 
-// Exporterade wrappers för kmap
-void* paging_kmap_phys(uint32_t phys, int slot)
-{
-    return kmap_phys(phys, slot);
-}
+// Exporterade wrappers för kmap (om något annan kod förlitar sig på dem)
+void* paging_kmap_phys(uint32_t phys, int slot) { return kmap_phys(phys, slot); }
+void  paging_kunmap_phys(int slot)              { kunmap_phys(slot); }
 
-void paging_kunmap_phys(int slot)
-{
-    kunmap_phys(slot);
-}
-
-// Translate virtual address and return info
+// Translate VA and return info
 int paging_va_translate_full(uint32_t va, uint32_t *out_page_pa, int *out_user, int *out_rw, int *out_ps);
 
 // Lokala utilities
@@ -98,7 +96,6 @@ void paging_dbg_allow_irq_userpeek(int enable)
     g_dbg_allow_irq_userpeek = (enable != 0);
 }
 
-// Är en VA inom user?
 static inline int is_user_addr_inline(uint32_t vaddr)
 {
     return (vaddr >= USER_MIN) && (vaddr < USER_MAX);
@@ -109,25 +106,22 @@ int is_user_addr(uint32_t vaddr)
     return is_user_addr_inline(vaddr);
 }
 
-// Translate VA safely
+// Core VA->PA translate used by kernel hexdump
 static int va_translate(uint32_t va, uint32_t *out_page_pa, int *out_user, int *out_ps)
 {
-    uint32_t di = va >> 22;              // Directory index
-    uint32_t ti = (va >> 12) & 0x3FFu;   // Table index
-    uint32_t pde = page_directory[di];   // Page directory entry
+    uint32_t di = va >> 22;
+    uint32_t ti = (va >> 12) & 0x3FFu;
+    uint32_t pde = page_directory[di];
 
-    if (!(pde & PAGE_PRESENT))
-    {
-        return 0;
-    }
+    if (!(pde & PAGE_PRESENT)) return 0;
 
-    int is_ps = (pde & PAGE_PS) ? 1 : 0;     // Large page flag
-    int pde_u = (pde & PAGE_USER) ? 1 : 0;   // User flag
-    int userok = pde_u;                      // Must be set in PDE and PTE
+    int is_ps = (pde & PAGE_PS) ? 1 : 0;
+    int pde_u = (pde & PAGE_USER) ? 1 : 0;
+    int userok = pde_u;
 
     if (is_ps)
     {
-        if (out_ps)   *out_ps   = 1;
+        if (out_ps)   *out_ps = 1;
         if (out_user) *out_user = userok;
         if (out_page_pa)
         {
@@ -139,24 +133,19 @@ static int va_translate(uint32_t va, uint32_t *out_page_pa, int *out_user, int *
 
     if (out_ps) *out_ps = 0;
 
-    uint32_t pt_phys = pde & 0xFFFFF000u;         // Page table base
+    uint32_t pt_phys = pde & 0xFFFFF000u;
     uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
     uint32_t pte = pt[ti];
     kunmap_phys(1);
 
-    if (!(pte & PAGE_PRESENT))
-    {
-        return 0;
-    }
+    if (!(pte & PAGE_PRESENT)) return 0;
 
     userok = userok && ((pte & PAGE_USER) != 0);
     if (out_user) *out_user = userok;
     if (out_page_pa) *out_page_pa = (pte & 0xFFFFF000u);
-
     return 1;
 }
 
-// Check if VA is user accessible
 static int va_is_user_accessible(uint32_t va)
 {
     int user = 0;
@@ -164,45 +153,50 @@ static int va_is_user_accessible(uint32_t va)
     return user;
 }
 
-// Check if VA is present
 static int va_is_present(uint32_t va)
 {
     return va_translate(va, NULL, NULL, NULL);
 }
 
-// Scratch slots
-__attribute__((unused)) static void* kmap_slot(uint32_t phys, int slot)
-{
-    uint32_t va = slot ? kmap_va2 : kmap_va1;
-    map_4kb_page_flags(va, phys, PAGE_PRESENT | PAGE_RW);
-    invlpg(va);
-    return (void*)(uintptr_t)va;
-}
+// ====== Scratch mapping (ingen rekursion) ======
+//
+// Dessa använder förallokerade PT för kmap_va1/kmap_va2.
+// Inga anrop till map_4kb_page_flags() här inne.
 
-__attribute__((unused)) static void kunmap_slot(int slot)
-{
-    uint32_t va = slot ? kmap_va2 : kmap_va1;
-    unmap_4kb_page(va);
-    invlpg(va);
-}
-
-// Global scratch
 static inline void* kmap_phys(uint32_t phys, int slot)
 {
-    uint32_t va = slot ? KMAP_SCRATCH2 : KMAP_SCRATCH1;
-    map_4kb_page_flags(va, phys, PAGE_PRESENT | PAGE_RW);
-    asm volatile("invlpg (%0)" :: "r"(va) : "memory");
+    uint32_t va = slot ? kmap_va2 : kmap_va1;
+    uint32_t *pt = slot ? g_kmap_pt2 : g_kmap_pt1;
+
+    if (!pt)
+    {
+        // Failsafe om init skulle vara för tidig (ska inte ske efter init_paging)
+        paging_ensure_pagetable(va, PAGE_PRESENT | PAGE_RW);
+        pt = (uint32_t*)(page_directory[(va >> 22) & 0x3FF] & 0xFFFFF000u);
+        if (slot) g_kmap_pt2 = pt; else g_kmap_pt1 = pt;
+    }
+
+    uint32_t ti = (va >> 12) & 0x3FFu;
+    pt[ti] = (phys & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW;
+    invlpg(va);
     return (void*)(uintptr_t)va;
 }
 
-__attribute__((unused)) static inline void kunmap_phys(int slot)
+static inline void kunmap_phys(int slot)
 {
-    uint32_t va = slot ? KMAP_SCRATCH2 : KMAP_SCRATCH1;
-    unmap_4kb_page(va);
-    asm volatile("invlpg (%0)" :: "r"(va) : "memory");
+    uint32_t va = slot ? kmap_va2 : kmap_va1;
+    uint32_t *pt = slot ? g_kmap_pt2 : g_kmap_pt1;
+
+    if (pt)
+    {
+        uint32_t ti = (va >> 12) & 0x3FFu;
+        pt[ti] = 0;
+        invlpg(va);
+    }
 }
 
-// Convert flags from 4MB to 4KB
+// ====== PDE/flags helpers ======
+
 static inline uint32_t pd_flags_from_large(uint32_t pde_large)
 {
     uint32_t f = PAGE_PRESENT | PAGE_RW;
@@ -214,9 +208,9 @@ static inline uint32_t pd_flags_from_large(uint32_t pde_large)
 
 __attribute__((unused)) static int probe_present_and_pa(uint32_t va, uint32_t *out_page_pa)
 {
-    uint32_t di = va >> 22;            // Directory index
-    uint32_t ti = (va >> 12) & 0x3FFu; // Table index
-    uint32_t pde = page_directory[di]; // Page directory entry
+    uint32_t di = va >> 22;
+    uint32_t ti = (va >> 12) & 0x3FFu;
+    uint32_t pde = page_directory[di];
 
     if (!(pde & PAGE_PRESENT)) return 0;
 
@@ -237,7 +231,8 @@ __attribute__((unused)) static int probe_present_and_pa(uint32_t va, uint32_t *o
     return 1;
 }
 
-// Split a 4MB PDE into a 4KB page table
+// ====== Split 4MB PDE till 4KB-PT ======
+
 static int split_large_pde_to_pt(uint32_t *new_pd, uint32_t di)
 {
     uint32_t pde = new_pd[di];
@@ -271,7 +266,8 @@ static inline void flush_tlb(void)
     asm volatile("mov %%cr3, %%eax; mov %%eax, %%cr3" ::: "eax", "memory");
 }
 
-// Temporary mapping of a physical page
+// ====== Temp map med låg VA (behåller om du använder någonstans) ======
+
 __attribute__((unused)) static void* kmap_temp(uint32_t phys)
 {
     if (g_kmap_temp_mapped_phys == phys && page_is_present(KMAP_TEMP_VA))
@@ -279,6 +275,7 @@ __attribute__((unused)) static void* kmap_temp(uint32_t phys)
         return (void*)(uintptr_t)KMAP_TEMP_VA;
     }
 
+    // OBS: använder map_4kb_page_flags; men KMAP_TEMP_VA ligger i låg VA där vi äger PT
     map_4kb_page_flags(KMAP_TEMP_VA, phys, PAGE_PRESENT | PAGE_RW);
     invlpg(KMAP_TEMP_VA);
     g_kmap_temp_mapped_phys = phys;
@@ -296,7 +293,8 @@ __attribute__((unused)) static void kunmap_temp(void)
     g_kmap_temp_mapped_phys = 0;
 }
 
-// Bitmap helpers
+// ====== Bitmap/refcount helpers ======
+
 static inline void set_phys_page(int i){ phys_page_bitmap[i / 32] |= (1u << (i % 32)); }
 static inline void clear_phys_page(int i){ phys_page_bitmap[i / 32] &= ~(1u << (i % 32)); }
 static inline int  test_phys_page(int i){ return phys_page_bitmap[i / 32] & (1u << (i % 32)); }
@@ -305,7 +303,6 @@ static inline int test_block(int i){ return block_bitmap[i / 32] & (1u << (i % 3
 static inline void set_block (int i){ block_bitmap[i / 32] |= (1u << (i % 32)); }
 static inline void clear_block(int i){ block_bitmap[i / 32] &= ~(1u << (i % 32)); }
 
-// Refcount helpers
 static inline void phys_ref_inc_idx(int idx)
 {
     if (idx >= 0 && idx < (int)MAX_PHYS_PAGES)
@@ -337,7 +334,8 @@ static int find_free_block(void)
 
 int page_present(uint32_t lin){ return page_is_present(lin); }
 
-// Pretty print of page fault error bits
+// ====== PF-err dump ======
+
 void dump_err_bits(uint32_t err)
 {
     int P  = !!(err & (1u << 0));
@@ -357,12 +355,13 @@ void dump_err_bits(uint32_t err)
            U ? "user" : "supervisor");
 }
 
-// Probe PDE/PTE using scratch mapping
+// ====== PDE/PTE probe ======
+
 int paging_probe_pde_pte(uint32_t va, uint32_t *out_pde, uint32_t *out_pte)
 {
-    uint32_t di = va >> 22;            // Directory index
-    uint32_t ti = (va >> 12) & 0x3FFu; // Table index
-    uint32_t pde = page_directory[di]; // Page directory entry
+    uint32_t di = va >> 22;
+    uint32_t ti = (va >> 12) & 0x3FFu;
+    uint32_t pde = page_directory[di];
 
     if (out_pde) *out_pde = pde;
 
@@ -380,7 +379,7 @@ int paging_probe_pde_pte(uint32_t va, uint32_t *out_pde, uint32_t *out_pte)
         return 0;
     }
 
-    uint32_t pt_phys = pde & 0xFFFFF000u;     // Page table physical base
+    uint32_t pt_phys = pde & 0xFFFFF000u;
     uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
     uint32_t pte = pt[ti];
     if (out_pte) *out_pte = pte;
@@ -388,7 +387,6 @@ int paging_probe_pde_pte(uint32_t va, uint32_t *out_pde, uint32_t *out_pte)
     return 0;
 }
 
-// Check if a virtual address is present
 int page_is_present(uint32_t va)
 {
     uint32_t pde = 0, pte = 0;
@@ -400,7 +398,6 @@ int page_is_present(uint32_t va)
     return 1;
 }
 
-// Translate VA to page base PA and flags
 int paging_va_translate_full(uint32_t va,
                              uint32_t *out_page_pa,
                              int *out_user,
@@ -432,7 +429,8 @@ int paging_va_translate_full(uint32_t va,
     return 1;
 }
 
-// Dump user bytes safely
+// ====== User hexdump ======
+
 static void hexdump_user_bytes(uint32_t uaddr, size_t n)
 {
     printf("[user bytes @%08x] ", uaddr);
@@ -454,9 +452,9 @@ static void hexdump_user_bytes(uint32_t uaddr, size_t n)
         printf("(IRQ override) ");
     }
 
-    uint32_t cur = uaddr;                 // Current user VA
-    uint8_t *map = NULL;                  // Mapped kernel pointer
-    uint32_t mapped_page_va = 0xFFFFFFFF; // Currently mapped page VA base
+    uint32_t cur = uaddr;
+    uint8_t *map = NULL;
+    uint32_t mapped_page_va = 0xFFFFFFFF;
 
     for (size_t i = 0; i < n; i++, cur++)
     {
@@ -484,7 +482,8 @@ static void hexdump_user_bytes(uint32_t uaddr, size_t n)
     printf("\n");
 }
 
-// Allocate a page table with flags
+// ====== PT alloc ======
+
 static void alloc_page_table_with_flags(uint32_t dir_index, uint32_t *table, uint32_t flags)
 {
     for (int i = 0; i < PAGE_ENTRIES; i++) table[i] = 0;
@@ -497,13 +496,13 @@ static void alloc_page_table_with_flags(uint32_t dir_index, uint32_t *table, uin
     page_directory[dir_index] = ((uint32_t)table & 0xFFFFF000u) | pd_flags;
 }
 
-// Allocate a page table
 static void alloc_page_table(uint32_t dir_index, uint32_t *table)
 {
     alloc_page_table_with_flags(dir_index, table, 0);
 }
 
-// Identity map a range
+// ====== Identity map ======
+
 static void identity_map_range(uint32_t start, uint32_t size)
 {
     uint32_t end = start + size;
@@ -513,12 +512,13 @@ static void identity_map_range(uint32_t start, uint32_t size)
     }
 }
 
-// Init physical bitmap and refcounts
+// ====== Phys-bitmap init ======
+
 static void init_phys_bitmap(void)
 {
     for (int i = 0; i < (int)((MAX_PHYS_PAGES + 31) / 32); i++) phys_page_bitmap[i] = 0;
 
-    // Första 4MB (block 0) är reserverade (ID-map m.m.)
+    // Första 4MB reserveras
     for (int i = 0; i < (BLOCK_SIZE / PAGE_SIZE_4KB); i++)
     {
         set_phys_page(i);
@@ -526,7 +526,8 @@ static void init_phys_bitmap(void)
     }
 }
 
-// Initialize paging
+// ====== init_paging ======
+
 void init_paging(uint32_t ram_mb)
 {
     max_blocks = ram_mb / 4;
@@ -544,7 +545,9 @@ void init_paging(uint32_t ram_mb)
 
     uint32_t heap_end = (uint32_t)(uintptr_t)&__heap_end;
     uint32_t id_end = ALIGN_UP(heap_end, PAGE_SIZE_4KB);
-    uint32_t id_end_plus = id_end + PAGE_SIZE_4KB;
+
+    // +64 KB buffert
+    uint32_t id_end_plus = id_end + (16 * PAGE_SIZE_4KB);
 
     // ID-map kernel + early heap
     identity_map_range(0x00000000u, id_end_plus);
@@ -564,13 +567,18 @@ void init_paging(uint32_t ram_mb)
     kmap_va1 = kmap_base;
     kmap_va2 = kmap_base + PAGE_SIZE_4KB;
 
+    // Säkerställ egna PT för scratch-VAs och cache:a PT-pekare
+    paging_ensure_pagetable(kmap_va1, PAGE_PRESENT | PAGE_RW);
+    paging_ensure_pagetable(kmap_va2, PAGE_PRESENT | PAGE_RW);
+    g_kmap_pt1 = (uint32_t*)(page_directory[(kmap_va1 >> 22) & 0x3FF] & 0xFFFFF000u);
+    g_kmap_pt2 = (uint32_t*)(page_directory[(kmap_va2 >> 22) & 0x3FF] & 0xFFFFF000u);
+
     // Markera 4MB-block upptagna fram till id_end_plus
     int blocks_reserved = (int)((id_end_plus + BLOCK_SIZE - 1) / BLOCK_SIZE);
     if (blocks_reserved > (int)MAX_BLOCKS) blocks_reserved = (int)MAX_BLOCKS;
     for (int b = 0; b < blocks_reserved; b++) set_block(b);
 
-    // Zappa user-PDEs (bara användarområdet)
-    uint32_t keep_until = ALIGN_UP((uint32_t)(uintptr_t)&__heap_end + PAGE_SIZE_4KB, BLOCK_SIZE); /* behålls, ej använd som gräns */
+    // Zappa user-PDEs
     uint32_t udi_start = (USER_MIN >> 22);
     uint32_t udi_end   = ((USER_MAX - 1) >> 22);
     for (uint32_t di = udi_start; di <= udi_end; di++) page_directory[di] = 0;
@@ -581,21 +589,20 @@ void init_paging(uint32_t ram_mb)
     uint32_t cr0; asm volatile("mov %%cr0, %0" : "=r"(cr0));
     cr0 |= CR0_PG; asm volatile("mov %0, %%cr0" :: "r"(cr0));
 
-    // Spara kernel-CR3-phys (för API)
+    // Spara kernel-CR3-phys
     asm volatile("mov %%cr3, %0" : "=r"(s_kernel_cr3_phys));
 
-    // Spara basnivå för PT-poolen efter kernel-identity och init
+    // Spara basnivå för PT-poolen efter bootstrap
     pt_bootstrap_next = pt_next;
 }
 
+// ====== Map page range (4MB eller 4KB) ======
 
-// Map a range using 4MB or 4KB pages
 int map_page(uint32_t virt_addr, uint32_t size)
 {
-    // Välj 4MB när möjligt (4MB-aligned och minst 4MB)
+    // 4MB om larm och storlek
     if ((size >= BLOCK_SIZE) && ((virt_addr % BLOCK_SIZE) == 0))
     {
-        // Kernel- eller user-mappning?
         int user = is_user_addr_inline(virt_addr) ? 1 : 0;
         int blocks = (int)((size + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
@@ -603,13 +610,11 @@ int map_page(uint32_t virt_addr, uint32_t size)
         {
             uint32_t va_block = virt_addr + (uint32_t)i * BLOCK_SIZE;
 
-            // Hitta ett fritt 4MB-block (fys)
             int block = find_free_block();
             if (block < 0) return -2;
 
             uint32_t phys4m = (uint32_t)block * BLOCK_SIZE;
 
-            // PDE-flaggar
             uint32_t flags = PAGE_PRESENT | PAGE_RW | PAGE_PS;
             if (user) flags |= PAGE_USER;
 
@@ -623,7 +628,7 @@ int map_page(uint32_t virt_addr, uint32_t size)
         return 0;
     }
 
-    // Annars 4KB-sidor
+    // 4KB-sidor
     uint32_t pages = (size + PAGE_SIZE_4KB - 1) / PAGE_SIZE_4KB;
     for (uint32_t i = 0; i < pages; i++)
     {
@@ -638,14 +643,28 @@ int map_page(uint32_t virt_addr, uint32_t size)
     return 0;
 }
 
-// Map a single 4KB page with flags
+// ====== Map 4KB med flags (splittar 4MB-PDE om nödvändigt) ======
+
 int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
 {
-    uint32_t dir_index = (virt_addr >> 22) & 0x3FFu; // Directory index
-    uint32_t table_index = (virt_addr >> 12) & 0x3FFu; // Table index
+    uint32_t dir_index   = (virt_addr >> 22) & 0x3FFu;
+    uint32_t table_index = (virt_addr >> 12) & 0x3FFu;
     uint32_t *table = NULL;
 
-    if (!(page_directory[dir_index] & PAGE_PRESENT))
+    uint32_t pde = page_directory[dir_index];
+
+    // Splitta 4MB-PDE till PT om den är satt
+    if ((pde & PAGE_PRESENT) && (pde & PAGE_PS))
+    {
+        if (split_large_pde_to_pt(page_directory, dir_index) != 0)
+        {
+            printf("[PAGING][ERR] failed to split large PDE at di=%u\n", dir_index);
+            return -1;
+        }
+        pde = page_directory[dir_index];
+    }
+
+    if (!(pde & PAGE_PRESENT))
     {
         if (pt_next >= (int)(sizeof(kernel_page_tables) / sizeof(kernel_page_tables[0])))
         {
@@ -658,7 +677,7 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
     }
     else
     {
-        table = (uint32_t*)(page_directory[dir_index] & 0xFFFFF000u);
+        table = (uint32_t*)(pde & 0xFFFFF000u);
 
         if (flags & PAGE_USER) page_directory[dir_index] |= PAGE_USER;
         if (flags & PAGE_PCD)  page_directory[dir_index] |= PAGE_PCD;
@@ -706,7 +725,6 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
     return 0;
 }
 
-// Map a single 4KB page
 int map_4kb_page(uint32_t virt_addr, uint32_t phys_addr)
 {
     uint32_t dir_index = virt_addr >> 22;
@@ -714,7 +732,14 @@ int map_4kb_page(uint32_t virt_addr, uint32_t phys_addr)
     uint32_t *table = NULL;
     uint32_t user = is_user_addr_inline(virt_addr) ? PAGE_USER : 0;
 
-    if (!(page_directory[dir_index] & PAGE_PRESENT))
+    uint32_t pde = page_directory[dir_index];
+    if ((pde & PAGE_PRESENT) && (pde & PAGE_PS))
+    {
+        if (split_large_pde_to_pt(page_directory, dir_index) != 0) return -1;
+        pde = page_directory[dir_index];
+    }
+
+    if (!(pde & PAGE_PRESENT))
     {
         if (pt_next >= (int)(sizeof(kernel_page_tables) / sizeof(kernel_page_tables[0]))) return -1;
         table = kernel_page_tables[pt_next++];
@@ -722,7 +747,7 @@ int map_4kb_page(uint32_t virt_addr, uint32_t phys_addr)
     }
     else
     {
-        table = (uint32_t*)(page_directory[dir_index] & 0xFFFFF000u);
+        table = (uint32_t*)(pde & 0xFFFFF000u);
         if (user) page_directory[dir_index] |= PAGE_USER;
     }
 
@@ -735,7 +760,6 @@ int map_4kb_page(uint32_t virt_addr, uint32_t phys_addr)
     return 0;
 }
 
-// Unmap a single 4KB page
 void unmap_4kb_page(uint32_t virt_addr)
 {
     uint32_t dir_index = virt_addr >> 22;
@@ -757,7 +781,6 @@ void unmap_4kb_page(uint32_t virt_addr)
     invlpg(virt_addr);
 }
 
-// Unmap one page (4MB or 4KB)
 void unmap_page(uint32_t virt_addr)
 {
     uint32_t dir_index = virt_addr >> 22;
@@ -768,7 +791,6 @@ void unmap_page(uint32_t virt_addr)
 
     if (entry & PAGE_PS)
     {
-        // 4MB page
         uint32_t phys_addr = entry & 0xFFC00000u;
         int block = (int)(phys_addr / BLOCK_SIZE);
         clear_block(block);
@@ -798,11 +820,11 @@ void unmap_page(uint32_t virt_addr)
     flush_tlb();
 }
 
-// Map och unmap 4MB helpers
 int map_huge_4mb(uint32_t virt_addr){ return map_page(virt_addr, BLOCK_SIZE); }
 int unmap_huge_4mb(uint32_t virt_addr){ unmap_page(virt_addr); flush_tlb(); return 0; }
 
-// Reserve N MB starting at a 4MB-aligned VA
+// ====== Region reserve/free ======
+
 int alloc_region(uint32_t virt_start, uint32_t size_mb)
 {
     if ((virt_start % BLOCK_SIZE) != 0) return -1;
@@ -823,7 +845,6 @@ int alloc_region(uint32_t virt_start, uint32_t size_mb)
     return 0;
 }
 
-// Free a previously reserved region
 int free_region(uint32_t virt_start, uint32_t size_mb)
 {
     if ((virt_start % BLOCK_SIZE) != 0) return -1;
@@ -833,7 +854,8 @@ int free_region(uint32_t virt_start, uint32_t size_mb)
     return 0;
 }
 
-// Allocate one physical 4KB page
+// ====== Phys page alloc/free ======
+
 uint32_t alloc_phys_page(void)
 {
     for (int i = 0; i < MAX_PHYS_PAGES; i++)
@@ -848,14 +870,14 @@ uint32_t alloc_phys_page(void)
     return 0;
 }
 
-// Free a physical 4KB page (by PA)
 void free_phys_page(uint32_t addr)
 {
     int index = (int)(addr / PAGE_SIZE_4KB);
     if (index < MAX_PHYS_PAGES) phys_ref_dec_idx(index);
 }
 
-// Set PAGE_USER on a range
+// ====== Flag helpers ======
+
 void paging_set_user(uint32_t addr, uint32_t size)
 {
     uint32_t start = addr & ~((uint32_t)PAGE_SIZE_4KB - 1);
@@ -882,7 +904,6 @@ void paging_set_user(uint32_t addr, uint32_t size)
     flush_tlb();
 }
 
-// Update flags on a range
 void paging_update_flags(uint32_t addr, uint32_t size, uint32_t set_mask, uint32_t clear_mask)
 {
     uint32_t start = addr & ~((uint32_t)PAGE_SIZE_4KB - 1);
@@ -912,7 +933,8 @@ void paging_update_flags(uint32_t addr, uint32_t size, uint32_t set_mask, uint32
     flush_tlb();
 }
 
-// Core user allocator
+// ====== User allocator ======
+
 static void* umalloc_core(size_t size, size_t alignment, uint32_t flags, int with_guards)
 {
     if (!size) return (void*)0;
@@ -964,7 +986,6 @@ static void* umalloc_core(size_t size, size_t alignment, uint32_t flags, int wit
     return (void*)vstart;
 }
 
-// User alloc helpers
 void* umalloc(size_t size){ return umalloc_core(size, PAGE_SIZE_4KB, UMEM_PAGEALIGNED, 0); }
 
 void ufree(void *ptr, size_t size)
@@ -1021,7 +1042,8 @@ void ufree_secure(void* ptr, size_t size)
     ufree(ptr, size);
 }
 
-// Reservation list add
+// ====== Reservation-API ======
+
 static int reservations_add(uint32_t start, uint32_t end)
 {
     if (uresv_count >= MAX_USER_RESERVATIONS) return -1;
@@ -1029,7 +1051,6 @@ static int reservations_add(uint32_t start, uint32_t end)
     return 0;
 }
 
-// Check if a VA is inside any reservation
 static int reservations_contains(uint32_t va)
 {
     for (int i = 0; i < uresv_count; i++)
@@ -1039,7 +1060,6 @@ static int reservations_contains(uint32_t va)
     return 0;
 }
 
-// === Public reservation helpers ===
 int paging_reserve_range(uintptr_t start, size_t size)
 {
     if (!size) return 0;
@@ -1051,14 +1071,16 @@ int paging_reserve_range(uintptr_t start, size_t size)
 int paging_ensure_pagetable(uint32_t va, uint32_t flags)
 {
     uint32_t di = va >> 22;
-    if (page_directory[di] & PAGE_PRESENT)
+    uint32_t pde = page_directory[di];
+
+    if (pde & PAGE_PRESENT)
     {
-        // Uppgradera PDE-flaggor vid behov (t.ex. USER)
         if (flags & PAGE_USER) page_directory[di] |= PAGE_USER;
         if (flags & PAGE_PCD)  page_directory[di] |= PAGE_PCD;
         if (flags & PAGE_PWT)  page_directory[di] |= PAGE_PWT;
         return 0;
     }
+
     if (pt_next >= (int)(sizeof(kernel_page_tables) / sizeof(kernel_page_tables[0]))) return -1;
     uint32_t *table = kernel_page_tables[pt_next++];
     alloc_page_table_with_flags(di, table, flags);
@@ -1086,7 +1108,6 @@ int paging_map_user_range(uintptr_t vaddr, size_t bytes, int writable)
         }
         else
         {
-            // Se till att RW-flagga matchar
             if (writable) paging_update_flags(va, PAGE_SIZE_4KB, PAGE_RW, 0);
         }
     }
@@ -1104,13 +1125,10 @@ int paging_unmap_user_range(uintptr_t vaddr, size_t bytes)
     return 0;
 }
 
-// Handle demand-zero fault inside reserved region
+// ====== Demand-zero / COW ======
+
 int paging_handle_demand_fault(uintptr_t fault_va)
 {
-    if(!page_is_present(fault_va))
-    {
-        paging_dump_mapping(fault_va);
-    }
     uint32_t fva = (uint32_t)fault_va;
     if (!is_user_addr_inline(fva)) return -1;
 
@@ -1128,7 +1146,6 @@ int paging_handle_demand_fault(uintptr_t fault_va)
     return 0;
 }
 
-// Mark a range as copy-on-write
 int paging_mark_cow_range(uint32_t va, size_t size)
 {
     uint32_t start = ALIGN_DOWN(va, PAGE_SIZE_4KB);
@@ -1144,7 +1161,6 @@ int paging_mark_cow_range(uint32_t va, size_t size)
     return 0;
 }
 
-// Handle copy-on-write fault
 int paging_handle_cow_fault(uintptr_t fault_va)
 {
     uint32_t fva = (uint32_t)fault_va;
@@ -1159,7 +1175,6 @@ int paging_handle_cow_fault(uintptr_t fault_va)
     int old_idx = phys_idx_from_pa(old_pa);
     if (old_idx < 0) return -4;
 
-    // Unik?
     if (phys_page_refcnt[old_idx] <= 1)
     {
         uint32_t *pt = (uint32_t*)(pde & 0xFFFFF000u);
@@ -1168,7 +1183,6 @@ int paging_handle_cow_fault(uintptr_t fault_va)
         return 0;
     }
 
-    // Kopiera
     uint32_t new_pa = alloc_phys_page();
     if (!new_pa) return -5;
 
@@ -1193,31 +1207,27 @@ int paging_handle_cow_fault(uintptr_t fault_va)
     return 0;
 }
 
-// Allmän PF-handler (anropad från IDT)
 int paging_handle_page_fault(uint32_t fault_va, uint32_t err)
 {
-    // err-bitar: P=bit0, W=bit1, U=bit2
     int present = !!(err & 1);
     int write   = !!(err & 2);
     int user    = !!(err & 4);
 
-    // Försök COW först (user write på non-RW sida)
     if (present && write && user)
     {
         if (paging_handle_cow_fault(fault_va) == 0) return 1;
     }
 
-    // Demand-zero om inom reserverad user-region
     if (!present && user)
     {
         if (paging_handle_demand_fault(fault_va) == 0) return 1;
     }
 
-    // Inget vi kan fixa här
     return 0;
 }
 
-// Map an alias of an existing mapping
+// ====== Alias-map ======
+
 int paging_map_alias(uint32_t dst_va, uint32_t src_va, size_t size, uint32_t flags)
 {
     uint32_t start_s = ALIGN_DOWN(src_va, PAGE_SIZE_4KB);
@@ -1244,7 +1254,8 @@ int paging_map_alias(uint32_t dst_va, uint32_t src_va, size_t size, uint32_t fla
     return 0;
 }
 
-// Print one PTE line
+// ====== Dump helpers ======
+
 static void print_pte_line(uint32_t va, uint32_t pde, uint32_t pte)
 {
     uint32_t pa = pte & 0xFFFFF000u;
@@ -1256,7 +1267,6 @@ static void print_pte_line(uint32_t va, uint32_t pde, uint32_t pte)
            va, pde, pte, pa, P, RW, US);
 }
 
-// Dump mappings for a range
 void paging_dump_range(uint32_t addr, uint32_t size)
 {
     uint32_t start = addr & ~((uint32_t)PAGE_SIZE_4KB - 1);
@@ -1282,7 +1292,6 @@ void paging_dump_range(uint32_t addr, uint32_t size)
     }
 }
 
-// Check that a user range is user-mapped
 int paging_check_user_range(uint32_t addr, uint32_t size)
 {
     uint32_t start = addr & ~((uint32_t)PAGE_SIZE_4KB - 1);
@@ -1344,7 +1353,6 @@ int paging_check_user_range(uint32_t addr, uint32_t size)
     return 0;
 }
 
-// Check that a user range is user + writable
 int paging_check_user_range_writable(uint32_t addr, uint32_t size)
 {
     uint32_t start = addr & ~((uint32_t)PAGE_SIZE_4KB - 1);
@@ -1357,26 +1365,16 @@ int paging_check_user_range_writable(uint32_t addr, uint32_t size)
         if (paging_probe_pde_pte(va, &pde, &pte) != 0)
         {
             uint32_t page_base = ALIGN_DOWN(va, PAGE_SIZE_4KB);
-
-            if (reservations_contains(page_base))
-            {
-                continue;
-            }
-
+            if (reservations_contains(page_base)) continue;
             return -1;
         }
 
         if(!(pde & PAGE_PRESENT))
         {
             uint32_t page_base = ALIGN_DOWN(va, PAGE_SIZE_4KB);
-
-            if (reservations_contains(page_base))
-            {
-                continue;
-            }
-
+            if (reservations_contains(page_base)) continue;
             return -1;
-        } 
+        }
 
         if (pde & PAGE_PS)
         {
@@ -1388,22 +1386,16 @@ int paging_check_user_range_writable(uint32_t addr, uint32_t size)
         if(!(pte & PAGE_PRESENT))
         {
             uint32_t page_base = ALIGN_DOWN(va, PAGE_SIZE_4KB);
-
-            if (reservations_contains(page_base))
-            {
-                continue;
-            }
-
+            if (reservations_contains(page_base)) continue;
             return -1;
         }
 
-        if (!(pte & PAGE_USER))    return -1;
-        if (!(pte & PAGE_RW))      return -1;
+        if (!(pte & PAGE_USER)) return -1;
+        if (!(pte & PAGE_RW))   return -1;
     }
     return 0;
 }
 
-// Hex dump of kernel or user memory
 void hexdump_bytes(const void *addr, size_t n)
 {
     uint32_t start = (uint32_t)(uintptr_t)addr;
@@ -1456,12 +1448,11 @@ void hexdump_bytes(const void *addr, size_t n)
     printf("\n");
 }
 
-// Dump PDE/PTE for a linear address
 void dump_pde_pte(uint32_t lin)
 {
-    uint32_t di = lin >> 22;             // Directory index
-    uint32_t ti = (lin >> 12) & 0x3FFu;  // Table index
-    uint32_t off = lin & 0xFFFu;         // Page offset
+    uint32_t di = lin >> 22;
+    uint32_t ti = (lin >> 12) & 0x3FFu;
+    uint32_t off = lin & 0xFFFu;
 
     uint32_t pde = page_directory[di];
 
@@ -1494,25 +1485,13 @@ void dump_pde_pte(uint32_t lin)
     }
 }
 
-// Alias som matchar headern
-void paging_dump_mapping(uint32_t va)
-{
-    dump_pde_pte(va);
-}
+void paging_dump_mapping(uint32_t va) { dump_pde_pte(va); }
+void paging_flush_tlb(void) { flush_tlb(); }
 
-// Flush TLB wrapper
-void paging_flush_tlb(void)
-{
-    flush_tlb();
-}
+// ====== CR3 helpers ======
 
-// === CR3 helpers ===
-uintptr_t paging_kernel_cr3_phys(void)
-{
-    return (uintptr_t)s_kernel_cr3_phys;
-}
+uintptr_t paging_kernel_cr3_phys(void) { return (uintptr_t)s_kernel_cr3_phys; }
 
-// Create a new address space (CR3)
 uint32_t paging_new_address_space(void)
 {
     uint32_t pd_phys = alloc_phys_page();
@@ -1522,16 +1501,13 @@ uint32_t paging_new_address_space(void)
         return 0;
     }
 
-    /* Mappa in nya PD temporärt och seed-a från nuvarande PD */
     uint32_t *new_pd = (uint32_t*)kmap_phys(pd_phys, 0);
     for (int i = 0; i < 1024; i++)
         new_pd[i] = page_directory[i];
 
-    /* Rekursiv PD-mappning: hitta PDE/PT för page_directorys VA */
     uint32_t pd_va = (uint32_t)(uintptr_t)page_directory;
     uint32_t pd_di = pd_va >> 22;
 
-    /* Zappa ENDAST användarrummet, och aldrig under kernel+heap-änden */
     uint32_t keep_until = ALIGN_UP((uint32_t)(uintptr_t)&__heap_end + PAGE_SIZE_4KB, BLOCK_SIZE);
     uint32_t udi_start  = (keep_until >> 22);
     if (udi_start < (USER_MIN >> 22))
@@ -1540,7 +1516,6 @@ uint32_t paging_new_address_space(void)
     for (uint32_t di = udi_start; di <= udi_end; di++)
         new_pd[di] = 0;
 
-    /* Säkerställ att PD-VA pekar via en 4KB-PT, inte 4MB-PS */
     uint32_t di = pd_di;
     uint32_t ti = (pd_va >> 12) & 0x3FF;
 
@@ -1553,7 +1528,6 @@ uint32_t paging_new_address_space(void)
         return 0;
     }
 
-    /* Sätt PT-entryn som pekar på PD-sidan (rekursiv mappning) */
     uint32_t pt_phys = pde & 0xFFFFF000u;
     uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
     pt[ti] = (pd_phys & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW;
@@ -1563,14 +1537,12 @@ uint32_t paging_new_address_space(void)
     return pd_phys;
 }
 
-// Switch to another CR3
 void paging_switch_address_space(uint32_t cr3_phys)
 {
     if (!cr3_phys) return;
     asm volatile("mov %0, %%cr3" :: "r"(cr3_phys) : "memory");
 }
 
-// Destroy a CR3 (must not be current)
 void paging_destroy_address_space(uint32_t cr3_phys)
 {
     if (!cr3_phys) return;
@@ -1596,14 +1568,10 @@ void paging_free_all_user(void)
     for (uint32_t di = udi_start; di <= udi_end; di++)
     {
         uint32_t pde = page_directory[di];
-        if (!(pde & PAGE_PRESENT))
-        {
-            continue;
-        }
+        if (!(pde & PAGE_PRESENT)) continue;
 
         if (pde & PAGE_PS)
         {
-            // Release 4MB page
             uint32_t phys_addr = pde & 0xFFC00000u;
             int block = (int)(phys_addr / BLOCK_SIZE);
             clear_block(block);
@@ -1611,17 +1579,13 @@ void paging_free_all_user(void)
             continue;
         }
 
-        // Normal 4KB page table
         uint32_t pt_phys = pde & 0xFFFFF000u;
         uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
 
         for (int ti = 0; ti < 1024; ti++)
         {
             uint32_t pte = pt[ti];
-            if (!(pte & PAGE_PRESENT))
-            {
-                continue;
-            }
+            if (!(pte & PAGE_PRESENT)) continue;
 
             uint32_t pa = pte & 0xFFFFF000u;
             int idx = phys_idx_from_pa(pa);
@@ -1632,17 +1596,14 @@ void paging_free_all_user(void)
         kunmap_phys(1);
         page_directory[di] = 0;
 
-        // Free the page table itself if it was dynamically allocated
         if (!(pt_phys >= kpt_start && pt_phys < kpt_end))
         {
             free_phys_page(pt_phys);
         }
     }
 
-    // Full TLB shootdown
     asm volatile("mov %%cr3, %%eax; mov %%eax, %%cr3" ::: "eax", "memory");
 
-    // Reset user heap and reservations
     paging_user_heap_reset();
 }
 
@@ -1654,12 +1615,10 @@ void paging_user_heap_reset(void)
 
 void paging_free_all_user_in(uint32_t cr3_phys)
 {
-    // Temporarily switch
     uint32_t old;
     asm volatile("mov %%cr3, %0" : "=r"(old));
     paging_switch_address_space(cr3_phys);
 
-    // Free all VA in [USER_MIN, USER_MAX)
     for (uint32_t va = USER_MIN; va < USER_MAX; va += PAGE_SIZE_4KB)
     {
         if (page_is_present(va))
@@ -1670,11 +1629,10 @@ void paging_free_all_user_in(uint32_t cr3_phys)
 
     flush_tlb();
 
-    // Återställ PT-poolen efter att ha rensat användarrymden i den här CR3
-    pt_next = pt_bootstrap_next;
-
-    // Back to old space
     paging_switch_address_space(old);
 }
 
-
+void paging_pt_pool_commit(void)
+{
+    pt_bootstrap_next = pt_next;
+}

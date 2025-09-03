@@ -1552,7 +1552,7 @@ int filesystem_read(int fd, void* buffer, uint32_t count)
 
     filesystem_set_offset_for_fd(fd, off + (uint32_t)r);
 // i filesystem_read() (diff.c)
-printf("[FS] read fd=%d off=%u cnt=%u -> r=%d\n", fd, off, count, r);
+//printf("[FS] read fd=%d off=%u cnt=%u -> r=%d\n", fd, off, count, r);
 
     return r;
 }

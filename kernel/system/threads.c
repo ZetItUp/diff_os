@@ -127,7 +127,9 @@ void threads_reap_one(thread_t *t)
 
     struct process *p = t->owner_process;
 
+#ifdef DIFF_DEBUG
     printf("[THREAD] reaping tid=%d pid=%d\n", t->thread_id, p ? p->pid : -1);
+#endif
 
     // Free kernel stack
     if (t->kernel_stack_base)

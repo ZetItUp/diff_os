@@ -376,7 +376,9 @@ int system_wait_pid(int pid, int *u_status)
 
     if (child->live_threads != 0)
     {
+#ifdef DIFF_DEBUG
         printf("[WAITPID][WARN] child live_threads=%d after reap; forcing zero\n", child->live_threads);
+#endif
         child->live_threads = 0;
     }
 
@@ -398,14 +400,18 @@ int system_wait_pid(int pid, int *u_status)
 
         if (cur_cr3 != self->cr3)
         {
+#ifdef DIFF_DEBUG
             printf("[WAITPID][WARN] CR3 mismatch (%08x != %08x). Fixing.\n", cur_cr3, self->cr3);
+#endif
             paging_switch_address_space(self->cr3);
             process_set_current(self);
         }
 
         if (copy_to_user(u_status, &status, sizeof(int)) != 0)
         {
+#ifdef DIFF_DEBUG
             printf("[WAITPID][ERR] failed to copy status to user %p\n", u_status);
+#endif
 
             return -1;
         }

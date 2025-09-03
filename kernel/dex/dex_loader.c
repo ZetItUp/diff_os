@@ -814,9 +814,10 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     uint8_t *stub;
     process_t *p;
     int pid;
-
+#ifdef DIFF_DEBUG
     printf("dex_spawn_process heap_dump:\n");
     heap_dump();
+#endif
 
     if (!ft || !path || !path[0])
     {
@@ -844,8 +845,10 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
         return -4;
     }
 
+#ifdef DIFF_DEBUG
     printf("Trying to read_file(%p, %s, buffer)\n", ft, path);
     printf("Buffer attempted to allocate: %d bytes\n", fe->file_size_bytes);
+#endif
 
     // Read into kernel buffer directly (no PAGE_USER hack)
     if (read_file(ft, path, buffer) < 0)

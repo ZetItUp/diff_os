@@ -182,8 +182,10 @@ void init_heap(void* start, void* end)
     heap_base->prev = NULL;
     heap_base->next = NULL;
 
+#ifdef DIFF_DEBUG
     printf("[HEAP] init %p-%p (%zu bytes usable)\n",
            heap_base, heap_limit, (size_t)heap_base->size);
+#endif
 }
 
 void* kmalloc(size_t size)

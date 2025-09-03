@@ -134,4 +134,4 @@ void dump_pde_pte(uint32_t lin);
 int  page_present(uint32_t lin);
 void dump_err_bits(uint32_t err);
 
-
+void paging_pt_pool_commit(void);

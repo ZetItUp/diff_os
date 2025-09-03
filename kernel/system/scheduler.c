@@ -121,7 +121,8 @@ static thread_t *run_queue_pick_next(void)
         t->next = NULL;
     }
 
-    SDBG("[SCH] pick_next -> %s\n", t ? "thread" : "idle/null");
+    if (t)  SDBG("[SCH] pick_next -> thread\n");
+    else    SDBG("[SCH] pick_next -> idle/null\n");
 
     return t;
 }
@@ -325,11 +326,11 @@ void scheduler_init(void)
     // Initialize TSS with idle thread's kernel stack
     tss_init(thread_kstack_top(g_idle));
 
+    irq_restore(f);
+
     SDBG("[SCH] init: idle tid=%d pid=%d\n",
          g_idle ? g_idle->thread_id : -1,
          (g_idle && g_idle->owner_process) ? g_idle->owner_process->pid : -1);
-
-    irq_restore(f);
 }
 
 // Start scheduling, switch from bootstrap thread to first runnable thread
