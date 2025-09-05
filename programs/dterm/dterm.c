@@ -336,59 +336,49 @@ static int run_builtin(int argc, char **argv)
 
 static int run_external(int argc, char **argv)
 {
-    if (argc == 0)
-    {
+    if (argc == 0) {
         return 0;
     }
 
+    // argv[0] = kommandonamn; slå upp .dex-sökväg i kommandoregistret
     const char *path = cmdreg_lookup(argv[0]);
-    
-    if (!path) 
-    {
+    if (!path) {
         printf("Unknown command: %s\n", argv[0]);
-    
         return -1;
     }
 
-    int new_argc = argc + 1;
-    char *new_args[new_argc + 1]; // Make sure we have enough buffer size
+    // Bygg user-argv UTAN kommandonamnet.
+    // tokenize() i din kod begränsar till 16 tokens, alltså max 15 "riktiga" argument.
+    int user_argc = argc - 1;
 
-    new_args[0] = argv[0];
-    new_args[1] = g_cwd;
-
-    for(int i = 1; i < argc; i++)
-    {
-        new_args[i + 1] = argv[i];
+    int pid;
+    if (user_argc <= 0) {
+        // Inga argument -> exakt det här vill de flesta program ha.
+        pid = process_spawn(path, 0, NULL);
+    } else {
+        char *user_argv[16]; // räcker pga tokenize-begränsningen ovan
+        for (int i = 0; i < user_argc; i++) {
+            user_argv[i] = argv[i + 1]; // skifta bort kommandonamnet
+        }
+        pid = process_spawn(path, user_argc, user_argv);
     }
 
-    new_args[new_argc] = NULL;
-
-    int pid = process_spawn(path, new_argc, new_args);
-
-    if(pid < 0)
-    {
+    if (pid < 0) {
         printf("[SYSTEM] Could not start %s\n", path);
-
         return -1;
     }
 
     int status = 0;
-    int wait = process_wait(pid, &status);
-
-    if(wait < 0)
-    {
+    int w = process_wait(pid, &status);
+    if (w < 0) {
         printf("[SYSTEM] Failed to wait for process %d\n", pid);
-
         return -1;
     }
 
     g_last_status = status;
-
-    if(status != 0)
-    {
+    if (status != 0) {
         printf("%s exited with %d\n", argv[0], status);
     }
-
     return status;
 }
 

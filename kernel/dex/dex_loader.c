@@ -194,7 +194,7 @@ static uint8_t *build_user_exit_stub(uint32_t entry_va)
 // ==========================
 // Build initial user stack
 // Layout on entry ESP: [argc][argv][envp]
-// No dummy return address is pushed here.
+// Inga fabricerade argument: om anroparen ger 0/NULL -> argc=0, argv=NULL.
 // ==========================
 static uint32_t build_user_stack(
     const char *prog_path,
@@ -202,6 +202,8 @@ static uint32_t build_user_stack(
     char *const argv_in[]
 )
 {
+    (void)prog_path; // inte använd längre för att "hitta på" argv[0]
+
     const uint32_t STK_SZ  = 64 * 1024;          // User stack size
     const uint32_t GUARD   = PAGE_SIZE;          // One guard page (non-present)
     const uint32_t TOTAL   = STK_SZ + GUARD;     // Total reservation
@@ -210,149 +212,124 @@ static uint32_t build_user_stack(
     if (!stk)
     {
         printf("[DEX] Stack alloc failed %u bytes\n", TOTAL);
-
         return 0;
     }
 
-    // Reserve and protect: guard page NP, rest P|U|RW during build
+    // Reservera och skydda: guard NP, resten P|U|RW under bygg
     paging_reserve_range((uintptr_t)stk, TOTAL);
     paging_update_flags((uint32_t)stk, GUARD, 0, PAGE_PRESENT | PAGE_USER | PAGE_RW);
 
-    // Synthesize argv
-    int argc = argc_in;
-    if (argc < 0)
+    // Använd exakt vad anroparen skickar
+    int argc = (argc_in > 0) ? argc_in : 0;
+    char *const *argv = (argc > 0 && argv_in) ? argv_in : NULL;
+
+    // Tillfällig kernel-buffert för argv-pekare (om några)
+    uint32_t *argv_ptrs = NULL;
+    if (argc > 0)
     {
-        argc = 0;
+        argv_ptrs = (uint32_t *)kmalloc(sizeof(uint32_t) * (size_t)argc);
+        if (!argv_ptrs)
+        {
+            printf("[DEX] argv_ptrs alloc failed\n");
+            ufree(stk, TOTAL);
+            return 0;
+        }
     }
 
-    // Prepare an argv list; if caller passed NULL, fabricate one with program name
-    const char *fallback[2] = { 0 };
-    if (!argv_in || argc == 0)
+    uint32_t base_map = (uint32_t)stk + GUARD;   // första mappade user-sidan
+    uint32_t sp       = base_map + STK_SZ;       // växer nedåt
+
+    // Kopiera argv-strängar top-down och spara deras user-VA (endast om argc>0)
+    if (argc > 0)
     {
-        fallback[0] = (prog_path && *prog_path) ? prog_path : "program";
-        argv_in = (char *const *)fallback;
-        argc = 1;
+        for (int i = argc - 1; i >= 0; i--)
+        {
+            const char *src = argv[i] ? argv[i] : "";
+            size_t slen = strlen(src) + 1;
+
+            sp -= (uint32_t)slen;
+            sp &= ~0xFu; // håll 16-byte alignment hyfsat
+
+            if (copy_to_user((void *)sp, src, slen) != 0)
+            {
+                printf("[DEX] copy argv[%d] failed\n", i);
+                kfree(argv_ptrs);
+                ufree(stk, TOTAL);
+                return 0;
+            }
+            argv_ptrs[i] = sp;
+        }
     }
 
-    // Allocate temporary kernel array for argv pointers (to final user VAs)
-    uint32_t *argv_ptrs = (uint32_t *)kmalloc(sizeof(uint32_t) * (size_t)argc);
-    if (!argv_ptrs)
+    // Bygg envp: en NULL-terminerad tom lista (envp pekar på en array med enbart NULL)
+    sp &= ~0xFu;
+    sp -= (uint32_t)sizeof(uint32_t);
+    uint32_t env_null = 0;
+    if (copy_to_user((void *)sp, &env_null, sizeof(uint32_t)) != 0)
     {
-        printf("[DEX] argv_ptrs alloc failed\n");
+        printf("[DEX] write envp NULL failed\n");
+        if (argv_ptrs) kfree(argv_ptrs);
         ufree(stk, TOTAL);
-
         return 0;
     }
+    uint32_t envp_array = sp;
 
-    uint32_t base_map = (uint32_t)stk + GUARD;   // First mapped user page
-    uint32_t sp       = base_map + STK_SZ;       // Grow down
-
-    // Copy argv strings top-down so we can take their user VAs
-    for (int i = argc - 1; i >= 0; i--)
+    // Bygg argv[]-array om det finns argument; annars blir argv=NULL
+    uint32_t argv_base_ptr = 0;
+    if (argc > 0)
     {
-        const char *src = argv_in[i] ? argv_in[i] : "";
-        size_t slen = strlen(src) + 1;
-
-        sp -= (uint32_t)slen;
-
-        // Keep stack 16-byte aligned regularly
         sp &= ~0xFu;
 
-        if (copy_to_user((void *)sp, src, slen) != 0)
-        {
-            printf("[DEX] copy argv[%d] failed\n", i);
-            kfree(argv_ptrs);
-            ufree(stk, TOTAL);
-
-            return 0;
-        }
-
-        argv_ptrs[i] = sp;
-    }
-
-    // Build minimal envp: NULL-terminated array of pointers (no variables)
-// We intentionally provide an empty environment: envp points to an array that contains only a NULL pointer.
-sp &= ~0xFu;
-
-sp -= (uint32_t)sizeof(uint32_t);
-uint32_t env_null = 0;
-if (copy_to_user((void *)sp, &env_null, sizeof(uint32_t)) != 0)
-{
-    printf("[DEX] write envp NULL failed\n");
-    kfree(argv_ptrs);
-    ufree(stk, TOTAL);
-
-    return 0;
-}
-
-uint32_t envp_array = sp;
-
-    // Build argv[] array (argc entries + terminating NULL)
-    sp &= ~0xFu;
-
-    // One extra NULL sentinel
-    sp -= (uint32_t)sizeof(uint32_t);
-    uint32_t zero = 0;
-    if (copy_to_user((void *)sp, &zero, sizeof(uint32_t)) != 0)
-    {
-        printf("[DEX] write argv NULL failed\n");
-        kfree(argv_ptrs);
-        ufree(stk, TOTAL);
-
-        return 0;
-    }
-
-    // Write argv pointers in ascending index order (argv[0]..argv[argc-1])
-    uint32_t argv_array = sp;
-    for (int i = 0; i < argc; i++)
-    {
+        // Skriv terminator (argv[argc] = NULL) först
         sp -= (uint32_t)sizeof(uint32_t);
-        if (copy_to_user((void *)sp, &argv_ptrs[i], sizeof(uint32_t)) != 0)
+        uint32_t zero = 0;
+        if (copy_to_user((void *)sp, &zero, sizeof(uint32_t)) != 0)
         {
-            printf("[DEX] write argv[%d] ptr failed\n", i);
+            printf("[DEX] write argv NULL failed\n");
             kfree(argv_ptrs);
             ufree(stk, TOTAL);
-
             return 0;
         }
+
+        // Skriv argv[0..argc-1] pekarna i stigande index (stacken växer nedåt)
+        uint32_t argv_array_top = sp; // här ligger terminatorn
+        for (int i = 0; i < argc; i++)
+        {
+            sp -= (uint32_t)sizeof(uint32_t);
+            if (copy_to_user((void *)sp, &argv_ptrs[i], sizeof(uint32_t)) != 0)
+            {
+                printf("[DEX] write argv[%d] ptr failed\n", i);
+                kfree(argv_ptrs);
+                ufree(stk, TOTAL);
+                return 0;
+            }
+        }
+
+        // Basen (argv) ska peka på första pekaren, dvs lägsta adressen i blocket vi just skrev
+        argv_base_ptr = argv_array_top - (uint32_t)(argc * sizeof(uint32_t));
     }
 
-    // At this point, [esp] should be argc, [esp+4] argv, [esp+8] envp
+    // Lägg slutligen på ramen som stubben läser: [argc][argv][envp]
     sp &= ~0xFu;
-
     uint32_t frame_words[3];
     frame_words[0] = (uint32_t)argc;
-    frame_words[1] = (uint32_t)sp;               // This will become argv after we push it below
-    frame_words[2] = envp_array;
-
-    // But we just placed argv elements downward; the current top is the last pointer we wrote.
-    // The start of the argv array is at the highest address of that block.
-    // We computed argv_array earlier to point at the terminating NULL; adjust:
-    // After pushing argc/argv/env below, the stub will load them from [esp], [esp+4], [esp+8].
-    // Fix frame_words[1] to the real argv base (start of the pointers array).
-    // The pointers we wrote were pushed in a loop, so argv base is (sp + sizeof(uint32_t) * (size_t)0)
-    // However we wrote pointers by decreasing sp; argv base should be the lowest address among them.
-    // Easiest: track argv base separately. We recorded 'argv_array' before pushing pointers; that location
-    // currently holds the terminating NULL. The first real argv pointer is just below it.
-    // So the real argv base is (argv_array - argc * 4).
-    frame_words[1] = argv_array - (uint32_t)(argc * sizeof(uint32_t));
+    frame_words[1] = (uint32_t)argv_base_ptr; // 0 om inga argument
+    frame_words[2] = (uint32_t)envp_array;
 
     sp -= sizeof(frame_words);
     if (copy_to_user((void *)sp, frame_words, sizeof(frame_words)) != 0)
     {
         printf("[DEX] argc/argv/env frame write failed\n");
-        kfree(argv_ptrs);
+        if (argv_ptrs) kfree(argv_ptrs);
         ufree(stk, TOTAL);
-
         return 0;
     }
 
-    // Lock final permissions: user stack should be P|U|RW (guard is already NP)
+    // Lås slutliga rättigheter: user stack P|U|RW (guard redan NP)
     paging_update_flags(base_map, STK_SZ, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
 
-    kfree(argv_ptrs);
+    if (argv_ptrs) kfree(argv_ptrs);
     DDBG("[DEX] stack built base=%08x top=%08x size=%u (+guard)\n", base_map, sp, STK_SZ);
-
     return sp;
 }
 
