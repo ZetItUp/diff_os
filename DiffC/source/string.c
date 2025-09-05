@@ -1,5 +1,7 @@
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
+#include <ctype.h>
 
 int strcmp(const char *s1, const char *s2)
 {

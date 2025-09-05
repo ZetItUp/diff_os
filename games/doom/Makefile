@@ -18,13 +18,14 @@ OBJDIR    := $(BUILDDIR)/obj
 DG_WIDTH  ?= 640
 DG_HEIGHT ?= 400
 
-CFLAGS := -include compat_stdio.h -ffreestanding -nostdlib -O2 -m32 -fno-pic -no-pie \
+CFLAGS := -ffreestanding -nostdlib -O2 -m32 -fno-pic -no-pie \
 		  -mno-mmx -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 \
           -mno-sse4.1 -mno-sse4.2 -mno-avx -mno-avx2 -mno-fma \
 		  -fno-asynchronous-unwind-tables -fno-unwind-tables \
           -Wall -Wextra \
           -I../../DiffC/include -I. \
-          -DDG_WIDTH=$(DG_WIDTH) -DDG_HEIGHT=$(DG_HEIGHT)
+          -DDG_WIDTH=$(DG_WIDTH) -DDG_HEIGHT=$(DG_HEIGHT) \
+		  -march=i386 -mtune=i386 -fno-builtin -fno-stack-protector
 
 LDFLAGS := -melf_i386 -nostdlib -no-pie
 
@@ -56,7 +57,7 @@ $(BUILDDIR)/dump.txt: $(SUPEROBJ)
 $(OUT): $(SUPEROBJ) $(BUILDDIR)/imports.stamp $(BUILDDIR)/dump.txt | $(OUT_DIR)
 	@echo "[DEX] $@"
 	$(PYTHON) $(ELF2DEX) $(BUILDDIR)/dump.txt $(SUPEROBJ) $(OUT) \
-		--default-exl diffc.exl --entry main --verbose 
+		--default-exl diffc.exl --verbose 
 	@echo "[OUT]  $(OUT)"
 
 $(OBJDIR):

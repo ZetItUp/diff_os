@@ -51,6 +51,26 @@ static const uint32_t s_vga_rgb[16] =
     0xFFFFFF
 };
 
+static inline int at_floor(void)
+{
+    if (!floor_enabled)
+    {
+        return 0;
+    }
+
+    if (cursor_y < floor_y)
+    {
+        return 1;
+    }
+
+    if (cursor_y > floor_y)
+    {
+        return 0;
+    }
+
+    return cursor_x <= floor_x;
+}
+
 static inline void vbe_apply_colors_from_attrib(unsigned char attrib)
 {
     uint8_t fg = (uint8_t)(attrib & 0x0F);
@@ -65,10 +85,15 @@ static inline void render_raw(unsigned char attrib, char c)
 {
     if (console_is_vbe_active())
     {
+        /* PATCH: golvskydd för backspace i VBE-väg */
         if (c == '\b')
         {
-            uint32_t x, y;
+            if (at_floor())
+            {
+                return;
+            }
 
+            uint32_t x, y;
             vbe_text_get_cursor(&x, &y);
 
             if (x > 0)
@@ -110,13 +135,22 @@ static inline void render_raw(unsigned char attrib, char c)
             return;
         }
 
+        /* PATCH: CR får inte hoppa över golvet i VBE-väg */
         if (c == '\r')
         {
             uint32_t x, y;
 
             vbe_text_get_cursor(&x, &y);
-            vbe_text_set_cursor(0, y);
-            cursor_x = 0;
+            if (!at_floor())
+            {
+                vbe_text_set_cursor(0, y);
+                cursor_x = 0;
+            }
+            else
+            {
+                /* behåll x om vi står vid eller före golvet */
+                cursor_x = (int)x;
+            }
             cursor_y = (int)y;
 
             return;
@@ -147,6 +181,8 @@ static inline void render_raw(unsigned char attrib, char c)
         return;
     }
 
+    /* TEXT-VGA-väg */
+
     if (c == '\n')
     {
         cursor_x = 0;
@@ -154,7 +190,12 @@ static inline void render_raw(unsigned char attrib, char c)
     }
     else if (c == '\r')
     {
-        cursor_x = 0;
+        /* PATCH: CR ska inte flytta förbi golvet */
+        if (!at_floor())
+        {
+            cursor_x = 0;
+        }
+        /* annars behåll positionen */
     }
     else if (c == '\t')
     {
@@ -175,7 +216,8 @@ static inline void render_raw(unsigned char attrib, char c)
     }
     else if (c == '\b')
     {
-        if (cursor_x > 0)
+        /* PATCH: backspace ska respektera golvet även i render_raw */
+        if (!at_floor() && cursor_x > 0)
         {
             cursor_x--;
 
@@ -241,26 +283,6 @@ static inline void log_append(unsigned char attrib, char c)
     {
         s_log_count++;
     }
-}
-
-static inline int at_floor(void)
-{
-    if (!floor_enabled)
-    {
-        return 0;
-    }
-
-    if (cursor_y < floor_y)
-    {
-        return 1;
-    }
-
-    if (cursor_y > floor_y)
-    {
-        return 0;
-    }
-
-    return cursor_x <= floor_x;
 }
 
 uint8_t vga_cell_height(void)
@@ -743,3 +765,4 @@ int console_get_graphics_mode(void)
 {
     return s_vbe_console_active;
 }
+

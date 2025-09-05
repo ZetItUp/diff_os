@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include <syscall.h>
+#include <stdio.h>
 #include <vbe/vbe.h>
 #include "doomkeys.h"
 #include "m_argv.h"
@@ -7,8 +7,8 @@
 
 void DG_Init(void)
 {
-    int w = DG_WIDTH;    // Width
-    int h = DG_HEIGHT;   // Height
+    int w = DG_WIDTH;
+    int h = DG_HEIGHT;
 
     size_t n = (size_t)DOOMGENERIC_RESX * DOOMGENERIC_RESY;
     DG_ScreenBuffer = (pixel_t*)malloc(n * sizeof(pixel_t));
@@ -21,16 +21,15 @@ void DG_Init(void)
 
 void DG_DrawFrame(void)
 {
-    int w = DG_WIDTH;     // Width
-    int h = DG_HEIGHT;    // Height
-    int pitch = w * 4;    // Bytes per row
+    int w = DG_WIDTH;
+    int h = DG_HEIGHT;
+    int pitch = w * 4;
 
     vbe_present(DG_ScreenBuffer, pitch, w, h);
 }
 
 void DG_SleepMs(uint32_t ms)
 {
-    // Use kernel sleep if available
     system_thread_sleep_ms((int)ms);
 }
 
@@ -77,5 +76,13 @@ int main(int argc, char **argv)
 {
     printf("Starting Doom...\n");
 
+    doomgeneric_Create(argc, argv);
+
+    for (int i = 0;; i++)
+    {
+        doomgeneric_Tick();
+    }
+
     return 0;
 }
+

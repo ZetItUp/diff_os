@@ -306,3 +306,36 @@ void free_kargv(char **kargv)
     kfree(kargv);
 }
 
+int zero_user(void *u_dst, size_t n)
+{
+    if (n == 0)
+    {
+        return 0;
+    }
+
+    // Valfri snabbvalidering. copy_to_user gör ändå sina kontroller.
+    if (!is_user_ptr_range(u_dst, n))
+    {
+        return -1;
+    }
+
+    // Liten nollbuffert i kernel. Storleken är medvetet modest så vi inte blåser upp BSS.
+    static const uint8_t Z[512] = {0};
+
+    uint8_t *p = (uint8_t *)u_dst;
+
+    while (n > 0)
+    {
+        size_t chunk = n > sizeof(Z) ? sizeof(Z) : n;
+
+        if (copy_to_user(p, Z, chunk) != 0)
+        {
+            return -1;
+        }
+
+        p += chunk;
+        n -= chunk;
+    }
+
+    return 0;
+}

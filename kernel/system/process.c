@@ -70,29 +70,46 @@ static void process_unlink_from_all(process_t *p)
 // Destroy process and free resources (kernel side only)
 void process_destroy(process_t *p)
 {
-    if (!p)
-    {
+    if (!p) return;
+
+    // Vi får inte förstöra en fortfarande RUNNING process här.
+    if (p->state == PROCESS_RUNNING) {
+#ifdef DIFF_DEBUG
+        printf("[PROC][ERR] process_destroy on RUNNING pid=%d\n", p->pid);
+#endif
         return;
     }
 
-    // Switch to kernel CR3 to be safe
-    paging_switch_address_space((uint32_t)paging_kernel_cr3_phys());
+    // Bevara CR3 (kan vara förälderns user-CR3).
+    uint32_t cr3_before = read_cr3_local();
 
-    // Remove from global list to avoid dangling pointers
+    // Ta bort ur listor så ingen hittar den efter detta.
     process_unlink_from_all(p);
 
-    if (p->cr3)
-    {
-        uint32_t old_cr3 = p->cr3;
+    // Om den har en egen adressrymd: först se till att vi inte står i den,
+    // riv sen PD:t. Kernels CR3 får aldrig förstöras.
+    if (p->cr3) {
+        uint32_t victim = p->cr3;
         p->cr3 = 0;
 
-        // Free PD page only; userspace was freed by waitpid
-        paging_destroy_address_space(old_cr3);
+        // Om vi står i samma CR3 som vi ska riva -> hoppa till kernel först.
+        uint32_t kcr3 = (uint32_t)paging_kernel_cr3_phys();
+        if (read_cr3_local() == victim) {
+            paging_switch_address_space(kcr3);
+        }
+
+        // Själva rivningen av PD/tabellerna:
+        paging_destroy_address_space(victim);
     }
 
+    // Fria PCB
     kfree(p);
-}
 
+    // Återställ CR3 exakt som det var.
+    if (read_cr3_local() != cr3_before) {
+        paging_switch_address_space(cr3_before);
+    }
+}
 // Link process into global list
 static void process_link(process_t *p)
 {
@@ -344,80 +361,73 @@ process_t *process_find_by_pid(int pid)
 // Wait for a child to become zombie and reap it
 int system_wait_pid(int pid, int *u_status)
 {
-    process_t *self = process_current();
+    process_t *self  = process_current();
     process_t *child = process_find_by_pid(pid);
 
-    if (!self || !child)
-    {
+    if (!self || !child) {
         return -1;
     }
-
-    if (child->parent != self)
-    {
-        return -1;
+    if (child->parent != self) {
+        return -1; // inte ditt barn
     }
 
-    // One waiter per child
-    if (child->waiter && child->waiter != current_thread())
-    {
+    // Endast en waiter per barn
+    if (child->waiter && child->waiter != current_thread()) {
         return -1;
     }
-
     child->waiter = current_thread();
 
-    // Block until the child is zombie and has no live threads
-    while (child->state != PROCESS_ZOMBIE || child->live_threads != 0)
-    {
+    // Vänta tills barnet är ZOMBIE och har inga levande trådar kvar
+    while (child->state != PROCESS_ZOMBIE || child->live_threads != 0) {
         scheduler_block_current_until_wakeup();
     }
 
-    // Reap all zombie threads owned by the child before freeing its PCB/CR3
+    // Reapa barnets trådar innan vi fortsätter
     scheduler_reap_owned_zombies(child);
-
-    if (child->live_threads != 0)
-    {
+    if (child->live_threads != 0) {
 #ifdef DIFF_DEBUG
         printf("[WAITPID][WARN] child live_threads=%d after reap; forcing zero\n", child->live_threads);
 #endif
         child->live_threads = 0;
     }
 
-    int status = child->exit_code;
+    const int status  = child->exit_code;
+    const int ret_pid = child->pid;
 
-    // Final reap of child userspace (temporary switch inside)
-    if (child->cr3)
-    {
-        paging_free_all_user_in(child->cr3);
-    }
+    // *** Viktigt: skriv status till förälderns userspace med FÖRÄLDERNS CR3 aktiv ***
+    if (u_status) {
+        int cpy_rc = 0;
+        uint32_t saved_cr3 = read_cr3_local();
 
-    // Destroy PCB + PD page (kernel CR3 switch happens inside)
-    process_destroy(child);
-
-    if (u_status)
-    {
-        // Defensive: ensure we stand in parent's CR3 before touching user memory
-        uint32_t cur_cr3 = read_cr3_local();
-
-        if (cur_cr3 != self->cr3)
-        {
-#ifdef DIFF_DEBUG
-            printf("[WAITPID][WARN] CR3 mismatch (%08x != %08x). Fixing.\n", cur_cr3, self->cr3);
-#endif
+        // Växla till förälderns adressrymd om nödvändigt
+        if (saved_cr3 != self->cr3) {
             paging_switch_address_space(self->cr3);
-            process_set_current(self);
         }
 
-        if (copy_to_user(u_status, &status, sizeof(int)) != 0)
-        {
+        cpy_rc = copy_to_user(u_status, &status, sizeof(status));
+
+        // Växla tillbaka till tidigare CR3 om vi bytte
+        if (saved_cr3 != self->cr3) {
+            paging_switch_address_space(saved_cr3);
+        }
+
+        if (cpy_rc != 0) {
 #ifdef DIFF_DEBUG
             printf("[WAITPID][ERR] failed to copy status to user %p\n", u_status);
 #endif
-
             return -1;
         }
     }
 
-    return pid;
+    // NU är det säkert att riva barnets userspace och PCB
+    if (child->cr3) {
+        paging_free_all_user_in(child->cr3);
+    }
+
+    exl_invalidate_for_cr3(child->cr3);
+    process_destroy(child);
+
+    return ret_pid;
 }
 
 // Spawn a user process from a path and argv from userspace

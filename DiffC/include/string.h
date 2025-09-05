@@ -27,3 +27,4 @@ char *strstr(const char *haystack, const char *needle);
 void *memset(void *dest, int value, size_t count);
 void *memcpy(void *dest, const void *src, unsigned int n);
 void *memmove(void *dst, const void *src, size_t n);
+int memcmp(const void *s1, const void *s2, size_t n);

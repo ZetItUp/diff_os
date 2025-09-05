@@ -423,3 +423,23 @@ void *memmove(void *dst, const void *src, size_t n)
     }
 }
 
+int memcmp(const void *s1, const void *s2, size_t n)
+{
+    const unsigned char *a = (const unsigned char *)s1;
+    const unsigned char *b = (const unsigned char *)s2;
+
+    while (n-- > 0)
+    {
+        unsigned char ca = *a++;
+        unsigned char cb = *b++;
+
+        if (ca != cb)
+        {
+            int diff = (int)ca - (int)cb;
+
+            return diff;
+        }
+    }
+
+    return 0;
+}

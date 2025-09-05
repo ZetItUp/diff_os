@@ -27,3 +27,10 @@ off_t lseek(int fd, off_t offset, int whence)
 {
     return (off_t)system_lseek(fd, (long)offset, whence);
 }
+
+void __stack_chk_fail(void)
+{
+    printf("[DiffC] Stack protector failed!\n");
+    exit(127);
+}
+

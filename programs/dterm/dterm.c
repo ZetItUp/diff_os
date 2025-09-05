@@ -361,9 +361,9 @@ static int run_external(int argc, char **argv)
         new_args[i + 1] = argv[i];
     }
 
-    int pid = process_spawn(path, new_argc, new_args);
-
     new_args[new_argc] = NULL;
+
+    int pid = process_spawn(path, new_argc, new_args);
 
     if(pid < 0)
     {
@@ -397,7 +397,11 @@ int main(void)
 {
     if (!cmdreg_init("/system/commands.map")) {
         puts("[CRITICAL ERROR] Unable to initialize command registry!");
+        /* Om kommandoregistret inte finns är det meningslöst att fortsätta. */
+        return 127;
     }
+
+    /* Avbufferad stdout så prompten verkligen syns direkt */
 
     printf("\n%s (Version %u.%u)\n\n", g_shell_name, g_ver_major, g_ver_minor);
 
@@ -407,16 +411,18 @@ int main(void)
     for (;;) 
     {
         printf("%s> ", g_cwd);
+        fflush(stdout); /* säkerställ prompten syns även om stdio inte är helt avbuffrat */
 
-        int x, y;
+        /*int x, y;
         console_getxy(&x, &y);
         console_floor_set(x, y);
-
+        */
         ssize_t n = getline(&line, &cap);
-        console_floor_clear();
+        // console_floor_clear();
 
         if (n <= 0)
         {
+            /* Inget att läsa just nu -> ge schemaläggaren CPU:n en stund */
             continue;
         }
 

@@ -29,3 +29,6 @@ int exec_dex(const char *path, int argc, char **argv);
 
 void *sbrk(intptr_t incr);
 int brk(void *addr);
+
+
+void __stack_chk_fail(void);

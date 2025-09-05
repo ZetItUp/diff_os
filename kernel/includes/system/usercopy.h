@@ -9,7 +9,7 @@ extern "C" {
 // Returns the length of a NUL-terminated string in userspace, up to max.
 // If no NUL is found within max, returns max.
 size_t strnlen_user(const char *uptr, size_t max);
-
+int zero_user(void *u_dst, size_t n);
 // Copy a raw memory block from userspace to kernel.
 int copy_from_user(void *dst, const void *usrc, size_t n);
 

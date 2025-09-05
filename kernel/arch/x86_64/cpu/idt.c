@@ -7,6 +7,7 @@
 #include "paging.h"
 #include "system/syscall.h"
 #include "system/process.h"
+#include "system/usercopy.h"
 #include <stdint.h>
 
 // ===== ISR stubs =====
@@ -56,7 +57,24 @@ static const char *exception_messages[] =
     "Reserved", "Reserved", "Reserved", "Reserved"
 };
 
-// ===== CRx helpers =====
+static inline uint32_t read_cr0(void)
+{
+    uint32_t x;
+
+    asm volatile("mov %%cr0,%0" : "=r"(x));
+
+    return x;
+}
+
+static inline uint32_t read_cr4(void)
+{
+    uint32_t x;
+
+    asm volatile("mov %%cr4,%0" : "=r"(x));
+
+    return x;
+}
+
 static inline uint32_t read_cr2(void){ uint32_t x; asm volatile("mov %%cr2,%0":"=r"(x)); return x; }
 static inline uint32_t read_cr3(void){ uint32_t x; asm volatile("mov %%cr3,%0":"=r"(x)); return x; }
 
@@ -123,6 +141,31 @@ static inline void panic_puthex32(uint32_t v) {
         panic_putc(hex[nib]);
     }
 }
+
+static int looks_like_call_minus4(uint32_t eip, uint32_t cs)
+{
+    uint8_t prev5[5];
+    const void *p = (const void *)(uintptr_t)(eip - 5U);
+    int ok = 0;
+
+    if ((cs & 3) == 3) {
+        ok = (copy_from_user(prev5, p, 5) == 0);
+    } else {
+        const uint8_t *k = (const uint8_t *)p;
+        for (int i = 0; i < 5; ++i) prev5[i] = k[i];
+        ok = 1;
+    }
+
+    if (!ok) return 0;
+
+    return (prev5[0] == 0xE8 && // CALL rel32
+            prev5[1] == 0xFC &&
+            prev5[2] == 0xFF &&
+            prev5[3] == 0xFF &&
+            prev5[4] == 0xFF);
+}
+
+
 static inline void panic_putu32(uint32_t v) {
     char buf[11]; int i = 0;
     if (v == 0) { panic_putc('0'); return; }
@@ -131,6 +174,162 @@ static inline void panic_putu32(uint32_t v) {
 }
 static inline void panic_putreg(const char *name, uint32_t v) {
     panic_puts(name); panic_putc('='); panic_puthex32(v); panic_putc(' ');
+}
+
+// === NYTT: PF-säker dump av bytes runt EIP (user via copy_from_user) ===
+static void panic_dump_bytes(uint32_t addr, int before, int after, uint16_t cs)
+{
+    uint8_t buf[64];
+    int total = before + after + 1;
+    if (total > (int)sizeof(buf)) total = sizeof(buf);
+
+    uint32_t start = addr - (uint32_t)before;
+    int ok = 0;
+
+    if ((cs & 3) == 3)
+    {
+        if (copy_from_user(buf, (const void *)(uintptr_t)start, total) == 0)
+        {
+            ok = 1;
+        }
+    }
+    else
+    {
+        const uint8_t *p = (const uint8_t *)(uintptr_t)start;
+
+        for (int i = 0; i < total; i++)
+        {
+            buf[i] = p[i];
+        }
+
+        ok = 1;
+    }
+
+    if (!ok)
+    {
+        panic_puts("BYTES @EIP: <unavailable>\n");
+        return;
+    }
+
+    panic_puts("BYTES @EIP-");
+    panic_putu32((uint32_t)before);
+    panic_puts("..+");
+    panic_putu32((uint32_t)after);
+    panic_puts(": ");
+
+    for (int i = 0; i < total; i++)
+    {
+        uint8_t b = buf[i];
+        static const char *hex = "0123456789ABCDEF";
+        panic_putc(hex[b >> 4]);
+        panic_putc(hex[b & 0xF]);
+        panic_putc(' ');
+    }
+
+    panic_puts("\n");
+}
+
+// Prints detailed info for Invalid Opcode (#UD) without using printf/heap.
+static void print_invalid_opcode(struct stack_frame *f)
+{
+    panic_serial_init();
+
+    panic_puts("==== Invalid Opcode ====\n");
+    panic_puts("EIP=");     panic_puthex32(f->eip);
+    panic_puts(" CS=");      panic_puthex32(f->cs);
+    panic_puts(" EFLAGS=");  panic_puthex32(f->eflags);
+    panic_puts(" CR3=");     panic_puthex32(read_cr3());
+    panic_puts("\n");
+
+    // General-purpose registers
+    panic_putreg("EAX", f->eax); panic_putreg("EBX", f->ebx);
+    panic_putreg("ECX", f->ecx); panic_putreg("EDX", f->edx); panic_puts("\n");
+    panic_putreg("ESI", f->esi); panic_putreg("EDI", f->edi);
+    panic_putreg("EBP", f->ebp); panic_putreg("ESP", f->esp); panic_puts("\n");
+
+    // Segment registers (helpful for ring/segment issues)
+    panic_puts("SS="); panic_puthex32(f->ss);
+    panic_puts(" DS="); panic_puthex32(f->ds);
+    panic_puts(" ES="); panic_puthex32(f->es);
+    panic_puts(" FS="); panic_puthex32(f->fs);
+    panic_puts(" GS="); panic_puthex32(f->gs);
+    panic_puts("\n");
+
+    // Control registers (SSE diagnostics)
+    uint32_t cr0 = read_cr0();
+    uint32_t cr4 = read_cr4();
+
+    panic_puts("CR0="); panic_puthex32(cr0);
+    panic_puts(" (MP="); panic_putu32((cr0 >> 1) & 1);
+    panic_puts(" EM=");  panic_putu32((cr0 >> 2) & 1);
+    panic_puts(")\n");
+
+    panic_puts("CR4="); panic_puthex32(cr4);
+    panic_puts(" (OSFXSR=");     panic_putu32((cr4 >> 9) & 1);
+    panic_puts(" OSXMMEXCPT=");  panic_putu32((cr4 >> 10) & 1);
+    panic_puts(")\n");
+
+    if (looks_like_call_minus4(f->eip, f->cs)) {
+        panic_puts("HINT: unresolved PC32 call (CALL -4) at ");
+        panic_puthex32(f->eip - 5);
+        panic_puts(" — missing relocation/import.\n");
+    }
+
+    // Dump up to 16 bytes at EIP (safe for user-mode via copy_from_user)
+    {
+        uint8_t buf[16];
+        int ok = 0;
+
+        if ((f->cs & 3) == 3)
+        {
+            if (copy_from_user(buf, (const void *)(uintptr_t)f->eip, sizeof(buf)) == 0)
+            {
+                ok = 1;
+            }
+        }
+        else
+        {
+            const uint8_t *p = (const uint8_t *)(uintptr_t)f->eip;
+
+            for (int i = 0; i < 16; i++)
+            {
+                buf[i] = p[i];
+            }
+
+            ok = 1;
+        }
+
+        if (ok)
+        {
+            panic_puts("BYTES @EIP: ");
+            for (int i = 0; i < 16; i++)
+            {
+                uint8_t b = buf[i];
+                static const char *hex = "0123456789ABCDEF";
+
+                panic_putc(hex[b >> 4]);
+                panic_putc(hex[b & 0xF]);
+                panic_putc(' ');
+            }
+            panic_puts("\n");
+        }
+        else
+        {
+            panic_puts("BYTES @EIP: <unavailable>\n");
+        }
+    }
+
+
+    // Quick hint line for common SSE cause of #UD
+    {
+        int em = (cr0 >> 2) & 1;
+        int osfxsr = (cr4 >> 9) & 1;
+
+        if (em || !osfxsr)
+        {
+            panic_puts("HINT: SSE likely disabled (CR0.EM=1 or CR4.OSFXSR=0).\n");
+        }
+    }
 }
 
 // =====================================================================
@@ -174,6 +373,9 @@ static void print_page_fault(struct stack_frame *f, uint32_t cr2, uint32_t cr3, 
     panic_putreg("ESI", f->esi); panic_putreg("EDI", f->edi);
     panic_putreg("EBP", f->ebp); panic_putreg("ESP", f->esp); panic_puts("\n");
 
+    // Dump bytes around EIP safely (won't fault)
+    panic_dump_bytes(f->eip, 8, 24, f->cs);
+
     --s_in_pf;
 }
 
@@ -181,7 +383,16 @@ void fault_handler(struct stack_frame *frame)
 {
     if (frame->int_no >= 32) return;
 
-    if (frame->int_no == 13) // #GP
+    if (frame->int_no == 6) // #UD
+    {
+        print_invalid_opcode(frame);
+
+        for (;;)
+        {
+            asm volatile("hlt");
+        }
+    }
+    else if (frame->int_no == 13) // #GP
     {
         uint32_t err = frame->err_code;
         uint32_t idx = (err >> 3) & 0x1FFF;
