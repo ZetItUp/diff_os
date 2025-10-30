@@ -1,17 +1,9 @@
 #pragma once
-#include "stdint.h"
-#include "stddef.h"
-#include "diff.h"
-#include "system/process.h"
+#include <stdint.h>
+#include <stddef.h>
 
 #define DEX_PARAMS_MAGIC    0x44504152  // "DPAR"
 #define DEX_MAGIC           0x58454400  // "DEX\0"
-#define DEX_VERSION_MAJOR   1
-#define DEX_VERSION_MINOR   0
-
-#define DEX_ABS32     0
-#define DEX_PC32      2
-#define DEX_RELATIVE  8
 
 typedef struct
 {
@@ -97,6 +89,10 @@ typedef struct
     uint32_t image_size;
 } dex_executable_t;
 
-int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **argv);
-int dex_run(const FileTable *ft, const char *path, int argc, char **argv);
-int dex_load(const void *file_data, size_t file_size, dex_executable_t *out);
+typedef struct dex_params_t dex_params_t;
+extern dex_params_t __dex_process_params;
+
+static inline const dex_params_t* dex_get_params(void) 
+{
+    return &__dex_process_params;
+}

@@ -1,3 +1,8 @@
+;
+; context_switch.asm
+; void context_switch(cpu_context_t *save, const cpu_context_t *load);
+; Saves callee-saved regs + synthetic EIP/ESP for the current thread, restores next, and jumps.
+
 [BITS 32]
 
 global context_switch
@@ -13,49 +18,49 @@ extern thread_exit
 
 section .text
 
-; void context_switch(cpu_context_t* old_ctx, cpu_context_t* new_ctx)
-; cdecl: [esp+4]=old, [esp+8]=new
+; -----------------------------------------------------------------------------
+; context_switch(save, load)
+; -----------------------------------------------------------------------------
 context_switch:
-    cli                         ; avbrott av under själva bytet
+    ; Arguments
+    mov     eax, [esp + 4]         ; save
+    mov     edx, [esp + 8]         ; load
 
-    mov     eax, [esp + 4]      ; eax = old
-    mov     edx, [esp + 8]      ; edx = new
-
-    ; Spara callee-saved i old
+    ; Save callee-saved registers
     mov     [eax + OFF_EDI], edi
     mov     [eax + OFF_ESI], esi
     mov     [eax + OFF_EBX], ebx
     mov     [eax + OFF_EBP], ebp
 
-    ; Spara "ret till C"-EIP för debug (retaddr på stacken)
-    mov     ecx, [esp]          ; return EIP
+    ; Save synthetic return EIP and post-ret ESP
+    mov     ecx, [esp]             ; return address to caller
     mov     [eax + OFF_EIP], ecx
+    lea     ecx, [esp + 4]         ; ESP as it will be after 'ret'
+    mov     [eax + OFF_ESP], ecx
 
-    ; Spara nuvarande ESP (pekar på retaddr)
-    mov     [eax + OFF_ESP], esp
-
-    ; Ladda callee-saved från new
+    ; Restore next thread's context
     mov     edi, [edx + OFF_EDI]
     mov     esi, [edx + OFF_ESI]
     mov     ebx, [edx + OFF_EBX]
     mov     ebp, [edx + OFF_EBP]
-
-    ; Byt till new:s stack och hoppa dit
     mov     esp, [edx + OFF_ESP]
-    sti                         ; *** viktigt: slå på avbrott innan vi ret:ar ***
-    ret
+    jmp     dword [edx + OFF_EIP]  ; continue as if we had returned
 
-; För nyskapade kernel-trådar: ret hoppar hit först
-; Stack vid start:
-;   [esp+0] = entry (void (*)(void*))
+; -----------------------------------------------------------------------------
+; thread_entry_thunk
+; Stack layout for a brand new kernel thread:
+;   [esp+0] = entry
 ;   [esp+4] = arg
+; -----------------------------------------------------------------------------
 thread_entry_thunk:
-    sti                         ; se till att IF=1 även för "första" hoppen
-    mov     eax, [esp]          ; eax = entry
-    mov     ecx, [esp + 4]      ; ecx = arg
+    ; Caller ensured interrupts state as appropriate before jumping here.
+    mov     eax, [esp + 0]         ; entry
+    mov     ecx, [esp + 4]         ; arg
     push    ecx
-    call    eax                 ; entry(arg)
-    call    thread_exit         ; om entry returnerar: terminera tråden
+    call    eax
+
+    ; If the entry returns, terminate the thread
+    call    thread_exit
     hlt
     jmp     $
 

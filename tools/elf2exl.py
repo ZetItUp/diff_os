@@ -3,4 +3,4 @@
 from elf2dex_common import main_tool
 import sys
 if __name__ == "__main__":
-    main_tool(sys.argv, mode="dex")
+    main_tool(sys.argv, mode="exl")

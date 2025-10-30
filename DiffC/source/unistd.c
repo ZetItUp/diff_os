@@ -1,5 +1,6 @@
 #include <unistd.h>
 #include <syscall.h>
+#include <stdlib.h>
 
 int exec_dex(const char *path, int argc, char **argv)
 {

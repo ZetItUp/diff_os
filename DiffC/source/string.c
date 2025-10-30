@@ -402,3 +402,17 @@ int strncasecmp(const char *s1, const char *s2, size_t n)
 
     return 0;
 }
+
+void *memchr(const void *s, int c, size_t n)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    unsigned char uc = (unsigned char)c;
+    for (size_t i = 0; i < n; ++i) {
+        if (p[i] == uc) {
+            // cast bort const enligt C-standarden på memchr:s returtyp
+            return (void *)(p + i);
+        }
+    }
+    return NULL;
+}
+

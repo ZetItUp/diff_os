@@ -1,1100 +1,817 @@
-#include <diffc_internal.h>
+// stdio.c – libc-liknande implementation för DiffC
+// Fokus: robust init av stdin/stdout/stderr, säkra guards för FILE*,
+// line/full buffering, setvbuf, fflush, fread/fwrite, fseek/ftell, ungetc,
+// samt printf-familjen ovanpå vfprintf.
+//
+// Bygger enbart på headers du gett: stdio.h, stdlib.h, string.h,
+// syscall.h, ctype.h, diffc_internal.h, stddef.h.
+
 #include <stdio.h>
-#include <stdarg.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 #include <syscall.h>
 #include <ctype.h>
+#include <diffc_internal.h>
+#include <stddef.h>
 #include <limits.h>
+#include <stdint.h>
 
-#ifndef va_copy
-#  ifdef __va_copy
-#    define va_copy(dest, src) __va_copy(dest, src)
-#  else
-#    define va_copy(dest, src) ((dest) = (src))
-#  endif
+// ==== Interna flaggor (bitmask i FILE->flags) ====
+#ifndef FILE_CAN_READ
+#define FILE_CAN_READ   0x01
+#endif
+#ifndef FILE_CAN_WRITE
+#define FILE_CAN_WRITE  0x02
+#endif
+#ifndef FILE_APPEND
+#define FILE_APPEND     0x04
+#endif
+#ifndef FILE_EOF
+#define FILE_EOF        0x08
+#endif
+#ifndef FILE_ERR
+#define FILE_ERR        0x10
 #endif
 
-/* ====== Memory Safety Helpers ====== */
-#define USERSPACE_MIN 0x40000000
-#define USERSPACE_MAX 0xC0000000
+// Buffering mode
+#ifndef _IOFBF
+#define _IOFBF  0  // full
+#endif
+#ifndef _IOLBF
+#define _IOLBF  1  // line
+#endif
+#ifndef _IONBF
+#define _IONBF  2  // none
+#endif
 
-struct filesink 
-{
-    FILE *f;
-    char buf[256];
-    size_t len;
-};
+// ====== Intern representation ======
+// Din stdio.h definierar redan struct FILE med minst:
+// int file_descriptor; int flags; int error; int eof; int ungot;
+// Vi lägger till ett litet “privat” fältpaket i slutet om stdio.h tillåter.
+// Om inte – behåll samma layout som din tidigare och nyttja ett “extra” fält.
 
-static inline int is_valid_userspace_ptr(const void *p, size_t len)
-{
-    uint32_t addr = (uint32_t)p;
-    return (addr >= USERSPACE_MIN) && 
-           (addr + len >= addr) &&  // Check for overflow
-           (addr + len <= USERSPACE_MAX);
+typedef struct _buf {
+    unsigned char *base;   // buffer start
+    size_t         size;   // buffertstorlek
+    size_t         pos;    // skriv/läsläge i buffert
+    size_t         len;    // giltiga läsbara byte (för input)
+    int            mode;   // _IOFBF/_IOLBF/_IONBF
+    int            owned;  // äger vi bufferten (malloc) eller användarens?
+} _buf;
+
+// För att inte förstöra layouten – vi kapslar in buffert i FILE via ett
+// “privat” fält som stdio.h inte använder. Om stdio.h har eget buffertfält,
+// ta bort detta och koppla mot dem istället.
+
+typedef struct _FileImpl {
+    int  fd;
+    int  can_read;
+    int  can_write;
+    int  append;
+    int  err;
+    int  eof;
+    int  ungot;       // -1 om tom
+    _buf inb;         // in-buffert (för fread/fgetc)
+    _buf outb;        // ut-buffert (för fwrite/fputc)
+} _FileImpl;
+
+// Bridge mot existerande FILE (vi antar att FILE är opaque nog).
+// Vi allokerar en _FileImpl och placerar pekaren i FILE* (om FILE redan är
+// konkret – ersätt med en mappning).
+
+// ====== Framåtdeklarationer ======
+static int  _flush_out(FILE *f);
+static int  _fill_in(FILE *f);
+static void _set_err(FILE *f) { if (f) f->impl->err = 1; }
+static void _set_eof(FILE *f) { if (f) f->impl->eof = 1; }
+static int  _valid_ptr(const void *p) {
+    uintptr_t v = (uintptr_t)p;
+    return (v >= 0x1000 && (v & 0x3) == 0);
+}
+static FILE *_coerce(FILE *f, int want_write);
+
+// ====== Globala standardströmmar ======
+static _FileImpl __stdin_impl  = { 0,1,0,0,0,0,-1,{0,0,0,0,_IOFBF,0},{0,0,0,0,_IOFBF,0} };
+static _FileImpl __stdout_impl = { 1,0,1,0,0,0,-1,{0,0,0,0,_IOFBF,0},{0,0,0,0,_IOLBF,0} };
+static _FileImpl __stderr_impl = { 2,0,1,0,0,0,-1,{0,0,0,0,_IOFBF,0},{0,0,0,0,_IONBF,0} };
+
+static FILE __stdin  = { &__stdin_impl  };
+static FILE __stdout = { &__stdout_impl };
+static FILE __stderr = { &__stderr_impl };
+
+// Exporterade pekarvariabler – detta matchar “libc”-mönster och dina importer
+FILE *stdin  = &__stdin;
+FILE *stdout = &__stdout;
+FILE *stderr = &__stderr;
+
+// ====== Hjälp ======
+static void _buf_reset(_buf *b) { b->pos = 0; b->len = 0; }
+static void _free_buf(_buf *b) { if (b->owned && b->base) { free(b->base); } b->base = NULL; b->size = b->pos = b->len = 0; b->owned = 0; }
+
+static void _ensure_default_buffers(void) {
+    // Sätt små standardbuffertar om inga finns.
+    // stdin fullbuffras, stdout line, stderr none.
+    static unsigned char inbuf[256];
+    static unsigned char outbuf[256];
+
+    if (stdin && stdin->impl->inb.base == NULL && stdin->impl->inb.mode != _IONBF) {
+        stdin->impl->inb.base = inbuf;
+        stdin->impl->inb.size = sizeof(inbuf);
+        stdin->impl->inb.owned = 0;
+        _buf_reset(&stdin->impl->inb);
+    }
+    if (stdout && stdout->impl->outb.base == NULL && stdout->impl->outb.mode != _IONBF) {
+        stdout->impl->outb.base = outbuf;
+        stdout->impl->outb.size = sizeof(outbuf);
+        stdout->impl->outb.owned = 0;
+        _buf_reset(&stdout->impl->outb);
+    }
+    // stderr obuffrad – ingen buffert behövs
 }
 
-static inline const char *safe_str(const char *s)
-{
-    return is_valid_userspace_ptr(s, 1) ? s : "(null)";
+static FILE *_alloc_stream(void) {
+    FILE *f = (FILE*)malloc(sizeof(FILE));
+    if (!f) return NULL;
+    _FileImpl *impl = (_FileImpl*)calloc(1, sizeof(_FileImpl));
+    if (!impl) { free(f); return NULL; }
+    impl->fd = -1;
+    impl->ungot = -1;
+    impl->inb.mode  = _IOFBF;
+    impl->outb.mode = _IOFBF;
+    f->impl = impl;
+    return f;
 }
 
-static FILE *coerce_stream(FILE *stream, FILE *tmp_out, int want_write)
-{
-    /* Är det redan ett giltigt userspace-objekt? */
-    if (is_valid_userspace_ptr(stream, sizeof(FILE))) {
-        return stream;
-    }
-
-    /* Annars, tolka värdet som ett fd (t.ex. 0/1/2) */
-    int fd = (int)(uintptr_t)stream;
-    tmp_out->file_descriptor = fd;
-    tmp_out->flags = FILE_CAN_READ | FILE_CAN_WRITE; /* enkel default */
-    tmp_out->error = 0;
-    tmp_out->eof   = 0;
-    tmp_out->ungot = -1;
-
-    if (want_write && !(tmp_out->flags & FILE_CAN_WRITE)) {
-        tmp_out->flags |= FILE_CAN_WRITE;
-    }
-
-    return tmp_out;
+static void _free_stream(FILE *f) {
+    if (!f || !f->impl) return;
+    _free_buf(&f->impl->inb);
+    _free_buf(&f->impl->outb);
+    free(f->impl);
+    f->impl = NULL;
+    free(f);
 }
 
-static void file_putch(int ch, void *ctx)
-{
-    struct filesink *s = (struct filesink*)ctx;
-    
-    if (s->len < sizeof(s->buf)) 
-    {
-        s->buf[s->len++] = (char)ch;
-    }
-    
-    if (s->len == sizeof(s->buf)) 
-    {
-        (void)fwrite(s->buf, 1, s->len, s->f);
-        s->len = 0;
-    }
+static FILE *_coerce(FILE *f, int want_write) {
+    if (!f) f = want_write ? stdout : stdin;        // libc: printf -> stdout, getc -> stdin
+    if (!_valid_ptr(f) || !_valid_ptr(f->impl)) return NULL;
+    return f;
 }
 
-/* ====== FILE-handling ====== */
-static FILE _stdin = {0, FILE_CAN_READ, 0, 0, -1};
-static FILE _stdout = {1, FILE_CAN_WRITE, 0, 0, -1};
-static FILE _stderr = {2, FILE_CAN_WRITE, 0, 0, -1};
+static int _flush_out(FILE *f) {
+    if (!f || !f->impl) return EOF;
+    _FileImpl *I = f->impl;
+    if (!I->can_write) { _set_err(f); return EOF; }
+    if (I->outb.mode == _IONBF) return 0; // obuffrat – inget att tömma
 
-FILE *stdin = &_stdin;
-FILE *stdout = &_stdout;
-FILE *stderr = &_stderr;
-
-/* ====== File Operations ====== */
-static int mode_to_oflags(const char *mode, int *f_flags_out)
-{
-    if (!mode || !mode[0]) return -1;
-
-    int of = 0;
-    int f = 0;
-    char m0 = mode[0];
-    const char *plus = strchr(mode, '+');
-
-    if (m0 == 'r') {
-        of = plus ? O_RDWR : O_RDONLY;
-        f = plus ? (FILE_CAN_READ|FILE_CAN_WRITE) : FILE_CAN_READ;
-    }
-    else if (m0 == 'w') {
-        of = plus ? (O_RDWR|O_CREAT|O_TRUNC) : (O_WRONLY|O_CREAT|O_TRUNC);
-        f = plus ? (FILE_CAN_READ|FILE_CAN_WRITE) : FILE_CAN_WRITE;
-    }
-    else if (m0 == 'a') {
-        of = plus ? (O_RDWR|O_CREAT|O_APPEND) : (O_WRONLY|O_CREAT|O_APPEND);
-        f = plus ? (FILE_CAN_READ|FILE_CAN_WRITE) : FILE_CAN_WRITE;
-    }
-    else {
-        return -1;
-    }
-
-    if (f_flags_out) *f_flags_out = f;
-    return of;
-}
-
-FILE *fopen(const char *path, const char *mode)
-{
-    if (!is_valid_userspace_ptr(path, 1) || !is_valid_userspace_ptr(mode, 1))
-        return NULL;
-
-    int f_flags = 0;
-    int o_flags = mode_to_oflags(mode, &f_flags);
-    if (o_flags < 0) return NULL;
-
-    int fd = system_open(path, o_flags, 0644);
-    if (fd < 0) return NULL;
-
-    FILE *file = (FILE*)malloc(sizeof(FILE));
-    if (!file) {
-        system_close(fd);
-        return NULL;
-    }
-
-    file->file_descriptor = fd;
-    file->flags = f_flags;
-    file->error = 0;
-    file->eof = 0;
-    file->ungot = -1;
-
-    return file;
-}
-
-int fclose(FILE *file)
-{
-    if (!file) return -1;
-
-    int rc = system_close(file->file_descriptor);
-    free(file);
-    return rc < 0 ? -1 : 0;
-}
-
-size_t fread(void *ptr, size_t size, size_t nmemb, FILE *file)
-{
-    if (!file || !ptr || !size || !nmemb) return 0;
-    if (!(file->flags & FILE_CAN_READ)) {
-        file->error = 1;
-        return 0;
-    }
-
-    // 32-bit overflow check
-    uint32_t total;
-    if (__builtin_umul_overflow(size, nmemb, &total)) {
-        file->error = 1;
-        return 0;
-    }
-
-    uint8_t *dst = (uint8_t*)ptr;
+    size_t n = I->outb.pos;
     size_t done = 0;
-
-    if (file->ungot >= 0 && done < total) {
-        dst[done++] = (uint8_t)file->ungot;
-        file->ungot = -1;
+    while (done < n) {
+        int32_t w = system_write(I->fd, I->outb.base + done, (int32_t)(n - done));
+        if (w < 0) { _set_err(f); I->outb.pos = 0; return EOF; }
+        if (w == 0) break;
+        done += (size_t)w;
     }
-
-    while (done < total) {
-        int32_t r = system_read(file->file_descriptor, dst + done, total - done);
-        if (r <= 0) {
-            if (r == 0) file->eof = 1;
-            else file->error = 1;
-            break;
-        }
-        done += r;
-    }
-
-    return done / size;
-}
-
-size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *file)
-{
-    if (!file || !ptr || !size || !nmemb) return 0;
-    if (!(file->flags & FILE_CAN_WRITE)) {
-        file->error = 1;
-        return 0;
-    }
-
-    // 32-bit overflow check
-    uint32_t total;
-    if (__builtin_umul_overflow(size, nmemb, &total)) {
-        file->error = 1;
-        return 0;
-    }
-
-    const uint8_t *src = (const uint8_t*)ptr;
-    size_t done = 0;
-
-    while (done < total) {
-        int32_t w = system_write(file->file_descriptor, src + done, total - done);
-        if (w <= 0) {
-            file->error = 1;
-            break;
-        }
-        done += w;
-    }
-
-    return done / size;
-}
-
-struct bufctx {
-    char *buf;
-    size_t cap;
-    size_t len;
-};
-
-static void putch_sink(int ch, void *ctx) {
-    (void)ctx;
-    system_putchar((char)ch);
-}
-
-static void buf_sink(int ch, void *ctx) {
-    struct bufctx *b = (struct bufctx*)ctx;
-    if (b->len < b->cap) {
-        b->buf[b->len] = (char)ch;
-    }
-    b->len++;
-}
-
-static int vcbprintf(void (*sink)(int, void*), void *ctx, const char *fmt, va_list ap)
-{
-    if (!is_valid_userspace_ptr(fmt, 1))
-    {
-        return -1;
-    }
-
-    int out = 0;
-    const char *p = fmt;
-
-    while (*p)
-    {
-        if (*p != '%')
-        {
-            sink(*p++, ctx);
-            out++;
-            continue;
-        }
-
-        p++; /* skip '%' */
-
-        /* ---- parse flags ---- */
-        int left = 0;
-        int pad0 = 0;
-        int alternate = 0;
-
-        while (*p == '-' || *p == '0' || *p == '#')
-        {
-            if (*p == '-') { left = 1; }
-            else if (*p == '0') { pad0 = 1; }
-            else { alternate = 1; }
-            p++;
-        }
-        if (left) { pad0 = 0; } /* '-' disables '0' */
-
-        /* ---- parse width ---- */
-        int width = 0;
-        while (*p >= '0' && *p <= '9')
-        {
-            width = width * 10 + (*p++ - '0');
-        }
-
-        /* ---- length (only 'l' for 32-bit) ---- */
-        int is_long = 0;
-        if (*p == 'l')
-        {
-            is_long = 1;
-            p++;
-        }
-
-        if (!*p)
-        {
-            break;
-        }
-
-        /* ---- specifier ---- */
-        char spec = *p++;
-        switch (spec)
-        {
-            case '%':
-            {
-                sink('%', ctx);
-                out++;
-
-                break;
-            }
-
-            case 'c':
-            {
-                int c = va_arg(ap, int);
-                sink(c, ctx);
-                out++;
-
-                break;
-            }
-
-            case 's':
-            {
-                const char *s = va_arg(ap, const char*);
-                s = safe_str(s);
-
-                int slen = 0;
-                const char *q = s;
-                while (*q++) { slen++; }
-
-                int pad = (width > slen) ? (width - slen) : 0;
-
-                if (!left)
-                {
-                    while (pad--) { sink(' ', ctx); out++; }
-                    while (*s) { sink(*s++, ctx); out++; }
-                }
-                else
-                {
-                    while (*s) { sink(*s++, ctx); out++; }
-                    while (pad--) { sink(' ', ctx); out++; }
-                }
-
-                break;
-            }
-
-            case 'd':
-            case 'i':
-            {
-                int32_t val = is_long ? va_arg(ap, int32_t) : va_arg(ap, int);
-                char buf[12];
-                int neg = (val < 0);
-                uint32_t u = neg ? (uint32_t)(-val) : (uint32_t)val;
-
-                int i = 0;
-                do
-                {
-                    buf[i++] = (char)('0' + (u % 10));
-                    u /= 10;
-                }
-                while (u);
-
-                int need = i + (neg ? 1 : 0);
-                int pad = (width > need) ? (width - need) : 0;
-
-                if (!left)
-                {
-                    if (!pad0) { while (pad--) { sink(' ', ctx); out++; } }
-                    if (neg) { sink('-', ctx); out++; }
-                    if (pad0) { while (pad--) { sink('0', ctx); out++; } }
-                    while (--i >= 0) { sink(buf[i], ctx); out++; }
-                }
-                else
-                {
-                    if (neg) { sink('-', ctx); out++; }
-                    while (--i >= 0) { sink(buf[i], ctx); out++; }
-                    while (pad--) { sink(' ', ctx); out++; }
-                }
-
-                break;
-            }
-
-            case 'u':
-            case 'x':
-            case 'X':
-            case 'o':
-            {
-                uint32_t val = is_long ? va_arg(ap, uint32_t) : va_arg(ap, unsigned int);
-                unsigned base = (spec == 'o') ? 8 : (spec == 'u') ? 10 : 16;
-                const char *digits = (spec == 'X') ? "0123456789ABCDEF" : "0123456789abcdef";
-
-                char buf[12];
-                int i = 0;
-
-                do
-                {
-                    buf[i++] = digits[val % base];
-                    val /= base;
-                }
-                while (val);
-
-                int prefix_len = (alternate && base == 16) ? 2 : 0; /* "0x" / "0X" */
-                int need = i + prefix_len;
-                int pad = (width > need) ? (width - need) : 0;
-
-                if (!left)
-                {
-                    if (!pad0) { while (pad--) { sink(' ', ctx); out++; } }
-                    if (prefix_len)
-                    {
-                        sink('0', ctx);
-                        sink(spec, ctx); /* 'x' or 'X' */
-                        out += 2;
-                    }
-                    if (pad0) { while (pad--) { sink('0', ctx); out++; } }
-                    while (--i >= 0) { sink(buf[i], ctx); out++; }
-                }
-                else
-                {
-                    if (prefix_len)
-                    {
-                        sink('0', ctx);
-                        sink(spec, ctx);
-                        out += 2;
-                    }
-                    while (--i >= 0) { sink(buf[i], ctx); out++; }
-                    while (pad--) { sink(' ', ctx); out++; }
-                }
-
-                break;
-            }
-
-            case 'p':
-            {
-                /* print as 0x + lowercase hex, width pads the hex digits (not the 0x) with zeros */
-                uint32_t v = (uint32_t)va_arg(ap, void*);
-                char buf[8];
-                int i = 0;
-
-                do
-                {
-                    buf[i++] = "0123456789abcdef"[v & 0xF];
-                    v >>= 4;
-                }
-                while (v);
-
-                /* minimum 1 nibble, pad with zeros to requested width (width counts digits only) */
-                int pad = (width > i) ? (width - i) : 0;
-
-                sink('0', ctx);
-                sink('x', ctx);
-                out += 2;
-
-                while (pad--) { sink('0', ctx); out++; }
-                while (--i >= 0) { sink(buf[i], ctx); out++; }
-
-                break;
-            }
-
-            default:
-            {
-                /* unknown specifier: print it verbatim */
-                sink('%', ctx);
-                sink(spec, ctx);
-                out += 2;
-
-                break;
-            }
-        }
-    }
-
-    return out;
-}
-
-
-int printf(const char *fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-    int ret = vprintf(fmt, ap);
-    va_end(ap);
-    return ret;
-}
-
-int vprintf(const char *fmt, va_list ap)
-{
-    if (!is_valid_userspace_ptr(fmt, 1)) return -1;
-    return vcbprintf(putch_sink, NULL, fmt, ap);
-}
-
-int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
-{
-    if (!buf || !size || !is_valid_userspace_ptr(fmt, 1)) return -1;
-    
-    struct bufctx b = {buf, size, 0};
-    int ret = vcbprintf(buf_sink, &b, fmt, ap);
-    
-    if (b.len < size) buf[b.len] = '\0';
-    else if (size > 0) buf[size-1] = '\0';
-    
-    return ret;
-}
-
-int snprintf(char *buf, size_t size, const char *fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-    int ret = vsnprintf(buf, size, fmt, ap);
-    va_end(ap);
-    return ret;
-}
-
-int puts(const char *s)
-{
-    s = safe_str(s);
-    int len = 0;
-    
-    while (*s) {
-        system_putchar(*s++);
-        len++;
-    }
-    system_putchar('\n');
-    return len + 1;
-}
-
-int putchar(int c)
-{
-    system_putchar((char)c);
-    return (unsigned char)c;
-}
-
-/* ====== Additional FILE operations ====== */
-int fseek(FILE *file, long offset, int whence)
-{
-    if (!file) return -1;
-    
-    int ret = system_lseek(file->file_descriptor, offset, whence);
-    if (ret < 0) {
-        file->error = 1;
-        return -1;
-    }
-    
-    file->eof = 0;
-    file->ungot = -1;
+    I->outb.pos = 0;
     return 0;
 }
 
-long ftell(FILE *file)
-{
-    if (!file) return -1;
-    return system_lseek(file->file_descriptor, 0, SEEK_CUR);
-}
+// Fyll läsbuffert från kernel
+static int _fill_in(FILE *f) {
+    if (!f || !f->impl) return EOF;
+    _FileImpl *I = f->impl;
+    if (!I->can_read) { _set_err(f); return EOF; }
 
-void rewind(FILE *file)
-{
-    if (file) {
-        fseek(file, 0, SEEK_SET);
-        file->error = 0;
-        file->eof = 0;
+    if (I->ungot >= 0) {
+        // Om vi har en “ungetc” – leverera den via bufferten
+        if (I->inb.mode == _IONBF) {
+            // obuffrat: returnera direkt via “lat” väg (hanteras av fgetc)
+            return 0;
+        }
+        I->inb.base[0] = (unsigned char)I->ungot;
+        I->inb.len = 1; I->inb.pos = 0;
+        I->ungot = -1;
+        return 1;
     }
+
+    if (I->inb.mode == _IONBF) {
+        // obuffrad läsning får skötas i fgetc/fread direkt
+        return 0;
+    }
+
+    int32_t r = system_read(I->fd, I->inb.base, (int32_t)I->inb.size);
+    if (r < 0) { _set_err(f); return EOF; }
+    if (r == 0) { _set_eof(f); I->inb.len = 0; I->inb.pos = 0; return 0; }
+    I->inb.len = (size_t)r;
+    I->inb.pos = 0;
+    return (int)r;
 }
 
-int fgetc(FILE *file)
-{
-    if (!file) return -1;
-    
-    if (file->ungot >= 0) {
-        int c = file->ungot;
-        file->ungot = -1;
+// ====== Öppna/stäng ======
+
+static int _mode_parse(const char *mode, int *out_r, int *out_w, int *out_app, int *out_trunc, int *out_creat) {
+    int r=0,w=0,a=0,t=0,c=0;
+    if (!mode || !*mode) return -1;
+    // libc: “r”, “w”, “a”, ev. “+”, ev. “b” ignoreras
+    char m0 = mode[0];
+    int plus = (strchr(mode, '+') != NULL);
+    switch (m0) {
+        case 'r': r = 1; c = 0; t = 0; a = 0; w = plus; break;
+        case 'w': w = 1; c = 1; t = 1; a = 0; r = plus; break;
+        case 'a': w = 1; c = 1; t = 0; a = 1; r = plus; break;
+        default: return -1;
+    }
+    *out_r = r; *out_w = w; *out_app = a; *out_trunc = t; *out_creat = c;
+    return 0;
+}
+
+FILE *fopen(const char *path, const char *mode) {
+    _ensure_default_buffers();
+
+    int R=0,W=0,A=0,T=0,C=0;
+    if (_mode_parse(mode, &R,&W,&A,&T,&C) < 0) return NULL;
+
+    int oflags = 0;
+    if (R && !W) oflags |= O_RDONLY;
+    if (W && !R) oflags |= O_WRONLY;
+    if (W && R)  oflags |= O_RDWR;
+    if (C) oflags |= O_CREAT;
+    if (T) oflags |= O_TRUNC;
+    if (A) oflags |= O_APPEND;
+
+    int fd = system_open(path, oflags, 0644);
+    if (fd < 0) return NULL;
+
+    FILE *f = _alloc_stream();
+    if (!f) { system_close(fd); return NULL; }
+
+    f->impl->fd = fd;
+    f->impl->can_read  = R;
+    f->impl->can_write = W;
+    f->impl->append    = A;
+    f->impl->err = f->impl->eof = 0;
+    f->impl->ungot = -1;
+
+    // Standard: fullbuffer by default
+    setvbuf(f, NULL, _IOFBF, 0);
+    return f;
+}
+
+FILE *fdopen(int fd, const char *mode) {
+    _ensure_default_buffers();
+
+    if (fd < 0) return NULL;
+    int R=0,W=0,A=0,T=0,C=0;
+    if (_mode_parse(mode, &R,&W,&A,&T,&C) < 0) return NULL;
+
+    FILE *f = _alloc_stream();
+    if (!f) return NULL;
+
+    f->impl->fd = fd;
+    f->impl->can_read  = R;
+    f->impl->can_write = W;
+    f->impl->append    = A;
+    f->impl->err = f->impl->eof = 0;
+    f->impl->ungot = -1;
+    setvbuf(f, NULL, _IOFBF, 0);
+    return f;
+}
+
+int fclose(FILE *stream) {
+    stream = _coerce(stream, 0);
+    if (!stream) return EOF;
+
+    _flush_out(stream);
+    int rc = 0;
+    if (stream != stdin && stream != stdout && stream != stderr) {
+        rc = system_close(stream->impl->fd);
+        _free_stream(stream);
+    } else {
+        // standardströmmar stängs inte, men flushas
+        rc = 0;
+    }
+    return rc;
+}
+
+// ====== Buffering ======
+
+int setvbuf(FILE *stream, char *buf, int mode, size_t size) {
+    stream = _coerce(stream, 0);
+    if (!stream) return EOF;
+    if (mode != _IOFBF && mode != _IOLBF && mode != _IONBF) return EOF;
+
+    _FileImpl *I = stream->impl;
+
+    // Flush innan byte av output-buffert
+    _flush_out(stream);
+
+    // Free gamla buffertar om vi ägde dem
+    _free_buf(&I->inb);
+    _free_buf(&I->outb);
+
+    if (mode == _IONBF) {
+        I->inb.base = NULL; I->inb.size = 0; I->inb.mode = _IONBF; I->inb.owned = 0; _buf_reset(&I->inb);
+        I->outb.base= NULL; I->outb.size= 0; I->outb.mode= _IONBF; I->outb.owned= 0; _buf_reset(&I->outb);
+        return 0;
+    }
+
+    size_t want = size ? size : 256;
+
+    if (buf) {
+        // Användarbuffer – dela samma buffert för in/ut om bara en gavs
+        I->inb.base = (unsigned char*)buf;
+        I->inb.size = want;
+        I->inb.mode = mode;
+        I->inb.owned= 0; _buf_reset(&I->inb);
+
+        // Ut-buffert – om samma buf används: låt utb använda också
+        I->outb.base = (unsigned char*)buf;
+        I->outb.size = want;
+        I->outb.mode = mode;
+        I->outb.owned= 0; _buf_reset(&I->outb);
+    } else {
+        // Allokera separata buffertar
+        I->inb.base  = (unsigned char*)malloc(want);
+        I->outb.base = (unsigned char*)malloc(want);
+        if (!I->inb.base || !I->outb.base) {
+            if (I->inb.base) free(I->inb.base);
+            if (I->outb.base) free(I->outb.base);
+            I->inb.base = I->outb.base = NULL;
+            I->inb.size = I->outb.size = 0;
+            I->inb.mode = I->outb.mode = _IONBF;
+            return EOF;
+        }
+        I->inb.size = I->outb.size = want;
+        I->inb.mode = I->outb.mode = mode;
+        I->inb.owned= I->outb.owned= 1;
+        _buf_reset(&I->inb);
+        _buf_reset(&I->outb);
+    }
+    return 0;
+}
+
+void setbuf(FILE *stream, char *buf) {
+    if (!stream) return;
+    (void)setvbuf(stream, buf, buf ? _IOFBF : _IONBF, buf ? 256 : 0);
+}
+
+// ====== Status ======
+int feof(FILE *stream)    { stream = _coerce(stream, 0); return stream ? stream->impl->eof : 1; }
+int ferror(FILE *stream)  { stream = _coerce(stream, 0); return stream ? stream->impl->err : 1; }
+void clearerr(FILE *s)    { s = _coerce(s, 0); if (s) { s->impl->err = 0; s->impl->eof = 0; } }
+
+// ====== Seeking ======
+int fseek(FILE *stream, long offset, int whence) {
+    stream = _coerce(stream, 0);
+    if (!stream) return -1;
+    // Flush ut-buffert innan seek
+    if (_flush_out(stream) < 0) return -1;
+
+    int ret = system_lseek(stream->impl->fd, (int)offset, whence);
+    if (ret < 0) { _set_err(stream); return -1; }
+
+    // Invalidate in-buffert; ungetc tas bort
+    _buf_reset(&stream->impl->inb);
+    stream->impl->eof = 0;
+    stream->impl->ungot = -1;
+    return 0;
+}
+
+long ftell(FILE *stream) {
+    stream = _coerce(stream, 0);
+    if (!stream) return -1;
+    // Flush ut innan position
+    if (_flush_out(stream) < 0) return -1;
+    return (long)system_lseek(stream->impl->fd, 0, SEEK_CUR);
+}
+
+// ====== Input ======
+
+int fgetc(FILE *stream) {
+    stream = _coerce(stream, 0);
+    if (!stream) return EOF;
+
+    _FileImpl *I = stream->impl;
+
+    if (I->ungot >= 0) {
+        int c = I->ungot;
+        I->ungot = -1;
+        I->eof = 0;
         return c;
     }
-    
-    unsigned char c;
-    return (fread(&c, 1, 1, file) == 1) ? c : -1;
+
+    if (!I->can_read) { _set_err(stream); return EOF; }
+
+    if (I->inb.mode == _IONBF) {
+        unsigned char ch;
+        int32_t r = system_read(I->fd, &ch, 1);
+        if (r < 0) { _set_err(stream); return EOF; }
+        if (r == 0) { _set_eof(stream); return EOF; }
+        return (int)ch;
+    }
+
+    if (I->inb.pos >= I->inb.len) {
+        if (_fill_in(stream) <= 0) return EOF;
+    }
+    return (int)I->inb.base[I->inb.pos++];
 }
 
-int ungetc(int c, FILE *file)
-{
-    if (!file || c == EOF || file->ungot != -1) return EOF;
-    
-    file->ungot = (unsigned char)c;
-    file->eof = 0;
+int ungetc(int c, FILE *stream) {
+    stream = _coerce(stream, 0);
+    if (!stream) return EOF;
+    if (c == EOF) return EOF;
+    if (stream->impl->ungot != -1) return EOF; // bara en nivå
+    stream->impl->ungot = (unsigned char)c;
+    stream->impl->eof = 0;
     return c;
 }
 
-int fputc(int c, FILE *file)
-{
-    FILE tmp;
-    file = coerce_stream(file, &tmp, /*want_write=*/1);
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    stream = _coerce(stream, 0);
+    if (!stream || !ptr || size == 0 || nmemb == 0) return 0;
+
+    _FileImpl *I = stream->impl;
+    if (!I->can_read) { _set_err(stream); return 0; }
+
+    size_t total = size * nmemb;
+    size_t done = 0;
+    unsigned char *dst = (unsigned char*)ptr;
+
+    // konsumera ungot först
+    if (I->ungot >= 0 && done < total) {
+        dst[done++] = (unsigned char)I->ungot;
+        I->ungot = -1;
+    }
+
+    if (I->inb.mode == _IONBF) {
+        while (done < total) {
+            int32_t r = system_read(I->fd, dst + done, (int32_t)(total - done));
+            if (r < 0) { _set_err(stream); break; }
+            if (r == 0) { _set_eof(stream); break; }
+            done += (size_t)r;
+        }
+        return done / size;
+    }
+
+    // buffrad
+    while (done < total) {
+        if (I->inb.pos >= I->inb.len) {
+            int r = _fill_in(stream);
+            if (r <= 0) break;
+        }
+        size_t avail = I->inb.len - I->inb.pos;
+        size_t want  = total - done;
+        size_t take  = (avail < want) ? avail : want;
+        memcpy(dst + done, I->inb.base + I->inb.pos, take);
+        I->inb.pos += take;
+        done += take;
+    }
+    return done / size;
+}
+
+// ====== Output ======
+
+int fputc(int c, FILE *stream) {
+    stream = _coerce(stream, 1);
+    if (!stream) return EOF;
+
+    _FileImpl *I = stream->impl;
+    if (!I->can_write) { _set_err(stream); return EOF; }
 
     unsigned char ch = (unsigned char)c;
 
-    return (fwrite(&ch, 1, 1, file) == 1) ? c : EOF;
-}
-
-char *fgets(char *s, int size, FILE *file)
-{
-    if (!s || size <= 1 || !file) return NULL;
-    
-    int i = 0;
-    while (i < size - 1) {
-        int c = fgetc(file);
-        if (c == EOF) break;
-        
-        s[i++] = (char)c;
-        if (c == '\n') break;
+    if (I->outb.mode == _IONBF || I->outb.base == NULL || I->outb.size == 0) {
+        // obuffrat: skriv direkt
+        int32_t w = system_write(I->fd, &ch, 1);
+        if (w != 1) { _set_err(stream); return EOF; }
+        return (int)ch;
     }
-    
-    if (i == 0) return NULL;
-    
-    s[i] = '\0';
-    return s;
+
+    // buffrad
+    I->outb.base[I->outb.pos++] = ch;
+
+    int need_flush = 0;
+    if (I->outb.pos >= I->outb.size) need_flush = 1;
+    if (I->outb.mode == _IOLBF && ch == '\n') need_flush = 1;
+
+    if (need_flush) {
+        if (_flush_out(stream) < 0) return EOF;
+    }
+    return (int)ch;
 }
 
-int fputs(const char *s, FILE *file)
-{
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    stream = _coerce(stream, 1);
+    if (!stream || !ptr || size == 0 || nmemb == 0) return 0;
+    _FileImpl *I = stream->impl;
+    if (!I->can_write) { _set_err(stream); return 0; }
+
+    const unsigned char *src = (const unsigned char*)ptr;
+    size_t total = size * nmemb;
+    size_t done = 0;
+
+    if (I->outb.mode == _IONBF || I->outb.base == NULL || I->outb.size == 0) {
+        while (done < total) {
+            int32_t w = system_write(I->fd, src + done, (int32_t)(total - done));
+            if (w <= 0) { _set_err(stream); break; }
+            done += (size_t)w;
+        }
+        return done / size;
+    }
+
+    while (done < total) {
+        size_t space = I->outb.size - I->outb.pos;
+        if (space == 0) {
+            if (_flush_out(stream) < 0) break;
+            space = I->outb.size;
+        }
+        size_t chunk = total - done;
+        if (chunk > space) chunk = space;
+        memcpy(I->outb.base + I->outb.pos, src + done, chunk);
+        I->outb.pos += chunk;
+        done += chunk;
+
+        if (I->outb.mode == _IOLBF) {
+            // linjebuffrat – flush vid newline i chunk
+            const void *p = memchr(src + done - chunk, '\n', chunk);
+            if (p) {
+                if (_flush_out(stream) < 0) break;
+            }
+        }
+    }
+    return done / size;
+}
+
+int fflush(FILE *stream) {
+    _ensure_default_buffers();
+    if (!stream) {
+        // flush alla skrivbara (libc brukar flush:a alla när stream==NULL)
+        int rc = 0;
+        if (stdout) rc |= _flush_out(stdout);
+        if (stderr) rc |= _flush_out(stderr);
+        // stdin har inget att flush:a
+        return rc ? EOF : 0;
+    }
+    stream = _coerce(stream, 1);
+    if (!stream) return EOF;
+    return _flush_out(stream);
+}
+
+// ====== Enkel stdio ovanpå ovan ======
+
+int putchar(int c) { return fputc(c, stdout); }
+
+int puts(const char *s) {
     if (!s) return EOF;
-
-    FILE tmp;
-    file = coerce_stream(file, &tmp, /*want_write=*/1);
-
-    size_t len = strlen(s);
-    return (fwrite(s, 1, len, file) == len) ? 0 : EOF;
+    size_t n = strlen(s);
+    if (fwrite(s, 1, n, stdout) != n) return EOF;
+    if (fputc('\n', stdout) == EOF) return EOF;
+    return (int)(n + 1);
 }
 
-int feof(FILE *file)
-{
-    return file ? file->eof : 0;
+// ====== printf-familjen (compact) ======
+//
+// Vi implementerar en kompakt vfprintf som stödjer de specar som används
+// i din kodbas ( %s %c %d %u %x %X %p %% och bredd/justering/0-padding).
+
+typedef struct _sink {
+    FILE *f;
+    int   error;
+    size_t count;
+} _sink;
+
+static void _sink_char(_sink *s, char ch) {
+    if (s->error) return;
+    if (fputc((unsigned char)ch, s->f) == EOF) s->error = 1;
+    else s->count++;
 }
 
-int ferror(FILE *file)
-{
-    return file ? file->error : 0;
+static void _sink_mem(_sink *s, const char *p, size_t n) {
+    if (s->error || n == 0) return;
+    size_t w = fwrite(p, 1, n, s->f);
+    if (w != n) s->error = 1;
+    else s->count += n;
 }
 
-void clearerr(FILE *file)
-{
-    if (file) {
-        file->error = 0;
-        file->eof = 0;
-    }
+static void _pad(_sink *s, char ch, int n) {
+    for (int i=0; i<n; i++) _sink_char(s, ch);
 }
 
-int fflush(FILE *file)
-{
-    (void)file;
-    return 0; // No buffering in this implementation
+// itoa helpers
+static char *_u64_to_str(uint64_t v, char *buf_end, int base, int upper) {
+    static const char *digits_l = "0123456789abcdef";
+    static const char *digits_u = "0123456789ABCDEF";
+    const char *digits = upper ? digits_u : digits_l;
+    *buf_end = '\0';
+    char *p = buf_end;
+    do {
+        *--p = digits[v % (uint64_t)base];
+        v /= (uint64_t)base;
+    } while (v);
+    return p;
 }
 
-int remove(const char *path)
-{
-    // TODO: Implement
-    (void)path;
+int vfprintf(FILE *stream, const char *fmt, va_list ap) {
+    stream = _coerce(stream, 1);
+    if (!stream) return -1;
 
-    return 0;
-}
+    _sink snk = { stream, 0, 0 };
+    const char *p = fmt;
 
-int rename(const char *oldpath, const char *newpath)
-{
-    // TODO: Implement
-    (void)oldpath;
-    (void)newpath;
-
-    return 0;
-}
-
-
-int sscanf(const char *str, const char *fmt, ...)
-{
-    const char *p = str;
-    const char *f = fmt;
-    int asgn = 0;
-    int nread = 0;
-
-    va_list ap;
-    va_start(ap, fmt);
-
-    while (*f)
-    {
-        if (isspace((unsigned char)*f))
-        {
-            while (isspace((unsigned char)*f))
-            {
-                f++;
-            }
-
-            while (isspace((unsigned char)*p))
-            {
-                p++;
-                nread++;
-            }
-
+    while (*p && !snk.error) {
+        if (*p != '%') {
+            const char *q = p;
+            while (*q && *q != '%') q++;
+            _sink_mem(&snk, p, (size_t)(q - p));
+            p = q;
             continue;
         }
+        p++; // skip '%'
 
-        if (*f != '%')
-        {
-            if (*p != *f)
-            {
-                break;
-            }
-
+        // Flags
+        int left=0, alt=0, zero=0;
+        while (*p=='-' || *p=='#' || *p=='0') {
+            if (*p=='-') left=1;
+            else if (*p=='#') alt=1;
+            else if (*p=='0') zero=1;
             p++;
-            f++;
-            nread++;
-
-            continue;
         }
 
-        f++;
-
-        int suppress = 0;
+        // Width
         int width = 0;
-        int lflag = 0;
+        while (*p>='0' && *p<='9') { width = width*10 + (*p-'0'); p++; }
 
-        if (*f == '*')
-        {
-            suppress = 1;
-            f++;
-        }
-
-        while (*f >= '0' && *f <= '9')
-        {
-            width = width * 10 + (*f - '0');
-            f++;
-        }
-
-        if (*f == 'h')
-        {
-            lflag = -1;
-            f++;
-
-            if (*f == 'h')
-            {
-                f++;
-            }
-        }
-        else if (*f == 'l')
-        {
-            lflag = 1;
-            f++;
-
-            if (*f == 'l')
-            {
-                lflag = 2;
-                f++;
-            }
-        }
-
-        int c = *f++;
-
-        if (c == 0)
-        {
-            break;
-        }
-
-        if (c != 'c' && c != '[' && c != 'n' && c != '%')
-        {
-            while (isspace((unsigned char)*p))
-            {
-                p++;
-                nread++;
-            }
-        }
-
-        if (c == '%')
-        {
-            if (*p != '%')
-            {
-                break;
-            }
-
+        // Precision (ignoreras för enkelhet eller används för str)
+        int prec = -1;
+        if (*p=='.') {
             p++;
-            nread++;
-
-            continue;
+            prec = 0;
+            while (*p>='0' && *p<='9') { prec = prec*10 + (*p-'0'); p++; }
         }
 
-        if (c == 'n')
-        {
-            if (!suppress)
-            {
-                int *outn = va_arg(ap, int *);
-                *outn = nread;
-            }
+        // Length (stödjer 'l' och 'll' begränsat)
+        int lcount = 0;
+        while (*p=='l') { lcount++; p++; }
 
-            continue;
+        // Spec
+        char spec = *p ? *p++ : '\0';
+        char numbuf[64]; // räcker för 64-bit dec/hex
+        switch (spec) {
+            case 's': {
+                const char *s = va_arg(ap, const char*);
+                if (!s) s = "(null)";
+                size_t n = strlen(s);
+                if (prec >= 0 && (size_t)prec < n) n = (size_t)prec;
+                int pad = (width > (int)n) ? (width - (int)n) : 0;
+                if (!left) _pad(&snk, ' ', pad);
+                _sink_mem(&snk, s, n);
+                if (left) _pad(&snk, ' ', pad);
+            } break;
+
+            case 'c': {
+                char ch = (char)va_arg(ap, int);
+                int pad = (width > 1) ? (width - 1) : 0;
+                if (!left) _pad(&snk, ' ', pad);
+                _sink_char(&snk, ch);
+                if (left) _pad(&snk, ' ', pad);
+            } break;
+
+            case 'd':
+            case 'i': {
+                long long v = (lcount>=2) ? va_arg(ap, long long) :
+                              (lcount==1) ? va_arg(ap, long) :
+                                            va_arg(ap, int);
+                unsigned long long uv;
+                int neg = (v < 0);
+                uv = neg ? (unsigned long long)(-(v+0ull)) : (unsigned long long)v;
+                char *end = numbuf + sizeof(numbuf)-1;
+                char *start = _u64_to_str(uv, end, 10, 0);
+                int nlen = (int)(end - start);
+                if (neg) { *--start = '-'; nlen++; }
+                int pad = (width > nlen) ? (width - nlen) : 0;
+                char padc = (zero && !left) ? '0' : ' ';
+                if (!left) _pad(&snk, padc, pad);
+                _sink_mem(&snk, start, (size_t)nlen);
+                if (left) _pad(&snk, ' ', pad);
+            } break;
+
+            case 'u':
+            case 'x':
+            case 'X': {
+                unsigned long long v = (lcount>=2) ? va_arg(ap, unsigned long long) :
+                                       (lcount==1) ? va_arg(ap, unsigned long) :
+                                                     va_arg(ap, unsigned int);
+                int upper = (spec=='X');
+                int base = (spec=='u') ? 10 : 16;
+                char *end = numbuf + sizeof(numbuf)-1;
+                char *start = _u64_to_str(v, end, base, upper);
+                int nlen = (int)(end - start);
+                int prefix = 0;
+                char pf[2];
+                if (alt && base==16 && v!=0) { pf[0]='0'; pf[1]=(upper?'X':'x'); prefix=2; }
+                int pad = (width > (nlen+prefix)) ? (width - (nlen+prefix)) : 0;
+                char padc = (zero && !left) ? '0' : ' ';
+                if (!left) _pad(&snk, padc, pad);
+                if (prefix) _sink_mem(&snk, pf, 2);
+                _sink_mem(&snk, start, (size_t)nlen);
+                if (left) _pad(&snk, ' ', pad);
+            } break;
+
+            case 'p': {
+                uintptr_t v = (uintptr_t)va_arg(ap, void*);
+                char *end = numbuf + sizeof(numbuf)-1;
+                char *start = _u64_to_str((uint64_t)v, end, 16, 0);
+                const char *pref = "0x";
+                int nlen = (int)(end - start);
+                int pad = (width > (nlen+2)) ? (width - (nlen+2)) : 0;
+                if (!left) _pad(&snk, ' ', pad);
+                _sink_mem(&snk, pref, 2);
+                _sink_mem(&snk, start, (size_t)nlen);
+                if (left) _pad(&snk, ' ', pad);
+            } break;
+
+            case '%':
+                _sink_char(&snk, '%');
+                break;
+
+            default:
+                // okänd – skriv rått
+                _sink_char(&snk, '%');
+                if (spec) _sink_char(&snk, spec);
+                break;
         }
-
-        if (c == 'c')
-        {
-            int cnt = width ? width : 1;
-
-            if (!suppress)
-            {
-                char *outc = va_arg(ap, char *);
-
-                for (int i = 0; i < cnt; i++)
-                {
-                    if (*p == 0)
-                    {
-                        va_end(ap);
-
-                        return asgn ? asgn : -1;
-                    }
-
-                    outc[i] = *p++;
-                    nread++;
-                }
-            }
-            else
-            {
-                for (int i = 0; i < cnt; i++)
-                {
-                    if (*p == 0)
-                    {
-                        va_end(ap);
-
-                        return asgn ? asgn : -1;
-                    }
-
-                    p++;
-                    nread++;
-                }
-            }
-
-            asgn++;
-
-            continue;
-        }
-
-        if (c == 's')
-        {
-            int cnt = 0;
-
-            if (!width)
-            {
-                width = 0x7fffffff;
-            }
-
-            const char *start = p;
-
-            while (*p && !isspace((unsigned char)*p) && cnt < width)
-            {
-                p++;
-                cnt++;
-            }
-
-            if (cnt == 0)
-            {
-                va_end(ap);
-
-                return asgn ? asgn : -1;
-            }
-
-            if (!suppress)
-            {
-                char *outs = va_arg(ap, char *);
-
-                for (int i = 0; i < cnt; i++)
-                {
-                    outs[i] = start[i];
-                }
-
-                outs[cnt] = '\0';
-                asgn++;
-            }
-
-            nread += cnt;
-
-            continue;
-        }
-
-        if (c == 'd' || c == 'u' || c == 'x' || c == 'X' || c == 'o' || c == 'i' || c == 'p')
-        {
-            int base = 10;
-
-            if (c == 'u')
-            {
-                base = 10;
-            }
-            else if (c == 'x' || c == 'X' || c == 'p')
-            {
-                base = 16;
-            }
-            else if (c == 'o')
-            {
-                base = 8;
-            }
-            else if (c == 'i')
-            {
-                base = 0;
-            }
-
-            char tmp[128];
-            const char *start = p;
-            const char *src = p;
-            char *endp = (char *)p;
-
-            if (width)
-            {
-                int k = 0;
-
-                while (src[k] && k < width && k < (int)sizeof(tmp) - 1)
-                {
-                    tmp[k] = src[k];
-                    k++;
-                }
-
-                tmp[k] = '\0';
-                src = tmp;
-            }
-
-            if (c == 'u' || c == 'x' || c == 'X' || c == 'o' || c == 'p')
-            {
-                unsigned long long v = strtoull(src, &endp, base);
-
-                if (endp == src)
-                {
-                    va_end(ap);
-
-                    return asgn ? asgn : -1;
-                }
-
-                if (!suppress)
-                {
-                    if (c == 'p')
-                    {
-                        void **outp = va_arg(ap, void **);
-                        *outp = (void *)(uintptr_t)v;
-                    }
-                    else if (lflag == 2)
-                    {
-                        unsigned long long *ou = va_arg(ap, unsigned long long *);
-                        *ou = v;
-                    }
-                    else if (lflag == 1)
-                    {
-                        unsigned long *ou = va_arg(ap, unsigned long *);
-                        *ou = (unsigned long)v;
-                    }
-                    else if (lflag == -1)
-                    {
-                        unsigned short *ou = va_arg(ap, unsigned short *);
-                        *ou = (unsigned short)v;
-                    }
-                    else
-                    {
-                        unsigned int *ou = va_arg(ap, unsigned int *);
-                        *ou = (unsigned int)v;
-                    }
-
-                    asgn++;
-                }
-            }
-            else
-            {
-                long long v = strtoll(src, &endp, base);
-
-                if (endp == src)
-                {
-                    va_end(ap);
-
-                    return asgn ? asgn : -1;
-                }
-
-                if (!suppress)
-                {
-                    if (lflag == 2)
-                    {
-                        long long *oi = va_arg(ap, long long *);
-                        *oi = v;
-                    }
-                    else if (lflag == 1)
-                    {
-                        long *oi = va_arg(ap, long *);
-                        *oi = (long)v;
-                    }
-                    else if (lflag == -1)
-                    {
-                        short *oi = va_arg(ap, short *);
-                        *oi = (short)v;
-                    }
-                    else
-                    {
-                        int *oi = va_arg(ap, int *);
-                        *oi = (int)v;
-                    }
-
-                    asgn++;
-                }
-            }
-
-            if (width)
-            {
-                p = start + (endp - (char *)src);
-            }
-            else
-            {
-                p = endp;
-            }
-
-            nread = (int)(p - str);
-
-            continue;
-        }
-
-        if (c == 'f')
-        {
-            char tmp[128];
-            const char *start = p;
-            const char *src = p;
-            char *endp = (char *)p;
-
-            if (width)
-            {
-                int k = 0;
-
-                while (src[k] && k < width && k < (int)sizeof(tmp) - 1)
-                {
-                    tmp[k] = src[k];
-                    k++;
-                }
-
-                tmp[k] = '\0';
-                src = tmp;
-            }
-
-            double dv = strtod(src, &endp);
-
-            if (endp == src)
-            {
-                va_end(ap);
-
-                return asgn ? asgn : -1;
-            }
-
-            if (!suppress)
-            {
-                if (lflag == 1)
-                {
-                    double *od = va_arg(ap, double *);
-                    *od = dv;
-                }
-                else
-                {
-                    float *of = va_arg(ap, float *);
-                    *of = (float)dv;
-                }
-
-                asgn++;
-            }
-
-            if (width)
-            {
-                p = start + (endp - (char *)src);
-            }
-            else
-            {
-                p = endp;
-            }
-
-            nread = (int)(p - str);
-
-            continue;
-        }
-
-        break;
     }
-
-    va_end(ap);
-
-    return asgn;
+    if (snk.error) return -1;
+    return (int)snk.count;
 }
 
-int fprintf(FILE *stream, const char *fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
+int fprintf(FILE *stream, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
     int r = vfprintf(stream, fmt, ap);
     va_end(ap);
     return r;
 }
 
-int vfprintf(FILE *stream, const char *fmt, va_list ap)
-{
-    if (!is_valid_userspace_ptr(fmt, 1)) {
-        return -1;
-    }
-
-    FILE tmp;
-    struct filesink sink;
-    sink.f = coerce_stream(stream, &tmp, /*want_write=*/1);
-    sink.len = 0;
-
-    int out = vcbprintf(file_putch, &sink, fmt, ap);
-
-    if (sink.len) {
-        (void)fwrite(sink.buf, 1, sink.len, sink.f);
-        sink.len = 0;
-    }
-
-    return out;
+int printf(const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    int r = vfprintf(stdout, fmt, ap);
+    va_end(ap);
+    return r;
 }
+
+// ====== Misc ======
+
+int fputs(const char *s, FILE *stream) {
+    if (!s) return EOF;
+    size_t n = strlen(s);
+    size_t w = fwrite(s, 1, n, stream);
+    return (w == n) ? (int)n : EOF;
+}
+
+int fseek64(FILE *stream, long long off, int whence) {
+    // Om du har en 64-bit variant i kernel, använd den; annars fall tillbaka.
+    if ((off < LONG_MIN) || (off > LONG_MAX)) return -1;
+    return fseek(stream, (long)off, whence);
+}
+
+int fileno(FILE *stream) { stream = _coerce(stream, 0); return stream ? stream->impl->fd : -1; }
+
+// ====== Startup ======
+__attribute__((constructor))
+static void __stdio_constructor(void) {
+    _ensure_default_buffers();
+    // säkerställ att standardflaggor är rimliga
+    __stdin_impl.can_read  = 1; __stdin_impl.can_write = 0;
+    __stdout_impl.can_read = 0; __stdout_impl.can_write= 1;
+    __stderr_impl.can_read = 0; __stderr_impl.can_write= 1;
+    __stdin_impl.fd  = 0;
+    __stdout_impl.fd = 1;
+    __stderr_impl.fd = 2;
+}
+
+char *fgets(char *s, int size, FILE *fp)
+{
+    if (!s || size <= 0 || !fp) {
+        return NULL;
+    }
+
+    int i = 0;
+    while (i < size - 1) {
+        int c = fgetc(fp);
+        if (c == EOF) {
+            break;
+        }
+        s[i++] = (char)c;
+        if (c == '\n') {
+            break;
+        }
+    }
+
+    if (i == 0) {
+        // Läste inget alls (antingen EOF direkt eller size<=1)
+        return NULL;
+    }
+
+    s[i] = '\0';
+    return s;
+}
+

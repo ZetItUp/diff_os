@@ -4,6 +4,9 @@
 
 int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
+
     printf("Process Testing Program\n");
     thread_sleep_ms(200);
     printf("Process Testing Ended\n");

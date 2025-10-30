@@ -22,6 +22,7 @@
 #include "system/scheduler.h"
 #include "system/syscall.h"
 #include "system/process.h"
+#include "system/gdt.h"
 
 __attribute__((naked, section(".text.start")))
 void _start(void)
@@ -68,6 +69,7 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
     uint32_t ram_mb = (uint32_t)(total_ram / (1024 * 1024));
     system.ram_mb = ram_mb;
     
+    gdt_init();
     init_paging(ram_mb);
     init_heap(&__heap_start, &__heap_end);
 

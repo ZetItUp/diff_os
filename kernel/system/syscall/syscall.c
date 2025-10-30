@@ -253,27 +253,52 @@ static int system_exit(struct syscall_frame *f, int code)
     return 0;
 }
 
-// System call dispatcher
+/* -----------------------------------------------------------
+ * System call dispatcher
+ *  ABI: syscall_frame (pushad: EAX,ECX,EDX,EBX,ESP,EBP,ESI,EDI)
+ *       register-ABI primärt (EAX=nr, EBX/ECX/EDX/ESI=args)
+ *       fallback till stack-ABI [num,a0,a1,a2,a3] på USERESP
+ * ----------------------------------------------------------- */
 int system_call_dispatch(struct syscall_frame *f)
 {
     asm volatile("cld");
 
-    int num = (int)f->eax;
-    int arg0 = (int)f->ebx;
-    int arg1 = (int)f->ecx;
-    int arg2 = (int)f->edx;
-    int arg3 = (int)f->esi;
-
+    /* register-ABI (primärt) */
+    uint32_t num  = (uint32_t)f->eax;
+    uint32_t arg0 = (uint32_t)f->ebx;
+    uint32_t arg1 = (uint32_t)f->ecx;
+    uint32_t arg2 = (uint32_t)f->edx;
+    uint32_t arg3 = (uint32_t)f->esi;
     (void)arg3;
+
+    /* Om EAX inte är i enum-spannet, prova stack-ABI: [num, a0, a1, a2, a3] på useresp */
+    enum { SYS_MIN = SYSTEM_EXIT, SYS_MAX = SYSTEM_VIDEO_GET_GRAPHICS_MODE };
+    if (num < SYS_MIN || num > SYS_MAX)
+    {
+        uint32_t n2 = 0;
+        if (copy_from_user(&n2, (const void*)f->useresp, 4) == 0 &&
+            (n2 >= SYS_MIN && n2 <= SYS_MAX))
+        {
+            uint32_t s0=0,s1=0,s2=0,s3=0;
+            (void)copy_from_user(&s0, (const void*)(f->useresp +  4), 4);
+            (void)copy_from_user(&s1, (const void*)(f->useresp +  8), 4);
+            (void)copy_from_user(&s2, (const void*)(f->useresp + 12), 4);
+            (void)copy_from_user(&s3, (const void*)(f->useresp + 16), 4);
+            num  = n2; arg0 = s0; arg1 = s1; arg2 = s2; arg3 = s3;
+#ifdef DIFF_DEBUG
+            puts("[SYSCALL][compat] using stack ABI\n");
+#endif
+        }
+    }
 
     int ret = -1;
     int regs_set = 0;
 
-    switch (num)
+    switch ((int)num)
     {
         case SYSTEM_EXIT:
         {
-            ret = system_exit(f, arg0);
+            ret = system_exit(f, (int)arg0);
 
             break;
         }
@@ -286,18 +311,18 @@ int system_call_dispatch(struct syscall_frame *f)
 #ifdef DIFF_DEBUG
         puts("[SYSCALL][compat] PUTCHAR->PRINT\n");
 #endif
-                ret = system_print((const char*)arg0);
+                ret = system_print((const char*)(uintptr_t)arg0);
             }
             else
             {
-                ret = system_putchar(arg0);
+                ret = system_putchar((int)arg0);
             }
 
             break;
         }
         case SYSTEM_PRINT:
         {
-            const char *u = (const char*)arg0;
+            const char *u = (const char*)(uintptr_t)arg0;
 
             int n = try_user_cstr_len((uint32_t)arg0);
 
@@ -311,7 +336,7 @@ int system_call_dispatch(struct syscall_frame *f)
 #ifdef DIFF_DEBUG
     puts("[SYSCALL][compat] PRINT from ECX\n");
 #endif
-                    u = (const char*)arg1;
+                    u = (const char*)(uintptr_t)arg1;
                 }
                 else
                 {
@@ -352,8 +377,9 @@ int system_call_dispatch(struct syscall_frame *f)
         }
         case SYSTEM_CONSOLE_FLOOR_SET:
         {
-            int x = (f->ebx >> 16) & 0xFFFF;
-            int y = f->ebx & 0xFFFF;
+            /* använd arg0 enligt ABI, inte f->ebx direkt */
+            int x = (arg0 >> 16) & 0xFFFF;
+            int y =  arg0        & 0xFFFF;
 
             set_input_floor(x, y);
 
@@ -371,39 +397,39 @@ int system_call_dispatch(struct syscall_frame *f)
         }
         case SYSTEM_FILE_OPEN:
         {
-            ret = system_file_open((const char*)arg0, arg1, arg2);
+            ret = system_file_open((const char*)(uintptr_t)arg0, (int)arg1, (int)arg2);
 
             break;
         }
         case SYSTEM_FILE_CLOSE:
         {
-            ret = system_file_close(arg0);
+            ret = system_file_close((int)arg0);
 
             break;
         }
         case SYSTEM_FILE_SEEK:
         {
-            ret = (int)system_file_seek(arg0, (long)arg1, arg2);
+            ret = (int)system_file_seek((int)arg0, (long)arg1, (int)arg2);
 
             break;
         }
         case SYSTEM_FILE_READ:
         {
-            ret = (int)system_file_read(arg0, (void*)arg1, (unsigned long)(uint32_t)arg2);
+            ret = (int)system_file_read((int)arg0, (void*)(uintptr_t)arg1, (unsigned long)(uint32_t)arg2);
 
             break;
         }
         case SYSTEM_FILE_WRITE:
         {
-            ret = (int)system_file_write(arg0, (const void*)arg1, (unsigned long)(uint32_t)arg2);
+            ret = (int)system_file_write((int)arg0, (const void*)(uintptr_t)arg1, (unsigned long)(uint32_t)arg2);
 
             break;
         }
         case SYSTEM_EXEC_DEX:
         {
-            const char *upath = (const char*)arg0;
-            int argc = arg1;
-            char **uargv = (char**)arg2;
+            const char *upath = (const char*)(uintptr_t)arg0;
+            int argc = (int)arg1;
+            char **uargv = (char**)(uintptr_t)arg2;
             ret = 0;
 
             char kname[256];
@@ -517,19 +543,19 @@ int system_call_dispatch(struct syscall_frame *f)
         }
         case SYSTEM_DIR_OPEN:
         {
-            ret = system_open_dir((const char*)arg0);
+            ret = system_open_dir((const char*)(uintptr_t)arg0);
 
             break;
         }
         case SYSTEM_DIR_READ:
         {
-            ret = system_read_dir(arg0, (struct dirent*)arg1);
+            ret = system_read_dir((int)arg0, (struct dirent*)(uintptr_t)arg1);
 
             break;
         }
         case SYSTEM_DIR_CLOSE:
         {
-            ret = system_close_dir(arg0);
+            ret = system_close_dir((int)arg0);
 
             break;
         }
@@ -541,7 +567,7 @@ int system_call_dispatch(struct syscall_frame *f)
         }
         case SYSTEM_CONSOLE_GET_COLOR:
         {
-            ret = system_console_get_color((uint32_t*)arg0);
+            ret = system_console_get_color((uint32_t*)(uintptr_t)arg0);
 
             break;
         }
@@ -585,13 +611,13 @@ int system_call_dispatch(struct syscall_frame *f)
         }
         case SYSTEM_PROCESS_SPAWN:
         {
-            ret = system_process_spawn((const char*)arg0, arg1, (char**)arg2);
+            ret = system_process_spawn((const char*)(uintptr_t)arg0, (int)arg1, (char**)(uintptr_t)arg2);
 
             break;
         }
         case SYSTEM_WAIT_PID:
         {
-            int pid = arg0;
+            int pid = (int)arg0;
             int *u_status = (int*)(uintptr_t)arg1;
 
             ret = system_wait_pid(pid, u_status);
@@ -600,20 +626,20 @@ int system_call_dispatch(struct syscall_frame *f)
         } 
         case SYSTEM_FILE_STAT:
         {
-            ret = system_file_stat((const char*)arg0, (filesystem_stat_t*)arg1);
+            ret = system_file_stat((const char*)(uintptr_t)arg0, (filesystem_stat_t*)(uintptr_t)arg1);
 
             break;
         }
         case SYSTEM_FILE_FSTAT:
         {
-            ret = system_file_fstat(arg0, (filesystem_stat_t*)arg1);
+            ret = system_file_fstat((int)arg0, (filesystem_stat_t*)(uintptr_t)arg1);
 
             break;
         }
         case SYSTEM_VIDEO_PRESENT:
         {
-            // arg0 = user point, arg1 = pitch bytes, arg2 = (w << 16) | h
-            ret = system_video_present_user((const void*)arg0, arg1, arg2);
+            // arg0 = user ptr, arg1 = pitch bytes, arg2 = (w << 16) | h
+            ret = system_video_present_user((const void*)(uintptr_t)arg0, (int)arg1, (int)arg2);
 
             break;
         }
@@ -625,7 +651,7 @@ int system_call_dispatch(struct syscall_frame *f)
         }
         case SYSTEM_BREAK:
         {
-            ret = system_brk_set((void*)arg0);
+            ret = system_brk_set((void*)(uintptr_t)arg0);
 
             break;
         }
@@ -645,6 +671,11 @@ int system_call_dispatch(struct syscall_frame *f)
         {
             puts("[System Call] Unknown number: ");
             puthex(num);
+            puts("  eax="); puthex(f->eax);
+            puts(" ebx="); puthex(f->ebx);
+            puts(" ecx="); puthex(f->ecx);
+            puts(" edx="); puthex(f->edx);
+            puts(" useresp="); puthex(f->useresp);
             puts("\n");
 
             ret = -1;

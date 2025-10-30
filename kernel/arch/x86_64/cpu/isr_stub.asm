@@ -2,6 +2,7 @@
 global  system_call_stub
 extern  system_call_dispatch
 
+%define KERNEL_DS 0x10
 section .text
 
 ; =========================
@@ -164,35 +165,60 @@ irq_common_stub:
 
 
 ; =========================
-; Syscall stub (t.ex. int 0x66/0x80)
-; DPL för denna gate ska vara 3 i IDT. Övriga gates DPL=0.
+; Syscall stub (int 0x66): bygg RAM = syscall_frame
+;  pushad:  EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI
+;  segment: GS, FS, ES, DS
+;  CPU:     EIP, CS, EFLAGS, USERESP, SS
 ; =========================
 system_call_stub:
     cld
-    push ds
-    push es
-    push fs
-    push gs
-    pushad
-    
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
+    ; CPU har redan pushat EIP,CS,EFLAGS,USERESP,SS
 
-    mov eax, esp         
-    push eax
-    call system_call_dispatch
-    add  esp, 4
+    ; --- Spara GPR i exakt pushad-ordning (matchar syscall_frame) ---
+    pushad                   ; EAX,ECX,EDX,EBX,ESP,EBP,ESI,EDI
 
-    ;mov [esp + 4*7], eax
+    ; --- Spara segmentvärden i ordningen GS,FS,ES,DS (matchar syscall_frame) ---
+    push    gs
+    push    fs
+    push    es
+    push    ds
 
-    popad
-    pop gs
-    pop fs
-    pop es
-    pop ds
+    ; Kör C med kernel-DS/ES
+    mov     ax, KERNEL_DS
+    mov     ds, ax
+    mov     es, ax
+
+    ; Skicka PEKAREN till början av pushad-blocket (hoppa över 4 segment-dwords)
+    lea     eax, [esp + 16]
+    push    eax
+    call    system_call_dispatch
+    add     esp, 4
+
+    ; Läs tillbaka returregister ur ramen (pushad-layout) – EAX-blocket ligger på [esp+16]
+    mov     eax, [esp + 16 + 0]     ; eax
+    mov     ecx, [esp + 16 + 4]     ; ecx
+    mov     edx, [esp + 16 + 8]     ; edx
+    mov     ebx, [esp + 16 + 12]    ; ebx
+    mov     ebp, [esp + 16 + 20]    ; ebp
+    mov     esi, [esp + 16 + 24]    ; esi
+    mov     edi, [esp + 16 + 28]    ; edi
+
+    ; Återställ user-segment före iretd (vi sparade dem ovan)
+    mov     ax, [esp + 0]           ; ds sparad överst (pga push ds sist)
+    mov     ds, ax
+    mov     ax, [esp + 4]           ; es
+    mov     es, ax
+    mov     ax, [esp + 8]           ; fs
+    mov     fs, ax
+    mov     ax, [esp + 12]          ; gs
+    mov     gs, ax
+
+    ; Kasta segmentorden
+    add     esp, 16
+
+    ; Kasta pushad-blocket
+    add     esp, 32
+
     iretd
 
 

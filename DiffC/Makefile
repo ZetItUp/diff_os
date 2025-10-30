@@ -1,54 +1,74 @@
-# DiffC - Minimal libc for Different OS (EN FIL: diffc.exl)
+# DiffC - bygger diffc.exl och loggar elf2exl-output till build_diffc.txt
 
-CC        := i386-elf-gcc
-LD        := i386-elf-ld
-PYTHON    := python3
-ELF2DEX   := elf2dexlib.py
+SHELL        := /bin/sh
+.ONESHELL:
+.SHELLFLAGS  := -eu -o pipefail -c
+.SILENT:
 
-CFLAGS    := -ffreestanding -nostdlib -Wall -Wextra -O2 -Iinclude/
-SRCDIR    := source
-OBJDIR    := build
-EXLDIR    := exls
-IMAGE_EXL := ../image/system/exls
+# Loggfil (i samma katalog som denna Makefile)
+LOGFILE      := $(CURDIR)/build_diffc.txt
 
-LIBNAME   := diffc.exl
-VERBOSE   = 1
-IMPORT_EXL ?=
+# Verktyg
+CC           := i386-elf-gcc
+LD           := i386-elf-ld
+AR           := i386-elf-ar
+PYTHON       := python3
+ELF2EXL      := ../tools/elf2exl.py
 
-# --- Rekursiv wildcard för alla .c under source/
-rwildcard = $(foreach d,$(wildcard $(1)/*),$(call rwildcard,$(d),$(2))) $(wildcard $(1)/$(2))
-SRCS      := $(call rwildcard,$(SRCDIR),*.c)
+# Namn och sökvägar
+LIBNAME      := diffc.exl
+SRCDIR       := source
+INCDIR       := include
+OBJDIR       := build
+EXLDIR       := exls
+IMAGE_EXL    := ../image/system/exls
 
-OBJS      := $(SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+# Flaggor (freestanding lib, inga libc-beroenden)
+CFLAGS       := -ffreestanding -fno-builtin -Wall -Wextra -O2 -I$(INCDIR)
+LDFLAGS      := -r
 
-.PHONY: all clean exldir image_exl
+# Hitta källor rekursivt
+SRCS         := $(shell find $(SRCDIR) -type f -name '*.c')
+OBJS         := $(patsubst %.c,$(OBJDIR)/%.o,$(SRCS))
+ELF_OUT      := $(OBJDIR)/libdiffc.elf
+EXL_OUT      := $(EXLDIR)/$(LIBNAME)
 
-all: $(EXLDIR)/$(LIBNAME) image_exl
+.PHONY: all clean install exldir loginit
 
-print:
-	@echo SRCS=$(SRCS)
-	@echo OBJS=$(OBJS)
+all: loginit $(EXL_OUT)
+	@mkdir -p "$(IMAGE_EXL)"
+	cp "$(EXL_OUT)" "$(IMAGE_EXL)/"
 
-# Byggregel som funkar för undermappar
-$(OBJDIR)/%.o: $(SRCDIR)/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+# Truncar loggfilen i början av bygget
+loginit:
+	@echo -n > "$(LOGFILE)"
 
-$(OBJDIR)/libdiffc.elf: $(OBJS)
-	$(LD) -r -o $@ $^
-
+# EXL-katalog
 exldir:
-	@mkdir -p $(EXLDIR)
+	@mkdir -p "$(EXLDIR)"
 
-# Bygg EXL från ELF
-$(EXLDIR)/$(LIBNAME): $(OBJDIR)/libdiffc.elf exldir $(ELF2DEX)
-	@rm -f $@
-	$(PYTHON) $(ELF2DEX) $< $@ $(LIBNAME) $(if $(IMPORT_EXL),--import-exl $(IMPORT_EXL)) $(if $(VERBOSE),--verbose)
+# Byggobjekt
+$(OBJDIR)/%.o: %.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CFLAGS) -c "$<" -o "$@"
 
-image_exl: $(EXLDIR)/$(LIBNAME)
-	@mkdir -p $(IMAGE_EXL)
-	cp $< $(IMAGE_EXL)/
+# Länka ihop till en sammanslagen ELF (relokatbar)
+$(ELF_OUT): $(OBJS)
+	@mkdir -p "$(dir $@)"
+	$(LD) $(LDFLAGS) -o "$@" $(OBJS)
+
+# Konvertera ELF -> EXL och logga all output till build_diffc.txt
+# Stöd för valfri SYM2EXL: make SYM2EXL=libmap.json
+$(EXL_OUT): $(ELF_OUT) exldir $(ELF2EXL)
+	@rm -f "$@"
+ifneq ($(strip $(SYM2EXL)),)
+	$(PYTHON) "$(ELF2EXL)" "$<" -o "$@" --default-exl "$(LIBNAME)" --sym2exl "$(SYM2EXL)" 2>&1 | tee -a "$(LOGFILE)"
+else
+	$(PYTHON) "$(ELF2EXL)" "$<" -o "$@" --default-exl "$(LIBNAME)" 2>&1 | tee -a "$(LOGFILE)"
+endif
+	@echo "EXL klar: $(LIBNAME)"
 
 clean:
-	rm -rf $(OBJDIR) $(EXLDIR) $(IMAGE_EXL)/$(LIBNAME)
+	@rm -rf "$(OBJDIR)" "$(EXLDIR)"
+	@rm -f "$(IMAGE_EXL)/$(LIBNAME)" 2>/dev/null || true
 

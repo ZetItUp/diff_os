@@ -1,54 +1,121 @@
 [BITS 32]
+extern GDT_USER_CS_SEL
+extern GDT_USER_DS_SEL
 
 global enter_user_mode
-extern thread_exit
+global enter_user_mode_ex
 
-%define USER_CS  0x1B
-%define USER_DS  0x23
+%define USER_BASE        0x40000000
+%define EFLAGS_IF        0x00000200
+%define EFLAGS_RF        0x00010000
+%define EFLAGS_IOPL      0x00003000
 
-section .text
+; ---------------------------------------------------------
+; Konfig: IOPL för användarläge (0 = strikt, 3 = tillåt in/out i ring3)
+; Detta behövs i din miljö eftersom user-koden gör IN/OUT omedelbart.
+; ---------------------------------------------------------
+%ifndef USR_IOPL_LEVEL
+%define USR_IOPL_LEVEL   3
+%endif
 
-; void enter_user_mode(uint32_t entry_eip, uint32_t user_stack_top)
+%if USR_IOPL_LEVEL = 0
+%define USR_IOPL_BITS    0x00000000
+%elif USR_IOPL_LEVEL = 1
+%define USR_IOPL_BITS    0x00001000
+%elif USR_IOPL_LEVEL = 2
+%define USR_IOPL_BITS    0x00002000
+%elif USR_IOPL_LEVEL = 3
+%define USR_IOPL_BITS    0x00003000
+%else
+%error "USR_IOPL_LEVEL must be 0..3"
+%endif
+
+; enter_user_mode(entry_eip, user_stack_top)
 enter_user_mode:
-    cld
+    push    ebp
+    mov     ebp, esp
 
-    ; Enable SSE in CR0/CR4: set OSFXSR/OSXMMEXCPT, clear EM, set MP
-    mov     eax, cr4
-    or      eax, (1 << 9) | (1 << 10)     ; OSFXSR=1, OSXMMEXCPT=1
-    mov     cr4, eax
+    ; Vi vill ha IF=1 och RF=1 (samma som tidigare),
+    ; men EFLAGS_IOPL hanteras i enter_user_mode_ex via USR_IOPL_LEVEL
+    push    dword 0                        ; clr_mask
+    push    dword (EFLAGS_IF|EFLAGS_RF)    ; set_mask
+    push    dword [ebp+12]                 ; user_stack_top
+    push    dword [ebp+8]                  ; entry_eip
+    call    enter_user_mode_ex
+    add     esp, 16
 
-    mov     eax, cr0
-    and     eax, ~(1 << 2)                ; EM=0 (no emulation)
-    or      eax,  (1 << 1)                ; MP=1 (monitor coprocessor)
-    mov     cr0, eax
+    mov     esp, ebp
+    pop     ebp
+    ret
 
-    ; Init x87/SSE state and set MXCSR to default (0x1F80)
-    fninit
-    sub     esp, 4
-    mov     dword [esp], 0x1F80
-    ldmxcsr [esp]
-    add     esp, 4
+; enter_user_mode_ex(entry, user_esp, set_mask, clr_mask) noreturn
+;  - Bygger EFLAGS från nuvarande, applicerar clr/set, FORCERAR bit1=1,
+;    OCH sätter IOPL enligt USR_IOPL_LEVEL (default 3 för att undvika #GP på IN/OUT).
+;  - Preloadar DS/ES/FS/GS med user-DS|3 för att undvika segmenttrash efter iret.
+;  - Verifierar att både EIP och ESP ligger i user-VA (>= USER_BASE).
+enter_user_mode_ex:
+    push    ebp
+    mov     ebp, esp
 
-    ; Load user data segments (DPL=3)
-    mov     ax, USER_DS
-    mov     ds, ax
-    mov     es, ax
-    mov     fs, ax
-    mov     gs, ax
-    mov     eax, [esp + 4]                ; entry_eip
-    mov     ecx, [esp + 8]                ; user_stack_top
+    ; Plocka argument till STABILA register
+    mov     edi, [ebp+8]           ; EDI = entry_eip
+    mov     ebx, [ebp+12]          ; EBX = user_stack_top
 
-    ; Build IRET frame: SS, ESP, EFLAGS, CS, EIP
-    push    dword USER_DS
-    push    ecx
+    ; Sanity: kräver user-VA
+    cmp     edi, USER_BASE
+    jb      .bad_eip
+    cmp     ebx, USER_BASE
+    jb      .bad_esp
+
+    ; Selectorer (OR med RPL=3)
+    movzx   ecx, word [GDT_USER_CS_SEL]
+    or      ecx, 3                 ; ECX = USER_CS|3
+    movzx   esi, word [GDT_USER_DS_SEL]
+    or      esi, 3                 ; ESI = USER_DS|3
+
+    ; Bygg EFLAGS i EAX: (kernelflags & ~clr) | set
     pushfd
-    or      dword [esp], 0x200            ; IF=1
-    push    dword USER_CS
-    push    eax
+    pop     eax
+
+    mov     edx, [ebp+20]          ; clr_mask
+    not     edx
+    and     eax, edx               ; maska bort clr
+    or      eax, [ebp+16]          ; lägg på set
+
+    ; Bit 1 måste alltid vara satt
+    or      eax, 0x00000002
+
+    ; Rensa IOPL-bitarna och sätt enligt USR_IOPL_LEVEL (0..3)
+    and     eax, (0xFFFFFFFF ^ EFLAGS_IOPL)
+    or      eax, USR_IOPL_BITS
+
+    ; Preload DS/ES/FS/GS med user-DS (ok i ring0 -> lägre privilegier, DPL=3)
+    mov     dx, si                 ; DX = USER_DS|3
+    mov     ds, dx
+    mov     es, dx
+    mov     fs, dx
+    mov     gs, dx
+
+    ; Viktigt: IRQ:er slås av här; IF i EFLAGS bestämmer om de slås på i ring3
+    cli
+
+    ; IRET-ram: SS, ESP, EFLAGS, CS, EIP (överst)
+    push    dword esi              ; SS (user DS|3)
+    push    dword ebx              ; ESP (user stack top)
+    push    dword eax              ; EFLAGS med IF, RF och IOPL enligt policy
+    push    dword ecx              ; CS (user CS|3)
+    push    dword edi              ; EIP (entry)
+
+    ; Byt CPL till 3
     iretd
 
-    ; Should never return; terminate thread if it does
-    call    thread_exit
+.bad_eip:
+    ; Hårt stopp vid felaktig EIP – behåll samma signatur som tidigare (noreturn)
     hlt
-    jmp     $
+    jmp     .bad_eip
+
+.bad_esp:
+    ; Hårt stopp vid felaktig ESP
+    hlt
+    jmp     .bad_esp
 

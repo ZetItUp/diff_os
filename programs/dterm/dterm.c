@@ -383,8 +383,14 @@ static int run_external(int argc, char **argv)
 }
 
 
-int main(void)
+int main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
+    
+    puts("[dterm] preinit"); 
+    fflush(NULL); 
+    
     if (!cmdreg_init("/system/commands.map")) {
         puts("[CRITICAL ERROR] Unable to initialize command registry!");
         /* Om kommandoregistret inte finns är det meningslöst att fortsätta. */
@@ -416,18 +422,18 @@ int main(void)
             continue;
         }
 
-        char *argv[16];
-        int argc = tokenize(line, argv, 16);
+        char *_argv[16];
+        int _argc = tokenize(line, _argv, 16);
         
-        if (argc == 0)
+        if (_argc == 0)
         {
             continue;
         }
 
-        int rc = run_builtin(argc, argv);
+        int rc = run_builtin(_argc, _argv);
         if (rc == 1) 
         {
-            run_external(argc, argv);
+            run_external(_argc, _argv);
         }
 
         printf("\n");

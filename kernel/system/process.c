@@ -21,6 +21,33 @@
 
 extern void enter_user_mode(uint32_t entry_eip, uint32_t user_stack_top) __attribute__((noreturn));
 
+static inline uint32_t read_cr0(void) { uint32_t v; __asm__ volatile("mov %%cr0,%0":"=r"(v)); return v; }
+static inline void     write_cr0(uint32_t v){ __asm__ volatile("mov %0,%%cr0"::"r"(v)); }
+static inline uint32_t read_cr4(void) { uint32_t v; __asm__ volatile("mov %%cr4,%0":"=r"(v)); return v; }
+static inline void     write_cr4(uint32_t v){ __asm__ volatile("mov %0,%%cr4"::"r"(v)); }
+
+static void sse_enable_once(void)
+{
+    /* CR0: ställ in MP=1, EM=0 (ingen emulering), [TS=0 om den skulle vara satt] */
+    uint32_t cr0 = read_cr0();
+    cr0 |=  (1u<<1);   /* MP */
+    cr0 &= ~(1u<<2);   /* EM */
+    cr0 &= ~(1u<<3);   /* TS */
+    write_cr0(cr0);
+
+    /* CR4: OSFXSR=1 och OSXMMEXCPT=1 så OS:et får använda FXSAVE/FXRSTOR + SSE exceptions */
+    uint32_t cr4 = read_cr4();
+    cr4 |= (1u<<9);    /* OSFXSR */
+    cr4 |= (1u<<10);   /* OSXMMEXCPT */
+    write_cr4(cr4);
+
+    /* Nolla FPU/SSE till definierat läge */
+    __asm__ volatile ("fninit");
+#ifdef DIFF_DEBUG
+    DDBG("[PROC] SSE enabled (CR0=%08x CR4=%08x)\n", cr0, cr4);
+#endif
+}
+
 // Read CR3 of current CPU
 uint32_t read_cr3_local(void)
 {
@@ -51,6 +78,9 @@ static void process_unlink_from_all(process_t *p)
     {
         g_all_head = p->next;
 
+#ifdef DIFF_DEBUG
+        DDBG("[PROC] unlink head pid=%d\n", p->pid);
+#endif
         return;
     }
 
@@ -60,17 +90,28 @@ static void process_unlink_from_all(process_t *p)
         {
             it->next = p->next;
 
+#ifdef DIFF_DEBUG
+            DDBG("[PROC] unlink pid=%d after pid=%d\n", p->pid, it->pid);
+#endif
             return;
         }
     }
 
     p->next = NULL;
+#ifdef DIFF_DEBUG
+    DDBG("[PROC][WARN] unlink: pid=%d not found in list\n", p->pid);
+#endif
 }
 
 // Destroy process and free resources (kernel side only)
 void process_destroy(process_t *p)
 {
     if (!p) return;
+
+#ifdef DIFF_DEBUG
+    DDBG("[PROC] destroy pid=%d state=%d cr3=%08x parent=%p\n",
+         p->pid, p->state, p->cr3, (void*)p->parent);
+#endif
 
     // Vi får inte förstöra en fortfarande RUNNING process här.
     if (p->state == PROCESS_RUNNING) {
@@ -95,11 +136,17 @@ void process_destroy(process_t *p)
         // Om vi står i samma CR3 som vi ska riva -> hoppa till kernel först.
         uint32_t kcr3 = (uint32_t)paging_kernel_cr3_phys();
         if (read_cr3_local() == victim) {
+#ifdef DIFF_DEBUG
+            DDBG("[PROC] destroy: switching CR3 victim->kernel %08x -> %08x\n", victim, kcr3);
+#endif
             paging_switch_address_space(kcr3);
         }
 
         // Själva rivningen av PD/tabellerna:
         paging_destroy_address_space(victim);
+#ifdef DIFF_DEBUG
+        DDBG("[PROC] destroy: address space %08x destroyed\n", victim);
+#endif
     }
 
     // Fria PCB
@@ -107,6 +154,9 @@ void process_destroy(process_t *p)
 
     // Återställ CR3 exakt som det var.
     if (read_cr3_local() != cr3_before) {
+#ifdef DIFF_DEBUG
+        DDBG("[PROC] destroy: restoring CR3 %08x\n", cr3_before);
+#endif
         paging_switch_address_space(cr3_before);
     }
 }
@@ -115,6 +165,9 @@ static void process_link(process_t *p)
 {
     p->next = g_all_head;
     g_all_head = p;
+#ifdef DIFF_DEBUG
+    DDBG("[PROC] link pid=%d (head=%d)\n", p->pid, g_all_head ? g_all_head->pid : -1);
+#endif
 }
 
 // Allocate zeroed process object
@@ -129,27 +182,48 @@ static process_t *process_alloc(void)
 
     memset(p, 0, sizeof(*p));
 
+#ifdef DIFF_DEBUG
+    DDBG("[PROC] alloc pcb=%p\n", (void*)p);
+#endif
+
     return p;
 }
 
-// Switch to user address space and jump to user mode
+// --- i user_bootstrap(): ersätt hela funktionen ---
 static void user_bootstrap(void *arg)
 {
     user_boot_args_t *a = (user_boot_args_t *)arg;
 
-    uint32_t entry_eip = a->eip; // Entry instruction pointer
-    uint32_t user_esp = a->esp;  // User stack pointer
-    uint32_t user_cr3 = a->cr3;  // Address space
+    uint32_t entry_eip = a->eip;
+    uint32_t user_esp  = a->esp;
+    uint32_t user_cr3  = a->cr3;
+
+    DDBG("[PROC] user_bootstrap: pid=%d eip=%08x esp=%08x cr3=%08x\n",
+         process_current() ? process_current()->pid : -1,
+         entry_eip, user_esp, user_cr3);
 
     kfree(a);
 
-    // Activate user address space
+    uint32_t before = read_cr3_local();
+    if (before != user_cr3) {
+        DDBG("[PROC] CR3 switch (bootstrap): %08x -> %08x\n", before, user_cr3);
+    }
+
+    // Aktivera userspace
     paging_switch_address_space(user_cr3);
 
-    // Enter user mode and never return
+    uint32_t after = read_cr3_local();
+    DDBG("[PROC] enter_user_mode: eip=%08x esp=%08x cr3(now)=%08x\n",
+         entry_eip, user_esp, after);
+
+    // In i ring3 och kom aldrig tillbaka
     enter_user_mode(entry_eip, user_esp);
 
-    // Safety fallback
+    // Om vi ändå skulle hamna här: logga och dö tråden
+    DDBG("[PROC][WARN] enter_user_mode returned! tid=%d pid=%d\n",
+         current_thread() ? current_thread()->thread_id : -1,
+         process_current() ? process_current()->pid : -1);
+
     thread_exit();
 }
 
@@ -164,6 +238,8 @@ void process_init(void)
 
         return;
     }
+
+    sse_enable_once();
 
     // Set kernel process fields
     k->pid = 0;
@@ -210,6 +286,11 @@ process_t *process_create_kernel(void (*entry)(void *),
     p->waiter = NULL;
 
     process_link(p);
+
+#ifdef DIFF_DEBUG
+    DDBG("[PROC] create_kernel: pid=%d parent=%d cr3=%08x entry=%p kstack=%u\n",
+         p->pid, p->parent ? p->parent->pid : -1, p->cr3, (void*)entry, (unsigned)kstack_bytes);
+#endif
 
     // Create main thread
     int thread_id = thread_create_for_process(p, entry, argument, kstack_bytes);
@@ -263,8 +344,16 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
     args->esp = user_esp;
     args->cr3 = cr3;
 
+#ifdef DIFF_DEBUG
+    DDBG("[PROC] create_user_with_cr3: pid=%d eip=%08x esp=%08x cr3=%08x parent=%d\n",
+         p->pid, user_eip, user_esp, cr3, p->parent ? p->parent->pid : -1);
+#endif
+
     // Create bootstrap thread that enters user mode
     int thread_id = thread_create_for_process(p, user_bootstrap, args, kstack_bytes);
+
+    DDBG("[PROC] create_user_with_cr3: pid=%d child_tid=%d eip=%08x esp=%08x cr3=%08x\n",
+         p->pid, thread_id, user_eip, user_esp, cr3);
 
     if (thread_id < 0)
     {
@@ -292,6 +381,10 @@ process_t *process_create_user(uint32_t user_eip,
         return NULL;
     }
 
+#ifdef DIFF_DEBUG
+    DDBG("[PROC] create_user: new_cr3=%08x\n", new_cr3);
+#endif
+
     return process_create_user_with_cr3(user_eip, user_esp, new_cr3, kstack_bytes);
 }
 
@@ -304,6 +397,9 @@ void process_exit_current(int exit_code)
     {
         // Store exit code for wait()
         p->exit_code = exit_code;
+#ifdef DIFF_DEBUG
+        DDBG("[PROC] exit_current: pid=%d code=%d\n", p->pid, exit_code);
+#endif
     }
 
     // End current thread, scheduler will handle process state
@@ -319,6 +415,10 @@ process_t *process_current(void)
 // Set current process
 void process_set_current(process_t *p)
 {
+#ifdef DIFF_DEBUG
+    DDBG("[PROC] set_current: pid=%d (prev=%d)\n",
+         p ? p->pid : -1, g_current ? g_current->pid : -1);
+#endif
     g_current = p;
 }
 
@@ -351,10 +451,16 @@ process_t *process_find_by_pid(int pid)
     {
         if (it->pid == pid)
         {
+#ifdef DIFF_DEBUG
+            DDBG("[PROC] find_by_pid(%d) -> %p\n", pid, (void*)it);
+#endif
             return it;
         }
     }
 
+#ifdef DIFF_DEBUG
+    DDBG("[PROC] find_by_pid(%d) -> NULL\n", pid);
+#endif
     return NULL;
 }
 
@@ -365,17 +471,30 @@ int system_wait_pid(int pid, int *u_status)
     process_t *child = process_find_by_pid(pid);
 
     if (!self || !child) {
+#ifdef DIFF_DEBUG
+        DDBG("[WAITPID][ERR] self=%p child=%p\n", (void*)self, (void*)child);
+#endif
         return -1;
     }
     if (child->parent != self) {
+#ifdef DIFF_DEBUG
+        DDBG("[WAITPID][ERR] pid=%d is not a child of self pid=%d\n", pid, self->pid);
+#endif
         return -1; // inte ditt barn
     }
 
     // Endast en waiter per barn
     if (child->waiter && child->waiter != current_thread()) {
+#ifdef DIFF_DEBUG
+        DDBG("[WAITPID][ERR] child pid=%d already waited by tid=%p\n", child->pid, (void*)child->waiter);
+#endif
         return -1;
     }
     child->waiter = current_thread();
+
+#ifdef DIFF_DEBUG
+    DDBG("[WAITPID] waiting for pid=%d ...\n", child->pid);
+#endif
 
     // Vänta tills barnet är ZOMBIE och har inga levande trådar kvar
     while (child->state != PROCESS_ZOMBIE || child->live_threads != 0) {
@@ -394,6 +513,10 @@ int system_wait_pid(int pid, int *u_status)
     const int status  = child->exit_code;
     const int ret_pid = child->pid;
 
+#ifdef DIFF_DEBUG
+    DDBG("[WAITPID] pid=%d exited code=%d, copying status to user %p\n", ret_pid, status, (void*)u_status);
+#endif
+
     // *** Viktigt: skriv status till förälderns userspace med FÖRÄLDERNS CR3 aktiv ***
     if (u_status) {
         int cpy_rc = 0;
@@ -401,6 +524,9 @@ int system_wait_pid(int pid, int *u_status)
 
         // Växla till förälderns adressrymd om nödvändigt
         if (saved_cr3 != self->cr3) {
+#ifdef DIFF_DEBUG
+            DDBG("[WAITPID] switch CR3 for copy: %08x -> %08x\n", saved_cr3, self->cr3);
+#endif
             paging_switch_address_space(self->cr3);
         }
 
@@ -409,6 +535,9 @@ int system_wait_pid(int pid, int *u_status)
         // Växla tillbaka till tidigare CR3 om vi bytte
         if (saved_cr3 != self->cr3) {
             paging_switch_address_space(saved_cr3);
+#ifdef DIFF_DEBUG
+            DDBG("[WAITPID] restore CR3=%08x\n", saved_cr3);
+#endif
         }
 
         if (cpy_rc != 0) {
@@ -421,12 +550,18 @@ int system_wait_pid(int pid, int *u_status)
 
     // NU är det säkert att riva barnets userspace och PCB
     if (child->cr3) {
+#ifdef DIFF_DEBUG
+        DDBG("[WAITPID] freeing child userspace cr3=%08x\n", child->cr3);
+#endif
         paging_free_all_user_in(child->cr3);
     }
 
     exl_invalidate_for_cr3(child->cr3);
     process_destroy(child);
 
+#ifdef DIFF_DEBUG
+    DDBG("[WAITPID] done -> pid=%d\n", ret_pid);
+#endif
     return ret_pid;
 }
 
@@ -438,6 +573,9 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
 
     if (copy_user_cstr(&kpath, upath, 256) != 0)
     {
+#ifdef DIFF_DEBUG
+        DDBG("[PROC][SPAWN][ERR] copy_user_cstr failed\n");
+#endif
         return -1;
     }
 
@@ -447,9 +585,15 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
     if (copy_user_argv(argc, uargv, &kargv) != 0)
     {
         kfree(kpath);
-
+#ifdef DIFF_DEBUG
+        DDBG("[PROC][SPAWN][ERR] copy_user_argv failed\n");
+#endif
         return -1;
     }
+
+#ifdef DIFF_DEBUG
+    DDBG("[PROC][SPAWN] path='%s' argc=%d\n", kpath, argc);
+#endif
 
     // Create process
     int pid = dex_spawn_process(file_table, kpath, argc, kargv);
@@ -457,6 +601,10 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
     // Free temporary buffers
     free_kargv(kargv);
     kfree(kpath);
+
+#ifdef DIFF_DEBUG
+    DDBG("[PROC][SPAWN] -> pid=%d\n", pid);
+#endif
 
     return pid;
 }

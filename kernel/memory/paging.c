@@ -22,6 +22,11 @@
 #define UMEM_PINNED        (1u << 3)
 #define UMEM_PAGEALIGNED   (1u << 4)
 
+#ifndef KERN_ALIAS_MB
+#define KERN_ALIAS_MB 16u   /* 16 MiB räcker gott för IDT + text + data */
+#endif
+
+
 #define PAGE_SIZE_4K  PAGE_SIZE_4KB
 #define ALIGN_UP(x, a)   (((x) + ((a) - 1)) & ~((a) - 1))
 #define ALIGN_DOWN(x, a) ((x) & ~((a) - 1))
@@ -104,6 +109,54 @@ static inline int is_user_addr_inline(uint32_t vaddr)
 int is_user_addr(uint32_t vaddr)
 {
     return is_user_addr_inline(vaddr);
+}
+
+static void mirror_kernel_low_into_high(uint32_t *pd)
+{
+    /* antal 4MB-block att spegla */
+    uint32_t blocks = (KERN_ALIAS_MB + (BLOCK_SIZE/1024/1024 - 1)) / (BLOCK_SIZE/1024/1024);
+    if (blocks == 0) return;
+    if (blocks > 512) blocks = 512; /* övre gräns */
+
+    /* källa: låg-identity (DI 0..blocks-1), mål: 0x80000000 (DI 512..) */
+    for (uint32_t i = 0; i < blocks; i++)
+    {
+        uint32_t src = pd[i];
+        if (!(src & PAGE_PRESENT)) continue;
+
+        /* Rensa USER-flaggan, sätt GLOBAL (om inte redan) */
+        uint32_t dst = (src & ~PAGE_USER) | PAGE_GLOBAL;
+
+        pd[512u + i] = dst;
+    }
+}
+
+static void clear_user_pdes(uint32_t *pd)
+{
+    uint32_t udi_start = (USER_MIN >> 22);
+    uint32_t udi_end   = ((USER_MAX - 1) >> 22);
+    for (uint32_t di = udi_start; di <= udi_end; di++)
+        pd[di] = 0;
+}
+
+static int install_pd_selfmap(uint32_t *new_pd, uint32_t new_pd_phys)
+{
+    uint32_t pd_va = (uint32_t)(uintptr_t)page_directory;   /* nuvarande PD VA */
+    uint32_t di = pd_va >> 22;
+    uint32_t ti = (pd_va >> 12) & 0x3FFu;
+
+    uint32_t pde = new_pd[di];
+    if (!(pde & PAGE_PRESENT) || (pde & PAGE_PS))
+    {
+        printf("[PAGING] new_address_space: kernel PT missing or 4MB at di=%u (pde=%08x)\n", di, pde);
+        return -1;
+    }
+
+    uint32_t pt_phys = pde & 0xFFFFF000u;
+    uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 0xFEED0001); /* godtycklig slot */
+    pt[ti] = (new_pd_phys & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW;
+    kunmap_phys(0xFEED0001);
+    return 0;
 }
 
 // Core VA->PA translate used by kernel hexdump
@@ -1494,6 +1547,7 @@ uintptr_t paging_kernel_cr3_phys(void) { return (uintptr_t)s_kernel_cr3_phys; }
 
 uint32_t paging_new_address_space(void)
 {
+    /* 1) Allokera ny PD (4 KiB) */
     uint32_t pd_phys = alloc_phys_page();
     if (!pd_phys)
     {
@@ -1501,39 +1555,27 @@ uint32_t paging_new_address_space(void)
         return 0;
     }
 
-    uint32_t *new_pd = (uint32_t*)kmap_phys(pd_phys, 0);
+    /* 2) Kopiera hela nuvarande PD som bas */
+    uint32_t *new_pd = (uint32_t*)kmap_phys(pd_phys, 0xFEED0000);
     for (int i = 0; i < 1024; i++)
         new_pd[i] = page_directory[i];
 
-    uint32_t pd_va = (uint32_t)(uintptr_t)page_directory;
-    uint32_t pd_di = pd_va >> 22;
+    /* 3) Töm ALLT användarutrymme så att varje process börjar rent */
+    clear_user_pdes(new_pd);
 
-    uint32_t keep_until = ALIGN_UP((uint32_t)(uintptr_t)&__heap_end + PAGE_SIZE_4KB, BLOCK_SIZE);
-    uint32_t udi_start  = (keep_until >> 22);
-    if (udi_start < (USER_MIN >> 22))
-        udi_start = (USER_MIN >> 22);
-    uint32_t udi_end    = ((USER_MAX - 1) >> 22);
-    for (uint32_t di = udi_start; di <= udi_end; di++)
-        new_pd[di] = 0;
+    /* 4) Se till att kernel är åtkomligt i high-half (0x8000_0000+)
+          även om nuvarande PD saknar det aliaset. */
+    mirror_kernel_low_into_high(new_pd);
 
-    uint32_t di = pd_di;
-    uint32_t ti = (pd_va >> 12) & 0x3FF;
-
-    uint32_t pde = new_pd[di];
-    if (!(pde & PAGE_PRESENT) || (pde & PAGE_PS))
+    /* 5) Lägg tillbaka self-map till nya PD:t (om du använder sådan) */
+    if (install_pd_selfmap(new_pd, pd_phys) != 0)
     {
-        printf("[PAGING] new_address_space: kernel PT missing or 4MB at di=%u (pde=%08x)\n", di, pde);
-        kunmap_phys(0);
+        kunmap_phys(0xFEED0000);
         free_phys_page(pd_phys);
         return 0;
     }
 
-    uint32_t pt_phys = pde & 0xFFFFF000u;
-    uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
-    pt[ti] = (pd_phys & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW;
-
-    kunmap_phys(1);
-    kunmap_phys(0);
+    kunmap_phys(0xFEED0000);
     return pd_phys;
 }
 

@@ -36,6 +36,10 @@ typedef struct thread
     
     struct thread* next;
     struct process *owner_process;
+
+    void *fx_area_aligned;
+    void *fx_area_raw;
+    bool fx_valid;
 } thread_t;
 
 int thread_create(void (*entry)(void*), void* argument, size_t kernel_stack_bytes);

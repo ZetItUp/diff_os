@@ -1,341 +1,233 @@
-#include <stdint.h>
 #include <stddef.h>
-#include "system/usercopy.h"
-#include "heap.h"
-#include "string.h"
+#include <stdint.h>
 #include "paging.h"
 
-static inline int is_user_ptr_range(const void *p, size_t n)
-{
-    if (n == 0) return 0;
+extern void *kmalloc(size_t n);
+extern void  kfree(void *p);
 
-    uintptr_t a = (uintptr_t)p;
-    uintptr_t b = a + (n - 1);
+static inline void outb(uint16_t port, uint8_t val){ __asm__ volatile("outb %0,%1"::"a"(val),"Nd"(port)); }
+static inline uint8_t inb(uint16_t port){ uint8_t r; __asm__ volatile("inb %1,%0":"=a"(r):"Nd"(port)); return r; }
 
+#define COM1_BASE 0x3F8
+
+static inline void s_putc(char c){
+    while((inb(COM1_BASE+5)&0x20)==0){}
+    outb(COM1_BASE,(uint8_t)c);
+}
+static void s_puts(const char *s){
+    if(!s) return;
+    for(;*s;++s) s_putc(*s);
+}
+static void s_puthex32(uint32_t v){
+    static const char hexd[16]="0123456789ABCDEF";
+    s_puts("0x");
+    for(int i=7;i>=0;--i){ uint8_t nyb=(uint8_t)((v>>(i*4))&0xF); s_putc(hexd[nyb]); }
+}
+static void s_putu(uint32_t v){
+    char buf[16]; int i=0; if(v==0){ s_putc('0'); return; }
+    while(v&&i<(int)sizeof(buf)){ buf[i++]=(char)('0'+(v%10)); v/=10; }
+    while(i--) s_putc(buf[i]);
+}
+
+#define DBG(msg) s_puts(msg)
+#define DBG_HEX(tag,val) do{ s_puts(tag); s_puthex32((uint32_t)(val)); s_puts("\r\n"); }while(0)
+#define DBG_HEX2(tag,a,b) do{ s_puts(tag); s_puthex32((uint32_t)(a)); s_puts(", "); s_puthex32((uint32_t)(b)); s_puts("\r\n"); }while(0)
+#define DBG_COPY(tag,dst,src,n) do{ s_puts(tag); s_puts(" dst="); s_puthex32((uint32_t)(uintptr_t)(dst)); s_puts(" src="); s_puthex32((uint32_t)(uintptr_t)(src)); s_puts(" n="); s_putu((uint32_t)(n)); s_puts("\r\n"); }while(0)
+
+static inline size_t uc_min(size_t a,size_t b){ return a<b?a:b; }
+static inline size_t page_chunk(uintptr_t addr,size_t remaining){
+    uint32_t off=(uint32_t)(addr&(PAGE_SIZE_4KB-1));
+    size_t room=(size_t)(PAGE_SIZE_4KB-off);
+    return uc_min(remaining,room);
+}
+static inline int range_intersects_user(const void *p,size_t n){
+    if(n==0) return 0;
+    uintptr_t a=(uintptr_t)p;
+    uintptr_t b=a+(n-1);
     return (a >= USER_MIN) && (b < USER_MAX) && (b >= a);
 }
 
-static inline size_t page_chunk(uintptr_t addr, size_t remaining)
-{
-    size_t off = addr & (PAGE_SIZE_4KB - 1);
-    size_t left_in_page = PAGE_SIZE_4KB - off;
-
-    return (remaining < left_in_page) ? remaining : left_in_page;
-}
-
-// Demand-map or upgrade flags to be readable (present + USER)
-static int ensure_user_readable(uintptr_t uaddr)
-{
-    uint32_t page_base = (uint32_t)uaddr & ~(PAGE_SIZE_4KB - 1);
-
-    paging_update_flags(page_base, PAGE_SIZE_4KB, PAGE_USER, 0);
-
-    if (paging_check_user_range(page_base, 1) == 0)
-    {
+static int ensure_user_readable(uintptr_t va){
+    uint32_t pde=0,pte=0;
+    if(paging_probe_pde_pte((uint32_t)va,&pde,&pte)==0 &&
+       (pde&PAGE_PRESENT) &&
+       ((pde&PAGE_PS)?(pde&PAGE_USER):(pte&PAGE_PRESENT))){
         return 0;
     }
-
-    if (paging_handle_demand_fault(page_base) == 0)
-    {
-        return (paging_check_user_range(page_base, 1) == 0) ? 0 : -1;
-    }
-
-    // Last fallback: try to map fresh page
-    if (paging_map_user_range(page_base, PAGE_SIZE_4KB, 0) == 0)
-    {
+    uintptr_t pg=(uintptr_t)(va&~(uintptr_t)(PAGE_SIZE_4KB-1));
+    if(paging_handle_demand_fault(pg)==0 &&
+       paging_check_user_range((uint32_t)va,1)==0){
         return 0;
     }
-
+    DBG_HEX("[usercopy] ensure_user_readable FAIL @",(uint32_t)va);
     return -1;
 }
 
-// Demand-map or upgrade flags to be writable (present + USER + RW)
-static int ensure_user_writable(uintptr_t uaddr)
-{
-    uint32_t page_base = (uint32_t)uaddr & ~(PAGE_SIZE_4KB - 1);
-
-    paging_update_flags(page_base, PAGE_SIZE_4KB, PAGE_USER | PAGE_RW, 0);
-
-    if (paging_check_user_range_writable(page_base, 1) == 0)
-    {
+static int ensure_user_writable(uintptr_t va){
+    uint32_t pde=0,pte=0;
+    if(paging_probe_pde_pte((uint32_t)va,&pde,&pte)==0 &&
+       (pde&PAGE_PRESENT) &&
+       ((pde&PAGE_PS)?((pde&PAGE_USER)&&(pde&PAGE_RW)):((pte&PAGE_PRESENT)&&(pte&PAGE_USER)&&(pte&PAGE_RW)))){
         return 0;
     }
-
-    if (paging_handle_demand_fault(page_base) == 0)
-    {
-        return (paging_check_user_range_writable(page_base, 1) == 0) ? 0 : -1;
-    }
-
-    // Last fallback: try to map fresh writable page
-    if (paging_map_user_range(page_base, PAGE_SIZE_4KB, 1) == 0)
-    {
+    uintptr_t pg=(uintptr_t)(va&~(uintptr_t)(PAGE_SIZE_4KB-1));
+    if(paging_handle_demand_fault(pg)==0 &&
+       paging_check_user_range_writable((uint32_t)va,1)==0){
         return 0;
     }
-
+    if(paging_handle_cow_fault(pg)==0 &&
+       paging_check_user_range_writable((uint32_t)va,1)==0){
+        return 0;
+    }
+    DBG_HEX("[usercopy] ensure_user_writable FAIL @",(uint32_t)va);
     return -1;
 }
 
-// String helpers
-
-size_t strnlen_user(const char *uptr, size_t max)
-{
-    if (!uptr || max == 0) return 0;
-
-    size_t n = 0;
-    uintptr_t cur = (uintptr_t)uptr;
-
-    if (!is_user_ptr_range(uptr, 1))
-    {
-        while (n < max && ((const char*)cur)[0] != '\0')
-        {
-            cur++;
-            n++;
-        }
-        return n;
-    }
-
-    while (n < max)
-    {
-        if (ensure_user_readable(cur) != 0)
-        {
-            break;
-        }
-
-        size_t chunk = page_chunk(cur, max - n);
-        const char *p = (const char*)cur;
-
-        for (size_t i = 0; i < chunk; i++)
-        {
-            if (p[i] == '\0') return n + i;
-        }
-
-        cur += chunk;
-        n += chunk;
-    }
-
-    return n;
+static void k_memcpy_forward(void *dst,const void *src,size_t n){
+    const uint8_t *s=(const uint8_t*)src; uint8_t *d=(uint8_t*)dst;
+    for(size_t i=0;i<n;++i) d[i]=s[i];
+}
+static void k_memset_zero(void *dst,size_t n){
+    uint8_t *d=(uint8_t*)dst; for(size_t i=0;i<n;++i) d[i]=0;
 }
 
-// Core copy helpers
+size_t strnlen_user(const char *us,size_t limit){
+    if(!us||limit==0) return 0;
+    uintptr_t p=(uintptr_t)us; size_t total=0; size_t remaining=limit;
+    if(p<USER_MIN||p>=USER_MAX){ DBG_HEX("[usercopy] strnlen_user: ptr out of user range: ",(uint32_t)p); return 0; }
+    while(remaining){
+        if(ensure_user_readable(p)!=0){ DBG_HEX("[usercopy] strnlen_user: unreadable @",(uint32_t)p); return 0; }
+        size_t chunk=page_chunk(p,remaining);
+        const uint8_t *q=(const uint8_t*)p;
+        for(size_t i=0;i<chunk;++i){ if(q[i]==0) return total+i; }
+        total+=chunk; p+=chunk; remaining-=chunk;
+    }
+    return total;
+}
 
-int copy_from_user(void *dst, const void *usrc, size_t n)
-{
-    if (n == 0) return 0;
-    if (!dst || !usrc) return -1;
-
-    if (!is_user_ptr_range(usrc, n))
-    {
-        memmove(dst, usrc, n);
+int copy_from_user(void *dst,const void *usrc,size_t n){
+    if(n==0) return 0;
+    if(!dst||!usrc) return -1;
+    DBG_COPY("[usercopy] copy_from_user ENTER",dst,usrc,n);
+    if(!range_intersects_user(usrc,n)){
+        DBG("[usercopy] copy_from_user BYPASS (no user overlap)\r\n");
+        k_memcpy_forward(dst,usrc,n);
+        DBG("[usercopy] copy_from_user BYPASS -> OK\r\n");
         return 0;
     }
-
-    uintptr_t s = (uintptr_t)usrc;
-    uintptr_t d = (uintptr_t)dst;
-    size_t remaining = n;
-
-    while (remaining)
-    {
-        if (ensure_user_readable(s) != 0)
-        {
-            return -1;
-        }
-
-        size_t chunk = page_chunk(s, remaining);
-        memmove((void*)d, (const void*)s, chunk);
-
-        d += chunk;
-        s += chunk;
-        remaining -= chunk;
+    uintptr_t a=(uintptr_t)usrc; uintptr_t b=a+(n-1);
+    if(a<USER_MIN||b>=USER_MAX){ DBG_HEX2("[usercopy] copy_from_user FAIL range a..b=",a,b); return -1; }
+    uint8_t *d=(uint8_t*)dst; const uint8_t *s=(const uint8_t*)usrc; size_t remaining=n;
+    DBG_HEX2("[usercopy]   iter s=",(uint32_t)(uintptr_t)s,(uint32_t)remaining);
+    while(remaining){
+        if(ensure_user_readable((uintptr_t)s)!=0){ DBG_HEX("[usercopy]   FAIL ensure_readable @",(uint32_t)(uintptr_t)s); return -1; }
+        size_t clen=page_chunk((uintptr_t)s,remaining);
+        DBG("[usercopy]   chunk "); s_puts("len="); s_putu((uint32_t)clen); s_puts("  src="); s_puthex32((uint32_t)(uintptr_t)s); s_puts(" -> dst="); s_puthex32((uint32_t)(uintptr_t)d); s_puts("\r\n");
+        k_memcpy_forward(d,s,clen);
+        d+=clen; s+=clen; remaining-=clen;
+        if(remaining){ DBG("[usercopy]   next "); s_puts("s="); s_puthex32((uint32_t)(uintptr_t)s); s_puts(" d="); s_puthex32((uint32_t)(uintptr_t)d); s_puts(" rem="); s_putu((uint32_t)remaining); s_puts("\r\n"); }
     }
-
+    DBG("[usercopy] copy_from_user OK, total n="); s_putu((uint32_t)n); s_puts("\r\n");
     return 0;
 }
 
-int copy_to_user(void *udst, const void *src, size_t n)
-{
-    if (n == 0) return 0;
-    if (!udst || !src) return -1;
-
-    if (!is_user_ptr_range(udst, n))
-    {
-        memmove(udst, src, n);
+int copy_to_user(void *udst,const void *src,size_t n){
+    if(n==0) return 0;
+    if(!udst||!src) return -1;
+    DBG_COPY("[usercopy] copy_to_user ENTER",udst,src,n);
+    if(!range_intersects_user(udst,n)){
+        DBG("[usercopy] copy_to_user BYPASS (no user overlap)\r\n");
+        k_memcpy_forward(udst,src,n);
+        DBG("[usercopy] copy_to_user BYPASS -> OK\r\n");
         return 0;
     }
-
-    uintptr_t d = (uintptr_t)udst;
-    uintptr_t s = (uintptr_t)src;
-    size_t remaining = n;
-
-    while (remaining)
-    {
-        if (ensure_user_writable(d) != 0)
-        {
-            return -1;
-        }
-
-        size_t chunk = page_chunk(d, remaining);
-        memmove((void*)d, (const void*)s, chunk);
-
-        d += chunk;
-        s += chunk;
-        remaining -= chunk;
+    uintptr_t a=(uintptr_t)udst; uintptr_t b=a+(n-1);
+    if(a<USER_MIN||b>=USER_MAX){ DBG_HEX2("[usercopy] copy_to_user FAIL range a..b=",a,b); return -1; }
+    uint8_t *d=(uint8_t*)udst; const uint8_t *s=(const uint8_t*)src; size_t remaining=n;
+    DBG_HEX2("[usercopy]   iter d=",(uint32_t)(uintptr_t)d,(uint32_t)remaining);
+    while(remaining){
+        if(ensure_user_writable((uintptr_t)d)!=0){ DBG_HEX("[usercopy]   FAIL ensure_writable @",(uint32_t)(uintptr_t)d); return -1; }
+        size_t clen=page_chunk((uintptr_t)d,remaining);
+        DBG("[usercopy]   chunk "); s_puts("len="); s_putu((uint32_t)clen); s_puts("  src="); s_puthex32((uint32_t)(uintptr_t)s); s_puts(" -> dst="); s_puthex32((uint32_t)(uintptr_t)d); s_puts("\r\n");
+        k_memcpy_forward(d,s,clen);
+        d+=clen; s+=clen; remaining-=clen;
+        if(remaining){ DBG("[usercopy]   next "); s_puts("d="); s_puthex32((uint32_t)(uintptr_t)d); s_puts(" s="); s_puthex32((uint32_t)(uintptr_t)s); s_puts(" rem="); s_putu((uint32_t)remaining); s_puts("\r\n"); }
     }
-
+    DBG("[usercopy] copy_to_user OK, total n="); s_putu((uint32_t)n); s_puts("\r\n");
     return 0;
 }
 
-// Higher-level helpers
-
-int copy_string_from_user(char *dst, const char *usrc, size_t dst_size)
-{
-    if (!dst || !usrc || dst_size == 0) return -1;
-
-    size_t len = strnlen_user(usrc, dst_size - 1);
-
-    if (copy_from_user(dst, usrc, len) < 0) return -1;
-    dst[len] = '\0';
-
-    return (int)len;
-}
-
-int copy_user_cstr(char **out_kstr, const char *upath, size_t max_len)
-{
-    if (!out_kstr || !upath || max_len == 0) return -1;
-    *out_kstr = NULL;
-
-    size_t n = strnlen_user(upath, max_len - 1);
-    char *buf = (char*)kmalloc(n + 1);
-    if (!buf) return -1;
-
-    if (copy_from_user(buf, upath, n) != 0)
-    {
-        kfree(buf);
-        return -1;
+int zero_user(void *u_dst,size_t n){
+    if(n==0) return 0;
+    if(!u_dst) return -1;
+    if(!range_intersects_user(u_dst,n)){ k_memset_zero(u_dst,n); return 0; }
+    uintptr_t d=(uintptr_t)u_dst;
+    if(d<USER_MIN||d>=USER_MAX){ DBG_HEX2("[usercopy] zero_user: udst out of user range: ",d,(uint32_t)n); return -1; }
+    size_t remaining=n;
+    while(remaining){
+        if(ensure_user_writable(d)!=0) return -1;
+        size_t chunk=page_chunk(d,remaining);
+        k_memset_zero((void*)d,chunk);
+        d+=chunk; remaining-=chunk;
     }
-
-    buf[n] = '\0';
-    *out_kstr = buf;
-
     return 0;
 }
 
-int copy_user_argv(int argc, char **uargv, char ***out_kargv)
-{
-    if (!out_kargv) return -1;
-    *out_kargv = NULL;
+#define UC_MAX_CSTR 4096U
+#define UC_MAX_ARGC 128
 
-    if (argc <= 0 || !uargv)
-    {
-        char **empty = (char**)kmalloc(sizeof(char*));
-        if (!empty) return -1;
-
-        empty[0] = NULL;
-        *out_kargv = empty;
-        return 0;
-    }
-
-    const int MAX_ARGC = 64;
-    if (argc > MAX_ARGC) return -1;
-
-    size_t vec_bytes = (size_t)argc * sizeof(char*);
-    char **tmp_ptrs = (char**)kmalloc(vec_bytes);
-    if (!tmp_ptrs) return -1;
-
-    if (copy_from_user(tmp_ptrs, uargv, vec_bytes) != 0)
-    {
-        kfree(tmp_ptrs);
-        return -1;
-    }
-
-    char **kargv = (char**)kmalloc(((size_t)argc + 1) * sizeof(char*));
-    if (!kargv)
-    {
-        kfree(tmp_ptrs);
-        return -1;
-    }
-
-    for (int i = 0; i < argc; i++)
-    {
-        char *kstr = NULL;
-        if (tmp_ptrs[i])
-        {
-            if (copy_user_cstr(&kstr, tmp_ptrs[i], 4096) != 0)
-            {
-                for (int j = 0; j < i; j++)
-                {
-                    if (kargv[j]) kfree(kargv[j]);
-                }
-                kfree(kargv);
-                kfree(tmp_ptrs);
-                return -1;
-            }
-        }
-        else
-        {
-            kstr = (char*)kmalloc(1);
-            if (!kstr)
-            {
-                for (int j = 0; j < i; j++)
-                {
-                    if (kargv[j]) kfree(kargv[j]);
-                }
-                kfree(kargv);
-                kfree(tmp_ptrs);
-                return -1;
-            }
-            kstr[0] = '\0';
-        }
-        kargv[i] = kstr;
-    }
-
-    kargv[argc] = NULL;
-    kfree(tmp_ptrs);
-    *out_kargv = kargv;
-    return 0;
+char *copy_user_cstr(const char *u_str){
+    if(!u_str) return NULL;
+    size_t n=strnlen_user(u_str,UC_MAX_CSTR-1);
+    if(n==0||n>=UC_MAX_CSTR){ DBG_HEX("[usercopy] copy_user_cstr: bad/too long string @",(uint32_t)(uintptr_t)u_str); return NULL; }
+    char *k=(char*)kmalloc(n+1);
+    if(!k){ DBG("[usercopy] copy_user_cstr: kmalloc failed\r\n"); return NULL; }
+    if(copy_from_user(k,u_str,n)!=0){ DBG("[usercopy] copy_user_cstr: copy_from_user failed\r\n"); kfree(k); return NULL; }
+    k[n]='\0';
+    return k;
 }
 
-void free_kargv(char **kargv)
-{
-    if (!kargv) return;
-
-    for (size_t i = 0; kargv[i] != NULL; i++)
-    {
-        kfree(kargv[i]);
+char **copy_user_argv(const char *const *u_argv,int *out_argc){
+    if(!u_argv) return NULL;
+    int argc=0; uintptr_t up=(uintptr_t)u_argv;
+    while(argc<UC_MAX_ARGC){
+        if(ensure_user_readable(up)!=0){ DBG_HEX("[usercopy] copy_user_argv: argv unreadable @",(uint32_t)up); return NULL; }
+        const char *u_ptr=*(const char *const *)up;
+        if(u_ptr==NULL) break;
+        ++argc; up+=sizeof(const char*);
     }
+    if(argc==UC_MAX_ARGC){ DBG("[usercopy] copy_user_argv: too many args\r\n"); return NULL; }
+    char **kargv=(char**)kmalloc((size_t)(argc+1)*sizeof(char*));
+    if(!kargv){ DBG("[usercopy] copy_user_argv: kmalloc argv failed\r\n"); return NULL; }
+    for(int i=0;i<argc;++i){
+        uintptr_t ent=(uintptr_t)u_argv+(size_t)i*sizeof(const char*);
+        if(ensure_user_readable(ent)!=0){ DBG_HEX("[usercopy] copy_user_argv: entry unreadable @",(uint32_t)ent); kargv[i]=NULL; goto fail; }
+        const char *u_s=*(const char *const *)ent;
+        kargv[i]=copy_user_cstr(u_s);
+        if(!kargv[i]){ DBG_HEX("[usercopy] copy_user_argv: copy_user_cstr failed for @",(uint32_t)(uintptr_t)u_s); goto fail; }
+    }
+    kargv[argc]=NULL;
+    if(out_argc) *out_argc=argc;
+    return kargv;
+fail:
+    for(int j=0;j<argc;++j){ if(kargv[j]) kfree(kargv[j]); }
+    kfree(kargv);
+    return NULL;
+}
 
+void free_kargv(char **kargv){
+    if(!kargv) return;
+    for(int i=0;kargv[i];++i) kfree(kargv[i]);
     kfree(kargv);
 }
 
-int zero_user(void *u_dst, size_t n)
-{
-    if (n == 0)
-    {
-        return 0;
-    }
-
-    // Valfri snabbvalidering. copy_to_user gör ändå sina kontroller.
-    if (!is_user_ptr_range(u_dst, n))
-    {
-        return -1;
-    }
-
-    // Liten nollbuffert i kernel. Storleken är medvetet modest så vi inte blåser upp BSS.
-    static const uint8_t Z[512] = {0};
-
-    uint8_t *p = (uint8_t *)u_dst;
-
-    while (n > 0)
-    {
-        size_t chunk = n > sizeof(Z) ? sizeof(Z) : n;
-
-        if (copy_to_user(p, Z, chunk) != 0)
-        {
-            return -1;
-        }
-
-        p += chunk;
-        n -= chunk;
-    }
-
+int copy_string_from_user(char *dst,const char *usrc,size_t dst_size){
+    if(!dst||!usrc||dst_size==0) return -1;
+    size_t maxlen=dst_size-1;
+    size_t n=strnlen_user(usrc,maxlen);
+    if(n==0||n>maxlen){ DBG_HEX2("[usercopy] copy_string_from_user: bad len or too long, len=",(uint32_t)n,(uint32_t)maxlen); return -1; }
+    if(copy_from_user(dst,usrc,n)!=0){ DBG("[usercopy] copy_string_from_user: copy_from_user failed\r\n"); return -1; }
+    dst[n]='\0';
     return 0;
 }
+

@@ -311,4 +311,27 @@ void utohex(uintptr_t val, char *buf, int outlen)
 
     buf[digits] = '\0';
 }
+char *strchr(const char *s, int c)
+{
+    unsigned char uc = (unsigned char)c;
 
+    for (; *s; ++s) {
+        if ((unsigned char)*s == uc)
+            return (char *)s;
+    }
+
+    return (uc == '\0') ? (char *)s : 0;
+}
+
+void *memchr(const void *s, int c, size_t n)
+{
+     const unsigned char *p = (const unsigned char *)s;
+     unsigned char uc = (unsigned char)c;
+     for (size_t i = 0; i < n; ++i) {
+         if (p[i] == uc) {
+             // cast bort const enligt C-standarden på memchr:s returtyp
+             return (void *)(p + i);
+         }
+     }
+     return NULL;
+}

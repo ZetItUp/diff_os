@@ -28,6 +28,7 @@ void *isr_stubs[32] = { REPEAT32(XPTR) };
 struct IDTEntry idt[IDT_SIZE];
 extern void system_call_init(void);
 
+static void panic_dump_bytes(uint32_t addr, int before, int after, uint16_t cs);
 // (Referenslista – används inte i panikutskrifter)
 static const char *exception_messages[] =
 {
@@ -57,6 +58,38 @@ static const char *exception_messages[] =
     "Reserved", "Reserved", "Reserved", "Reserved"
 };
 
+static inline void outb(uint16_t port, uint8_t val) { asm volatile("outb %0,%1"::"a"(val),"Nd"(port)); }
+static inline uint8_t inb(uint16_t port) { uint8_t r; asm volatile("inb %1,%0":"=a"(r):"Nd"(port)); return r; }
+
+#define COM1_BASE 0x3F8
+
+static inline void serial_putc(char c) {
+    while ((inb(COM1_BASE + 5) & 0x20) == 0) { } // vänta tills THR tom
+    outb(COM1_BASE, (uint8_t)c);
+}
+static inline void panic_putc(char c) {
+    if (c == '\n') serial_putc('\r');
+    serial_putc(c);
+}
+static inline void panic_puts(const char *s) {
+    while (*s) panic_putc(*s++);
+}
+static inline void panic_puthex32(uint32_t v) {
+    static const char *hex = "0123456789ABCDEF";
+    for (int i = 7; i >= 0; --i) {
+        uint8_t nib = (v >> (i*4)) & 0xF;
+        panic_putc(hex[nib]);
+    }
+}
+static inline void panic_putu32(uint32_t v) {
+    char buf[11]; int i = 0;
+    if (v == 0) { panic_putc('0'); return; }
+    while (v && i < 10) { buf[i++] = '0' + (v % 10); v /= 10; }
+    while (i--) panic_putc(buf[i]);
+}
+static inline void panic_putreg(const char *name, uint32_t v) {
+    panic_puts(name); panic_putc('='); panic_puthex32(v); panic_putc(' ');
+}
 static inline uint32_t read_cr0(void)
 {
     uint32_t x;
@@ -77,6 +110,8 @@ static inline uint32_t read_cr4(void)
 
 static inline uint32_t read_cr2(void){ uint32_t x; asm volatile("mov %%cr2,%0":"=r"(x)); return x; }
 static inline uint32_t read_cr3(void){ uint32_t x; asm volatile("mov %%cr3,%0":"=r"(x)); return x; }
+static inline uint32_t read_dr6(void){ uint32_t x; asm volatile("mov %%dr6,%0":"=r"(x)); return x; }
+static inline uint32_t read_dr7(void){ uint32_t x; asm volatile("mov %%dr7,%0":"=r"(x)); return x; }
 
 // ===== IDT setup =====
 void idt_set_entry(int num, uint32_t handler_addr, uint16_t selector, uint8_t type_attr)
@@ -106,11 +141,6 @@ void idt_init(void)
 //                   RAW SERIAL "PANIC" PRINT (PF-SAFE)
 // =====================================================================
 
-static inline void outb(uint16_t port, uint8_t val) { asm volatile("outb %0,%1"::"a"(val),"Nd"(port)); }
-static inline uint8_t inb(uint16_t port) { uint8_t r; asm volatile("inb %1,%0":"=a"(r):"Nd"(port)); return r; }
-
-#define COM1_BASE 0x3F8
-
 static inline void panic_serial_init(void)
 {
     // Snabb init av COM1 115200 8N1, inga avbrott
@@ -123,24 +153,20 @@ static inline void panic_serial_init(void)
     outb(COM1_BASE + 4, 0x0B);    // MCR: DTR, RTS, OUT2
 }
 
-static inline void serial_putc(char c) {
-    while ((inb(COM1_BASE + 5) & 0x20) == 0) { } // vänta tills THR tom
-    outb(COM1_BASE, (uint8_t)c);
+static void panic_put_dr6_flags(uint32_t dr6)
+{
+    // DR6: B0..B3(0..3), BD(13), BS(14), BT(15)
+    panic_puts("DR6 flags: ");
+    panic_puts("B0="); panic_putu32((dr6 >> 0) & 1); panic_putc(' ');
+    panic_puts("B1="); panic_putu32((dr6 >> 1) & 1); panic_putc(' ');
+    panic_puts("B2="); panic_putu32((dr6 >> 2) & 1); panic_putc(' ');
+    panic_puts("B3="); panic_putu32((dr6 >> 3) & 1); panic_putc(' ');
+    panic_puts("BD="); panic_putu32((dr6 >> 13) & 1); panic_putc(' ');
+    panic_puts("BS="); panic_putu32((dr6 >> 14) & 1); panic_putc(' ');
+    panic_puts("BT="); panic_putu32((dr6 >> 15) & 1);
+    panic_puts("\n");
 }
-static inline void panic_putc(char c) {
-    if (c == '\n') serial_putc('\r');
-    serial_putc(c);
-}
-static inline void panic_puts(const char *s) {
-    while (*s) panic_putc(*s++);
-}
-static inline void panic_puthex32(uint32_t v) {
-    static const char *hex = "0123456789ABCDEF";
-    for (int i = 7; i >= 0; --i) {
-        uint8_t nib = (v >> (i*4)) & 0xF;
-        panic_putc(hex[nib]);
-    }
-}
+
 
 static int looks_like_call_minus4(uint32_t eip, uint32_t cs)
 {
@@ -166,14 +192,62 @@ static int looks_like_call_minus4(uint32_t eip, uint32_t cs)
 }
 
 
-static inline void panic_putu32(uint32_t v) {
-    char buf[11]; int i = 0;
-    if (v == 0) { panic_putc('0'); return; }
-    while (v && i < 10) { buf[i++] = '0' + (v % 10); v /= 10; }
-    while (i--) panic_putc(buf[i]);
-}
-static inline void panic_putreg(const char *name, uint32_t v) {
-    panic_puts(name); panic_putc('='); panic_puthex32(v); panic_putc(' ');
+static void print_debug_exception(struct stack_frame *f)
+{
+    panic_serial_init();
+
+    uint32_t cr3 = read_cr3();
+    uint32_t dr6 = read_dr6();
+    uint32_t dr7 = read_dr7();
+
+    panic_puts("==== Debug Exception (#DB) ====\n");
+    panic_puts("EIP=");    panic_puthex32(f->eip);
+    panic_puts(" CS=");     panic_puthex32(f->cs);
+    panic_puts(" EFLAGS="); panic_puthex32(f->eflags);
+    panic_puts(" CR3=");    panic_puthex32(cr3);
+    panic_puts("\n");
+
+    // Allmänna register
+    panic_putreg("EAX", f->eax); panic_putreg("EBX", f->ebx);
+    panic_putreg("ECX", f->ecx); panic_putreg("EDX", f->edx); panic_puts("\n");
+    panic_putreg("ESI", f->esi); panic_putreg("EDI", f->edi);
+    panic_putreg("EBP", f->ebp); panic_putreg("ESP", f->esp); panic_puts("\n");
+
+    // Segment
+    panic_puts("SS="); panic_puthex32(f->ss);
+    panic_puts(" DS="); panic_puthex32(f->ds);
+    panic_puts(" ES="); panic_puthex32(f->es);
+    panic_puts(" FS="); panic_puthex32(f->fs);
+    panic_puts(" GS="); panic_puthex32(f->gs);
+    panic_puts("\n");
+
+    // DR6/DR7
+    panic_puts("DR6="); panic_puthex32(dr6); panic_putc(' '); 
+    panic_puts("DR7="); panic_puthex32(dr7); panic_puts("\n");
+    panic_put_dr6_flags(dr6);
+
+    // Bytes runt EIP (PF-säkert även i ring3)
+    panic_dump_bytes(f->eip, 8, 24, f->cs);
+
+    // Hints (utan heap)
+    int tf = (f->eflags >> 8) & 1;
+    int rf = (f->eflags >> 16) & 1;
+    int bs = (dr6 >> 14) & 1;              // single-step
+    int b_any = dr6 & 0xF;                 // B0..B3
+    int dr7_enabled = dr7 & 0xFF;          // lokala/globala enable för HW-bp
+
+    if (bs || tf) {
+        panic_puts("HINT: Single-step trap (TF=1) — överväg att RÄNSA TF och/eller sätta RF på IRET.\n");
+    }
+    if (b_any) {
+        panic_puts("HINT: Hardware breakpoint slog (DR6.Bx). Kontrollera/cleara DR7 före IRET.\n");
+    }
+    if (!rf) {
+        panic_puts("HINT: RF=0 — sätt RF=1 i EFLAGS vid IRET för att maska pending #DB.\n");
+    }
+    if (!b_any && !bs && !tf && dr7_enabled) {
+        panic_puts("HINT: DR7 har aktiva enable-bitar men DR6 saknar Bx/BS: rensa DR7/DR6.\n");
+    }
 }
 
 // === NYTT: PF-säker dump av bytes runt EIP (user via copy_from_user) ===
@@ -383,6 +457,11 @@ void fault_handler(struct stack_frame *frame)
 {
     if (frame->int_no >= 32) return;
 
+    if(frame->int_no == 1)
+    {
+        print_debug_exception(frame);
+        for(;;) asm volatile("hlt");
+    }
     if (frame->int_no == 6) // #UD
     {
         print_invalid_opcode(frame);

@@ -348,25 +348,23 @@ init_pm:
     mov byte [gdt_tss + 4], al
     mov byte [gdt_tss + 7], ah
 
-    ; --- Init TSS för ring0-stackswitching från ring3 ---
+    ; Init TSS: SS0 = Kernel Data, ESP0 = kernel_stack_top
     mov eax, kernel_stack_top
     mov [tss + 4], eax                  ; ESP0
     mov ax, DATA_SEG
     mov [tss + 8], ax                   ; SS0
-    mov word [tss + 102], 104           ; I/O Map Base = TSS size (ingen bitmap)
+    mov word [tss + 102], 104           ; I/O Map Base = TSS size
 
-    ; Ladda TR med TSS-selektor
     mov ax, TSS_SEG
     ltr ax
 
-    ; Flytta kernel från 0x10000 till 0x100000 (1MB)
     mov esi, 0x10000
     mov edi, 0x100000       
     mov ecx, [kernel_sectors]
     shl ecx, 7                          ; Sectors * 512 / 4
     rep movsd                           ; Move the kernel from 0x10000 to 0x100000 (1MB) 
 
-    ; Skicka E820-info till kernel via stack (ptr + count)
+    ; Send E820 info to the kernel by pushing pointer + count
     push dword [mem_entry_count]
     push dword e820_buffer
     
@@ -398,7 +396,7 @@ print_hex16:
     pusha
     mov cx, 4                           ; 4 hex digits (16 bits)
     mov dx, ax                          ; Backup AX since we modify it
-    .next_digit:
+.next_digit:
     rol dx, 4                           ; Rotate left 4 bits (bring next nibble to low 4 bits)
     mov bx, dx
     and bx, 0x000F                      ; Isolate lowest 4 bits
@@ -480,24 +478,12 @@ gdt_descriptor:
     dw gdt_end - gdt_start - 1
     dd gdt_start                        ; Calculated the correct GDT values
 
-; --- Selektorvärden (exporteras som symboler) ---
-CODE_SEG       equ gdt_code      - gdt_start       ; Kernel CS (RPL=0)
-DATA_SEG       equ gdt_data      - gdt_start       ; Kernel DS (RPL=0)
-USER_CODE_SEG  equ (gdt_user_code - gdt_start) | 3 ; User CS  (RPL=3)
-USER_DATA_SEG  equ (gdt_user_data - gdt_start) | 3 ; User DS  (RPL=3)
-TSS_SEG        equ  gdt_tss      - gdt_start       ; TSS selector (RPL=0)
+CODE_SEG equ gdt_code - gdt_start       ; Calculate Code Segment
+DATA_SEG equ gdt_data - gdt_start       ; Calculate Data Segment
+USER_CODE_SEG equ (gdt_user_code - gdt_start) | 3
+USER_DATA_SEG equ (gdt_user_data - gdt_start) | 3
 
-; Gör selektorerna synliga för andra moduler (t.ex. kernel C/ASM)
-[BITS 32]
-global GDT_KERNEL_CS_SEL, GDT_KERNEL_DS_SEL
-global GDT_USER_CS_SEL,   GDT_USER_DS_SEL
-global GDT_TSS_SEL
-GDT_KERNEL_CS_SEL: dw CODE_SEG
-GDT_KERNEL_DS_SEL: dw DATA_SEG
-GDT_USER_CS_SEL:   dw USER_CODE_SEG
-GDT_USER_DS_SEL:   dw USER_DATA_SEG
-GDT_TSS_SEL:       dw TSS_SEG
-[BITS 16]
+TSS_SEG equ gdt_tss - gdt_start
 
 ; TSS (32-bit)
 align 4
