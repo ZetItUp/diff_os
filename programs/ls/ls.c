@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <dirent.h>
 #include <console.h>
+#include <unistd.h>
 
 enum
 {
@@ -69,11 +70,11 @@ static void sort_by_name(struct dirent *arr, size_t n)
 
 int main(int argc, char *argv[])
 {
-    const char *path = (argc > 1 && argv[1] && argv[1][0]) ? argv[1] : ".";
-    DIR *d = opendir(path);
+    const char *target = (argc > 1 && argv[1] && argv[1][0]) ? argv[1] : ".";
+    DIR *d = opendir(target);
     if (!d)
     {
-        printf("ls: There is no directory %s!\n", path);
+        printf("ls: There is no directory %s!\n", target);
         return 1;
     }
 
@@ -134,10 +135,34 @@ int main(int argc, char *argv[])
     if (nd > 1) sort_by_name(dirs, nd);
     if (nf > 1) sort_by_name(files, nf);
 
-    const char *tmp_path = path;
-    while (*tmp_path == '/' || *tmp_path == '.') tmp_path++;
+    char display_path[256];
 
-    printf("Content of %s/\n", tmp_path);
+    if (strcmp(target, ".") == 0)
+    {
+        if (!getcwd(display_path, sizeof(display_path)))
+        {
+            snprintf(display_path, sizeof(display_path), ".");
+        }
+    }
+    else
+    {
+        snprintf(display_path, sizeof(display_path), "%s", target);
+    }
+
+    size_t disp_len = strlen(display_path);
+    if (disp_len == 0)
+    {
+        snprintf(display_path, sizeof(display_path), ".");
+        disp_len = strlen(display_path);
+    }
+
+    if (display_path[disp_len - 1] != '/' && disp_len + 1 < sizeof(display_path))
+    {
+        display_path[disp_len] = '/';
+        display_path[disp_len + 1] = '\0';
+    }
+
+    printf("Content of %s\n", display_path);
     hr('=');
     printf(" %-12s %10s  %s\n", "Type", "Size (bytes)", "Name");
     hr('-');
@@ -169,4 +194,3 @@ int main(int argc, char *argv[])
     free(files);
     return 0;
 }
-

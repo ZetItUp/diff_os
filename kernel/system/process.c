@@ -10,8 +10,10 @@
 #include "system/process.h"
 #include "system/threads.h"
 #include "system/scheduler.h"
+#include "system/path.h"
 #include "dex/dex.h"
 #include "dex/exl.h"
+#include "diff.h"
 
 #ifdef DIFF_DEBUG
 #define DDBG(...) printf(__VA_ARGS__)
@@ -38,6 +40,57 @@ static void user_bootstrap(void *arg);
 static process_t *g_current = NULL;
 static process_t *g_all_head = NULL;
 static int g_next_pid = 1;
+
+static uint32_t process_root_dir_id(void)
+{
+    if (superblock.root_dir_id != 0)
+    {
+        return superblock.root_dir_id;
+    }
+
+    if (file_table)
+    {
+        for (int i = 0; i < MAX_FILES; i++)
+        {
+            const FileEntry *fe = &file_table->entries[i];
+            if (fe->entry_id != 0 && fe->type == ENTRY_TYPE_DIR && fe->parent_id == 0)
+            {
+                return fe->entry_id;
+            }
+        }
+    }
+
+    return 1;
+}
+
+static void process_assign_default_cwd(process_t *p)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    p->cwd_id = process_root_dir_id();
+    (void)strlcpy(p->cwd_path, "/", sizeof(p->cwd_path));
+}
+
+static void process_inherit_cwd_from_parent(process_t *p, process_t *parent)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    if (parent)
+    {
+        p->cwd_id = parent->cwd_id;
+        (void)strlcpy(p->cwd_path, parent->cwd_path, sizeof(p->cwd_path));
+    }
+    else
+    {
+        process_assign_default_cwd(p);
+    }
+}
 
 // Unlink process from global list
 static void process_unlink_from_all(process_t *p)
@@ -174,6 +227,7 @@ void process_init(void)
     k->live_threads = 0;
     k->main_thread = NULL;
     k->waiter = NULL;
+    process_assign_default_cwd(k);
 
     // Link and set as current
     process_link(k);
@@ -208,6 +262,7 @@ process_t *process_create_kernel(void (*entry)(void *),
     p->live_threads = 0;
     p->main_thread = NULL;
     p->waiter = NULL;
+    process_inherit_cwd_from_parent(p, p->parent);
 
     process_link(p);
 
@@ -246,6 +301,7 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
     p->live_threads = 0;
     p->main_thread = NULL;
     p->waiter = NULL;
+    process_inherit_cwd_from_parent(p, p->parent);
 
     process_link(p);
 
@@ -358,6 +414,50 @@ process_t *process_find_by_pid(int pid)
     return NULL;
 }
 
+void process_set_cwd(process_t *p, uint32_t dir_id, const char *abs_path)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    p->cwd_id = dir_id ? dir_id : process_root_dir_id();
+
+    if (abs_path && abs_path[0] != '\0')
+    {
+        (void)strlcpy(p->cwd_path, abs_path, sizeof(p->cwd_path));
+    }
+    else
+    {
+        (void)strlcpy(p->cwd_path, "/", sizeof(p->cwd_path));
+    }
+}
+
+uint32_t process_cwd_id(const process_t *p)
+{
+    if (!p)
+    {
+        return process_root_dir_id();
+    }
+
+    if (p->cwd_id == 0)
+    {
+        return process_root_dir_id();
+    }
+
+    return p->cwd_id;
+}
+
+const char *process_cwd_path(const process_t *p)
+{
+    if (!p || p->cwd_path[0] == '\0')
+    {
+        return "/";
+    }
+
+    return p->cwd_path;
+}
+
 // Wait for a child to become zombie and reap it
 int system_wait_pid(int pid, int *u_status)
 {
@@ -441,6 +541,14 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
         return -1;
     }
 
+    process_t *caller = process_current();
+    char norm_path[256];
+    if (path_normalize(process_cwd_path(caller), kpath, norm_path, sizeof(norm_path)) != 0)
+    {
+        kfree(kpath);
+        return -1;
+    }
+
     // Copy argv from user
     char **kargv = NULL;
 
@@ -452,7 +560,7 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
     }
 
     // Create process
-    int pid = dex_spawn_process(file_table, kpath, argc, kargv);
+    int pid = dex_spawn_process(file_table, norm_path, argc, kargv);
 
     // Free temporary buffers
     free_kargv(kargv);
@@ -460,4 +568,3 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
 
     return pid;
 }
-

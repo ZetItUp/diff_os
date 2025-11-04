@@ -18,6 +18,8 @@ typedef struct process
     int pid;
     process_state_t state;
     uint32_t cr3;
+    uint32_t cwd_id;
+    char cwd_path[256];
     int exit_code;
 
     struct process *parent;
@@ -48,5 +50,7 @@ process_t *process_create_user_with_cr3(uint32_t user_eip, uint32_t user_esp, ui
 process_t *process_find_by_pid(int pid);
 int system_wait_pid(int pid, int *u_status);
 uint32_t read_cr3_local(void);
-
+void process_set_cwd(process_t *p, uint32_t dir_id, const char *abs_path);
+uint32_t process_cwd_id(const process_t *p);
+const char *process_cwd_path(const process_t *p);
 

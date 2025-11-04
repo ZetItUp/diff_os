@@ -9,6 +9,8 @@
 #include "console.h"
 #include "dirent.h"
 #include "system/usercopy.h"
+#include "system/process.h"
+#include "system/path.h"
 #include "interfaces.h"
 #include "diff.h"
 
@@ -36,163 +38,6 @@ static void dir_table_init_once(void)
         g_dir[i].cursor    = 0;
     }
     g_dir_inited = 1;
-}
-
-// Try to find root dir id
-static uint32_t find_root_id(void)
-{
-    // First check for dir with parent id 0
-    for(int i = 0; i < MAX_FILES; i++)
-    {
-        const FileEntry *fe = &file_table->entries[i];
-        if(fe->entry_id && fe->type == ENTRY_TYPE_DIR && fe->parent_id == 0)
-            return fe->entry_id;
-    }
-
-    // If not found, pick the lowest dir id
-    uint32_t root_id = 0;
-    for(int i = 0; i < MAX_FILES; i++)
-    {
-        const FileEntry *fe = &file_table->entries[i];
-        if(fe->entry_id && fe->type == ENTRY_TYPE_DIR)
-        {
-            if(!root_id || fe->entry_id < root_id)
-                root_id = fe->entry_id;
-        }
-    }
-
-    return root_id;
-}
-
-// Compare two names char by char
-static int name_equals(const char *a, const char *b)
-{
-    for(int i = 0; i < MAX_FILENAME_LEN; i++)
-    {
-        char ca = a[i];
-        char cb = b[i];
-        if(ca != cb)    return 0;
-        if(ca == '\0')  return 1;
-    }
-    return 1;
-}
-
-// Look for child dir under given parent
-static int find_child_dir(uint32_t parent_id, const char *name, uint32_t *out_id)
-{
-    if(!name || !name[0])
-        return -1;
-
-    for(int i = 0; i < MAX_FILES; i++)
-    {
-        const FileEntry *fe = &file_table->entries[i];
-        if(!fe->entry_id)             continue;
-        if(fe->parent_id != parent_id) continue;
-        if(fe->type != ENTRY_TYPE_DIR) continue;
-
-        if(name_equals(fe->filename, name))
-        {
-            *out_id = fe->entry_id;
-            return 0;
-        }
-    }
-    return -1;
-}
-
-// Go through path string and resolve to dir id
-static int path_to_dir_id(const char *path, uint32_t *out_id)
-{
-    uint32_t cur = 0;
-    int absolute = 0;
-
-    // Handle empty or "."
-    if(!path || !path[0] || (path[0] == '.' && path[1] == '\0'))
-    {
-        cur = find_root_id();
-        if(!cur) return -1;
-    }
-    else if(path[0] == '/')
-    {
-        // Absolute path, start from root
-        absolute = 1;
-        cur = find_root_id();
-        if(!cur) return -1;
-
-        // If it's only a "/", return root
-        if(path[1] == '\0')
-        {
-            *out_id = cur;
-            return 0;
-        }
-    }
-    else
-    {
-        // Relative path, for now also from root
-        cur = find_root_id();
-        if(!cur) return -1;
-    }
-
-    // Tokenize
-    const char *p = path + (absolute ? 1 : 0);
-    char tok[NAME_MAX];
-    int ti = 0;
-
-    while(1)
-    {
-        char c = *p++;
-        int end = (c == '\0');
-
-        if(c == '/' || end)
-        {
-            tok[ti] = '\0';
-            ti = 0;
-
-            if(tok[0] == '\0')
-            {
-                // Skip empty token like "//"
-            }
-            else if(tok[0] == '.' && tok[1] == '\0')
-            {
-                // Stay in same dir
-            }
-            else if(tok[0] == '.' && tok[1] == '.' && tok[2] == '\0')
-            {
-                // Go one step up
-                uint32_t parent_of_cur = 0;
-
-                for(int i = 0; i < MAX_FILES; i++)
-                {
-                    const FileEntry *fe = &file_table->entries[i];
-                    if(fe->entry_id == cur)
-                    {
-                        parent_of_cur = fe->parent_id;
-                        break;
-                    }
-                }
-
-                if(parent_of_cur != 0)
-                    cur = parent_of_cur;
-            }
-            else
-            {
-                // Try to step into child dir
-                uint32_t next_id = 0;
-                if(find_child_dir(cur, tok, &next_id) != 0)
-                    return -1;
-                cur = next_id;
-            }
-
-            if(end) break;
-        }
-        else
-        {
-            if(ti < NAME_MAX - 1)
-                tok[ti++] = c;
-        }
-    }
-
-    *out_id = cur;
-    return 0;
 }
 
 // Grab a free handle slot
@@ -245,8 +90,14 @@ int system_open_dir(const char *path)
         kpath[0] = '\0';
     }
 
+    process_t *proc = process_current();
+    const char *base = process_cwd_path(proc);
+    char abs_path[256];
+    if (path_normalize(base, kpath, abs_path, sizeof(abs_path)) != 0)
+        return -1;
+
     uint32_t dir_id = 0;
-    if(path_to_dir_id(kpath, &dir_id) != 0 || dir_id == 0)
+    if(vfs_resolve_dir(abs_path, &dir_id) != 0 || dir_id == 0)
         return -1;
 
     int handle = dir_handle_alloc();
@@ -256,6 +107,79 @@ int system_open_dir(const char *path)
     g_dir[handle].parent_id = dir_id;
     g_dir[handle].cursor    = 0;
     return handle;
+}
+
+int system_chdir(const char *path)
+{
+    if (!file_table)
+    {
+        if (init_filesystem() != 0)
+            return -1;
+    }
+
+    char kpath[256];
+    if (path)
+    {
+        if (copy_string_from_user(kpath, path, sizeof(kpath)) < 0)
+            return -1;
+    }
+    else
+    {
+        kpath[0] = '\0';
+    }
+
+    process_t *proc = process_current();
+    const char *base = process_cwd_path(proc);
+    char abs_path[256];
+    if (path_normalize(base, kpath, abs_path, sizeof(abs_path)) != 0)
+        return -1;
+
+#ifdef DIFF_DEBUG
+    printf("[CHDIR] pid=%d from=\"%s\" req=\"%s\" norm=\"%s\"\n",
+           proc ? proc->pid : -1, base ? base : "(null)", kpath, abs_path);
+#endif
+    uint32_t dir_id;
+    if (vfs_resolve_dir(abs_path, &dir_id) != 0)
+    {
+        printf("[CHDIR] resolve failed for \"%s\"\n", abs_path);
+        return -1;
+    }
+
+    if (!proc)
+        return -1;
+
+    process_set_cwd(proc, dir_id, abs_path);
+#ifdef DIFF_DEBUG
+    printf("[CHDIR] pid=%d cwd_id=%u ok\n", proc->pid, dir_id);
+#endif
+    return 0;
+}
+
+int system_getcwd(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0)
+    {
+        return -1;
+    }
+
+    process_t *proc = process_current();
+    const char *cwd = process_cwd_path(proc);
+    char buf[256];
+
+    (void)strlcpy(buf, cwd, sizeof(buf));
+
+    size_t need = strlen(buf) + 1;
+    if (need > out_sz)
+    {
+        return -1;
+    }
+
+    if (copy_to_user(out, buf, need) != 0)
+    {
+        return -1;
+    }
+
+    return (int)need;
 }
 
 // Read entry from dir handle
@@ -313,4 +237,3 @@ int system_close_dir(int handle)
     dir_handle_free(handle);
     return 0;
 }
-

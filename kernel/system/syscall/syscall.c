@@ -569,6 +569,18 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_CHDIR:
+        {
+            ret = system_chdir((const char*)arg0);
+
+            break;
+        }
+        case SYSTEM_GETCWD:
+        {
+            ret = system_getcwd((char*)arg0, (size_t)arg1);
+
+            break;
+        }
         default:
         {
             puts("[System Call] Unknown number: ");
@@ -596,4 +608,3 @@ void system_call_init(void)
 {
     idt_set_entry(0x66, (uint32_t)system_call_stub, 0x08, 0xEE);
 }
-

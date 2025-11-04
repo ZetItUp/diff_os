@@ -8,6 +8,8 @@
 #include "console.h"
 #include "interfaces.h"
 #include "system/usercopy.h"
+#include "system/process.h"
+#include "system/path.h"
 #include "diff.h"
 
 #ifndef O_RDONLY
@@ -77,13 +79,19 @@ int system_file_open(const char *abs_path, int oflags, int mode)
     if (verify_fs_ready() != 0)
         return -1;
 
-    char kpath[KERNEL_MAX_PATH];
-    if (copy_string_from_user(kpath, abs_path, sizeof(kpath)) == -1)
+    char upath[KERNEL_MAX_PATH];
+    if (copy_string_from_user(upath, abs_path, sizeof(upath)) == -1)
+        return -1;
+
+    process_t *proc = process_current();
+    const char *base = process_cwd_path(proc);
+    char norm[KERNEL_MAX_PATH];
+    if (path_normalize(base, upath, norm, sizeof(norm)) != 0)
         return -1;
 
     // Read-only filesystem: tillåt bara läsning.
     // (När skrivning implementeras: hedra O_WRONLY/O_RDWR/O_TRUNC/O_APPEND m.m.)
-    int fsfd = filesystem_open(kpath);
+    int fsfd = filesystem_open(norm);
     if (fsfd < 0)
         return -1;
 
@@ -268,12 +276,18 @@ int system_file_stat(const char *abs_path, filesystem_stat_t *user_st)
     if (verify_fs_ready() != 0)
         return -1;
 
-    char kpath[KERNEL_MAX_PATH];
-    if (copy_string_from_user(kpath, abs_path, sizeof(kpath)) == -1)
+    char upath[KERNEL_MAX_PATH];
+    if (copy_string_from_user(upath, abs_path, sizeof(upath)) == -1)
+        return -1;
+
+    process_t *proc = process_current();
+    const char *base = process_cwd_path(proc);
+    char norm[KERNEL_MAX_PATH];
+    if (path_normalize(base, upath, norm, sizeof(norm)) != 0)
         return -1;
 
     filesystem_stat_t st;
-    if (filesystem_stat(kpath, &st) != 0)
+    if (filesystem_stat(norm, &st) != 0)
         return -1;
 
     if (copy_to_user(user_st, &st, sizeof(st)) != 0)
@@ -307,4 +321,3 @@ int system_file_fstat(int file, filesystem_stat_t *user_st)
 
     return 0;
 }
-

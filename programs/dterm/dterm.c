@@ -16,161 +16,6 @@ static const unsigned g_ver_minor = 0;
 
 static int g_last_status = 0;
 static char g_cwd[256] = "/";
-static void split_into_parts(const char *p, char parts[][64], int *count);
-
-static void parts_push(char parts[][64], int *count, const char *s)
-{
-    if (!s || !*s)
-    {
-        return;
-    }
-    
-    if (*count >= 64)
-    {
-        return;
-    }
-
-    strncpy(parts[*count], s, 63);
-    parts[*count][63] = '\0';
-    (*count)++;
-}
-
-static void parts_pop(int *count)
-{
-    if (*count > 0)
-    {
-        (*count)--;
-    }
-}
-
-static inline void parse_into(const char *p, char parts[][64], int *count)
-{
-    split_into_parts(p, parts, count);
-}
-
-static void split_into_parts(const char *p, char parts[][64], int *count)
-{
-    if (!p) 
-    {
-        return;
-    }
-
-    while (*p == '/')
-    { 
-        p++;
-    }
-
-    while (*p) 
-    {
-        const char *start = p;
-        
-        while (*p && *p != '/')
-        {
-            p++;
-        }
-        
-        size_t len = (size_t)(p - start);
-
-        if (len) 
-        {
-            char tmp[64];
-         
-            if (len >= sizeof(tmp))
-            {
-                len = sizeof(tmp) - 1;
-            }
-
-            memcpy(tmp, start, len);
-            tmp[len] = '\0';
-
-            if (strcmp(tmp, ".") == 0) 
-            {
-                /* ignore */
-            } 
-            else if (strcmp(tmp, "..") == 0) 
-            {
-                parts_pop(count);
-            } 
-            else 
-            {
-                parts_push(parts, count, tmp);
-            }
-        }
-    
-        while (*p == '/')
-        {
-            p++;
-        }
-    }
-}
-
-static int normalize_path(const char *base, const char *input, char *out, size_t outsz)
-{
-    if (!out || outsz == 0)
-    {
-        return -1;
-    }
-
-    char parts[64][64];
-    int  count = 0;
-
-    const bool absolute = (input && input[0] == '/');
-
-    if (!absolute) 
-    {
-        parse_into((base && base[0]) ? base : "/", parts, &count);
-    } 
-    else 
-    {
-        count = 0;
-    }
-
-    parse_into((input && input[0]) ? input : "/", parts, &count);
-
-    if (count == 0) 
-    {
-        if (outsz < 2)
-        {
-            return -1;
-        }
-
-        out[0] = '/';
-        out[1] = '\0';
-        
-        return 0;
-    }
-
-    size_t off = 0;
-
-    for (int i = 0; i < count; i++) 
-    {
-        const char *seg = parts[i];
-        size_t seglen = strlen(seg);
-
-        if (off + 1 + seglen >= outsz) 
-        {
-            if (outsz) 
-            {
-                out[0] = '\0';
-            }  
-     
-            return -1;                
-        }
-
-        out[off++] = '/';
-        memcpy(out + off, seg, seglen);
-        off += seglen;
-    }
-
-    if (off >= outsz)
-    {
-        return -1;
-    }
-    
-    out[off] = '\0';
-    
-    return 0;
-}
 
 static int bi_help(int argc, char **argv)
 {
@@ -233,27 +78,19 @@ static int bi_exit(int argc, char **argv)
 static int bi_cd(int argc, char **argv)
 {
     const char *arg = (argc < 2 || !argv[1] || !argv[1][0]) ? "/" : argv[1];
-    char norm[256];
 
-    if (normalize_path(g_cwd, arg, norm, sizeof(norm)) != 0) 
-    {
-        puts("Error: Path too long");
-        
-        return -1;
-    }
-
-    DIR *d = opendir(norm);
-    if (!d) 
+    if (chdir(arg) != 0)
     {
         printf("Directory %s does not exist.\n", arg);
         return -1;
     }
-    
-    closedir(d);
 
-    strncpy(g_cwd, norm, sizeof(g_cwd) - 1);
-    g_cwd[sizeof(g_cwd) - 1] = '\0';
-    
+    if (!getcwd(g_cwd, sizeof(g_cwd)))
+    {
+        strncpy(g_cwd, "/", sizeof(g_cwd) - 1);
+        g_cwd[sizeof(g_cwd) - 1] = '\0';
+    }
+
     return 0;
 }
 
@@ -391,6 +228,12 @@ int main(void)
         return 127;
     }
 
+    if (!getcwd(g_cwd, sizeof(g_cwd)))
+    {
+        strncpy(g_cwd, "/", sizeof(g_cwd) - 1);
+        g_cwd[sizeof(g_cwd) - 1] = '\0';
+    }
+
     /* Avbufferad stdout så prompten verkligen syns direkt */
 
     printf("\n%s (Version %u.%u)\n\n", g_shell_name, g_ver_major, g_ver_minor);
@@ -433,4 +276,3 @@ int main(void)
         printf("\n");
     }
 }
-

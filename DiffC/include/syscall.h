@@ -42,6 +42,8 @@ enum
     SYSTEM_BREAK = 29,
     SYSTEM_VIDEO_TOGGLE_GRAPHICS_MODE = 30,
     SYSTEM_VIDEO_GET_GRAPHICS_MODE = 31,
+    SYSTEM_CHDIR = 32,
+    SYSTEM_GETCWD = 33,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -267,6 +269,16 @@ static inline void* system_brk(void *new_end)
     return (void*)(uintptr_t)do_sys(SYSTEM_BREAK, (int)(uintptr_t)new_end, 0, 0, 0);
 }
 
+static inline int system_chdir(const char *path)
+{
+    return do_sys(SYSTEM_CHDIR, (int)(uintptr_t)path, 0, 0, 0);
+}
+
+static inline int system_getcwd(char *buf, size_t len)
+{
+    return do_sys(SYSTEM_GETCWD, (int)(uintptr_t)buf, (int)len, 0, 0);
+}
+
 static inline int system_video_toggle_graphics_mode(void)
 {
     return do_sys(SYSTEM_VIDEO_TOGGLE_GRAPHICS_MODE, 0, 0, 0, 0);
@@ -276,4 +288,3 @@ static inline int system_video_get_graphics_mode(void)
 {
     return do_sys(SYSTEM_VIDEO_GET_GRAPHICS_MODE, 0, 0, 0, 0);
 }
-

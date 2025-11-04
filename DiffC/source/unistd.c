@@ -6,6 +6,26 @@ int exec_dex(const char *path, int argc, char **argv)
     return system_exec_dex(path, argc, argv);
 }
 
+int chdir(const char *path)
+{
+    return system_chdir(path);
+}
+
+char *getcwd(char *buf, size_t size)
+{
+    if (!buf || size == 0)
+    {
+        return NULL;
+    }
+
+    if (system_getcwd(buf, size) < 0)
+    {
+        return NULL;
+    }
+
+    return buf;
+}
+
 int close(int fd)
 {
     return system_close(fd);
