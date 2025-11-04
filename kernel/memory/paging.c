@@ -33,6 +33,10 @@ __attribute__((aligned(4096))) uint32_t page_directory[PAGE_ENTRIES];
 #endif
 __attribute__((aligned(4096))) uint32_t kernel_page_tables[KERNEL_PT_POOL][PAGE_ENTRIES];
 
+// Kernel page table pool address range (for identifying static vs dynamic PTs)
+static uint32_t kpt_start;
+static uint32_t kpt_end;
+
 extern char __heap_start;
 extern char __heap_end;
 
@@ -536,6 +540,10 @@ void init_paging(uint32_t ram_mb)
     static uint32_t bitmap_storage[(MAX_BLOCKS + 31) / 32];
     block_bitmap = bitmap_storage;
 
+    // Initialize kernel page table pool range
+    kpt_start = (uint32_t)&kernel_page_tables[0][0];
+    kpt_end = (uint32_t)&kernel_page_tables[KERNEL_PT_POOL][0];
+
     for (int i = 0; i < 1024; i++) page_directory[i] = 0;
     for (int i = 0; i < (int)((max_blocks + 31) / 32); i++) block_bitmap[i] = 0;
     for (int i = (BLOCK_SIZE / PAGE_SIZE_4KB); i < (int)MAX_PHYS_PAGES; i++) phys_page_refcnt[i] = 0;
@@ -650,6 +658,7 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
     uint32_t dir_index   = (virt_addr >> 22) & 0x3FFu;
     uint32_t table_index = (virt_addr >> 12) & 0x3FFu;
     uint32_t *table = NULL;
+    int need_kunmap = 0;
 
     uint32_t pde = page_directory[dir_index];
 
@@ -664,20 +673,65 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
         pde = page_directory[dir_index];
     }
 
+    uint32_t kpt_start = (uint32_t)kernel_page_tables;
+    uint32_t kpt_end   = kpt_start + sizeof(kernel_page_tables);
+
     if (!(pde & PAGE_PRESENT))
     {
-        if (pt_next >= (int)(sizeof(kernel_page_tables) / sizeof(kernel_page_tables[0])))
+        // Ny PT behövs: dynamisk för PAGE_USER, statisk pool för kernel
+        if (flags & PAGE_USER)
         {
-            printf("[PAGING] ERROR: Out of page tables (dir=%u)\n", dir_index);
-            return -1;
-        }
+            // Allokera PT från fysiskt minne
+            uint32_t pt_phys = alloc_phys_page();
+            if (!pt_phys)
+            {
+                printf("[PAGING] ERROR: Out of physical memory for page table (dir=%u)\n", dir_index);
+                return -1;
+            }
 
-        table = kernel_page_tables[pt_next++];
-        alloc_page_table_with_flags(dir_index, table, flags);
+            // Mappa tillfälligt för att initialisera
+            table = (uint32_t*)kmap_phys(pt_phys, 0);
+            for (int i = 0; i < PAGE_ENTRIES; i++)
+                table[i] = 0;
+
+            // Sätt PDE
+            uint32_t pd_flags = PAGE_PRESENT | PAGE_RW;
+            if (flags & PAGE_USER) pd_flags |= PAGE_USER;
+            if (flags & PAGE_PCD)  pd_flags |= PAGE_PCD;
+            if (flags & PAGE_PWT)  pd_flags |= PAGE_PWT;
+            page_directory[dir_index] = (pt_phys & 0xFFFFF000u) | pd_flags;
+
+            need_kunmap = 1;
+        }
+        else
+        {
+            // Kernel PT: använd statisk pool (identity-mapped)
+            if (pt_next >= (int)(sizeof(kernel_page_tables) / sizeof(kernel_page_tables[0])))
+            {
+                printf("[PAGING] ERROR: Out of page tables (dir=%u)\n", dir_index);
+                return -1;
+            }
+
+            table = kernel_page_tables[pt_next++];
+            alloc_page_table_with_flags(dir_index, table, flags);
+        }
     }
     else
     {
-        table = (uint32_t*)(pde & 0xFFFFF000u);
+        uint32_t pt_phys = pde & 0xFFFFF000u;
+
+        // Kolla om PT är från statisk pool (identity-mapped) eller dynamisk
+        if (pt_phys >= kpt_start && pt_phys < kpt_end)
+        {
+            // Statisk pool: direkt åtkomst
+            table = (uint32_t*)pt_phys;
+        }
+        else
+        {
+            // Dynamisk PT: måste kmappa
+            table = (uint32_t*)kmap_phys(pt_phys, 0);
+            need_kunmap = 1;
+        }
 
         if (flags & PAGE_USER) page_directory[dir_index] |= PAGE_USER;
         if (flags & PAGE_PCD)  page_directory[dir_index] |= PAGE_PCD;
@@ -714,6 +768,7 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
             invlpg(virt_addr);
         }
 
+        if (need_kunmap) kunmap_phys(0);
         return 0;
     }
 
@@ -722,6 +777,8 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
     phys_ref_inc_idx(idx);
 
     table[table_index] = desired;
+
+    if (need_kunmap) kunmap_phys(0);
     return 0;
 }
 
@@ -897,8 +954,23 @@ void paging_set_user(uint32_t addr, uint32_t size)
         }
 
         page_directory[dir_index] |= PAGE_USER;
-        uint32_t *table = (uint32_t*)(page_directory[dir_index] & 0xFFFFF000u);
+
+        uint32_t pt_phys = page_directory[dir_index] & 0xFFFFF000u;
+        uint32_t *table;
+        int need_kunmap = 0;
+
+        // Check if PT is in static pool (identity-mapped) or dynamic
+        if (pt_phys >= kpt_start && pt_phys < kpt_end) {
+            table = (uint32_t*)pt_phys;  // Static pool: direct access
+        } else {
+            table = (uint32_t*)kmap_phys(pt_phys, 0);  // Dynamic: map it
+            need_kunmap = 1;
+        }
+
         table[table_index] |= PAGE_USER;
+
+        if (need_kunmap) kunmap_phys(0);
+
         invlpg(va);
     }
     flush_tlb();
@@ -920,14 +992,31 @@ void paging_update_flags(uint32_t addr, uint32_t size, uint32_t set_mask, uint32
         if (set_mask & PAGE_USER)   page_directory[dir_index] |= PAGE_USER;
         if (clear_mask & PAGE_USER) page_directory[dir_index] &= ~PAGE_USER;
 
-        uint32_t *table = (uint32_t*)(page_directory[dir_index] & 0xFFFFF000u);
+        uint32_t pt_phys = page_directory[dir_index] & 0xFFFFF000u;
+        uint32_t *table;
+        int need_kunmap = 0;
+
+        // Check if PT is in static pool (identity-mapped) or dynamic
+        if (pt_phys >= kpt_start && pt_phys < kpt_end) {
+            table = (uint32_t*)pt_phys;  // Static pool: direct access
+        } else {
+            table = (uint32_t*)kmap_phys(pt_phys, 0);  // Dynamic: map it
+            need_kunmap = 1;
+        }
+
         uint32_t pte = table[table_index];
-        if (!(pte & PAGE_PRESENT)) continue;
+        if (!(pte & PAGE_PRESENT)) {
+            if (need_kunmap) kunmap_phys(0);
+            continue;
+        }
 
         pte |= set_mask;
         pte &= ~clear_mask;
 
         table[table_index] = pte;
+
+        if (need_kunmap) kunmap_phys(0);
+
         invlpg(va);
     }
     flush_tlb();
@@ -1619,11 +1708,47 @@ void paging_free_all_user_in(uint32_t cr3_phys)
     asm volatile("mov %%cr3, %0" : "=r"(old));
     paging_switch_address_space(cr3_phys);
 
-    for (uint32_t va = USER_MIN; va < USER_MAX; va += PAGE_SIZE_4KB)
+    uint32_t udi_start = (USER_MIN >> 22);
+    uint32_t udi_end   = ((USER_MAX - 1) >> 22);
+
+    uint32_t kpt_start = (uint32_t)kernel_page_tables;
+    uint32_t kpt_end   = kpt_start + sizeof(kernel_page_tables);
+
+    for (uint32_t di = udi_start; di <= udi_end; di++)
     {
-        if (page_is_present(va))
+        uint32_t pde = page_directory[di];
+        if (!(pde & PAGE_PRESENT)) continue;
+
+        if (pde & PAGE_PS)
         {
-            unmap_page(va);
+            uint32_t phys_addr = pde & 0xFFC00000u;
+            int block = (int)(phys_addr / BLOCK_SIZE);
+            clear_block(block);
+            page_directory[di] = 0;
+            continue;
+        }
+
+        uint32_t pt_phys = pde & 0xFFFFF000u;
+        uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
+
+        for (int ti = 0; ti < 1024; ti++)
+        {
+            uint32_t pte = pt[ti];
+            if (!(pte & PAGE_PRESENT)) continue;
+
+            uint32_t pa = pte & 0xFFFFF000u;
+            int idx = phys_idx_from_pa(pa);
+            phys_ref_dec_idx(idx);
+            pt[ti] = 0;
+        }
+
+        kunmap_phys(1);
+        page_directory[di] = 0;
+
+        // Frigör PT om den inte är från statisk pool
+        if (!(pt_phys >= kpt_start && pt_phys < kpt_end))
+        {
+            free_phys_page(pt_phys);
         }
     }
 
