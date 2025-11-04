@@ -689,6 +689,8 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
                 return -1;
             }
 
+            printf("[PAGING] Allocated dynamic PT phys=%08x for dir=%u va=%08x\n", pt_phys, dir_index, virt_addr);
+
             // Mappa tillfälligt för att initialisera
             table = (uint32_t*)kmap_phys(pt_phys, 0);
             for (int i = 0; i < PAGE_ENTRIES; i++)
@@ -700,6 +702,11 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
             if (flags & PAGE_PCD)  pd_flags |= PAGE_PCD;
             if (flags & PAGE_PWT)  pd_flags |= PAGE_PWT;
             page_directory[dir_index] = (pt_phys & 0xFFFFF000u) | pd_flags;
+
+            printf("[PAGING] Set PDE[%u] = %08x\n", dir_index, page_directory[dir_index]);
+
+            // Invalidate TLB for this directory entry range
+            flush_tlb();
 
             need_kunmap = 1;
         }
@@ -777,6 +784,17 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
     phys_ref_inc_idx(idx);
 
     table[table_index] = desired;
+    printf("[PAGING] Set PTE[%u][%u] = %08x for va=%08x (PDE=%08x)\n",
+           dir_index, table_index, desired, virt_addr, page_directory[dir_index]);
+
+    // Verify the write actually happened
+    uint32_t readback = table[table_index];
+    if (readback != desired) {
+        printf("[PAGING] ERROR: PTE write failed! wrote=%08x read=%08x\n", desired, readback);
+    }
+
+    // CRITICAL: Invalidate TLB for this page before unmapping the PT!
+    invlpg(virt_addr);
 
     if (need_kunmap) kunmap_phys(0);
     return 0;
@@ -1228,9 +1246,22 @@ int paging_handle_demand_fault(uintptr_t fault_va)
     if (!phys) return -2;
 
     int rc = map_4kb_page_flags(page_base, phys, PAGE_PRESENT | PAGE_RW | PAGE_USER);
-    if (rc != 0) return -3;
+    if (rc != 0)
+    {
+        free_phys_page(phys);
+        return -3;
+    }
 
-    memset((void*)page_base, 0, PAGE_SIZE_4KB);
+    void *kptr = kmap_phys(phys, 0);
+    if (!kptr)
+    {
+        unmap_page(page_base);
+        free_phys_page(phys);
+        return -4;
+    }
+
+    memset(kptr, 0, PAGE_SIZE_4KB);
+    kunmap_phys(0);
     invlpg(page_base);
     return 0;
 }
