@@ -28,7 +28,7 @@ $(PROGRAMS):
 
 	$(ELFDUMP) $@/build/$@.o $@/build/dump.txt
 
-	$(PYTHON) $(ELF2DEX) $@/build/dump.txt $@/build/$@.o $(OUT_ROOT)/$@/$@.dex --default-exl diffc.exl --entry main --map-undef 3=__stack_chk_fail --verbose
+	$(PYTHON) $(ELF2DEX) $@/build/dump.txt $@/build/$@.o $(OUT_ROOT)/$@/$@.dex --default-exl diffc.exl --verbose
 
 	@echo "[OUT]  $(OUT_ROOT)/$@/$@.dex"
 	@echo "[INFO] artifacts: $@/build/dump.txt, undefined.txt, imports_map.txt, libs.txt"

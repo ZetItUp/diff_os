@@ -80,28 +80,6 @@ int resolve_exec_path(char *out, size_t out_sz, const char *name)
     return -1;
 }
 
-// Try to interpret a user value as a pointer to a NUL-terminated string.
-static int try_user_cstr_len(uint32_t uptr)
-{
-    if (uptr < 0x10000u)
-    {
-
-        return -1;
-    }
-
-    const char *p = (const char*)(uintptr_t)uptr;
-
-    size_t n = strnlen_user(p, 4096);
-
-    if (n == 0 || n > 4096)
-    {
-
-        return -1;
-    }
-
-    return (int)n;
-}
-
 // Set console colors from user values
 static int system_console_set_color(uint32_t fg, uint32_t bg)
 {
@@ -138,48 +116,37 @@ static int system_putchar(int ch)
     return 0;
 }
 
-// Print a user string safely by copying it to kernel first
-static int system_print(const char *u_str)
+// Print a user string with page checks on each byte
+static int system_print(const char *s)
 {
-    if (!u_str)
+    if (!s)
     {
         return 0;
     }
 
-    const size_t MAX = 4096;
+    for (int i = 0; i < 4096; ++i)
+    {
+        if (paging_check_user_range((uint32_t)(s + i), 1) != 0)
+        {
+            printf("[SYSTEM] bad user ptr at %p\n", s + i);
 
-    // Bounded length from user, page-safe
-    size_t n = strnlen_user(u_str, MAX);
-    if (n == 0)
-    {
-        return 0;
-    }
-    if (n > MAX)
-    {
-        n = MAX;
-    }
+            return -1;
+        }
 
-    char *kbuf = (char*)kmalloc(n + 1);
-    if (!kbuf)
-    {
-        return -1;
-    }
+        char c = s[i];
 
-    // Copy from user; abort on any fault
-    if (copy_from_user(kbuf, u_str, n) != 0)
-    {
-        kfree(kbuf);
-        return -1;
+        if (!c)
+        {
+            break;
+        }
+
+        putch(c);
+#ifdef DIFF_DEBUG
+        printf("[WRITE] pid=%d\n", process_current()->pid);
+#endif
     }
 
-    kbuf[n] = '\0';
-
-    // Print exactly what we copied
-    printf("%s", kbuf);
-
-    kfree(kbuf);
-
-    return (int)n;
+    return 0;
 }
 
 // Save parent frame and run a DEX image
@@ -256,8 +223,6 @@ static int system_exit(struct syscall_frame *f, int code)
 // System call dispatcher
 int system_call_dispatch(struct syscall_frame *f)
 {
-    asm volatile("cld");
-
     int num = (int)f->eax;
     int arg0 = (int)f->ebx;
     int arg1 = (int)f->ecx;
@@ -279,50 +244,13 @@ int system_call_dispatch(struct syscall_frame *f)
         }
         case SYSTEM_PUTCHAR:
         {
-            int n = try_user_cstr_len((uint32_t)arg0);
-
-            if (n >= 0)
-            {
-#ifdef DIFF_DEBUG
-        puts("[SYSCALL][compat] PUTCHAR->PRINT\n");
-#endif
-                ret = system_print((const char*)arg0);
-            }
-            else
-            {
-                ret = system_putchar(arg0);
-            }
+            ret = system_putchar(arg0);
 
             break;
         }
         case SYSTEM_PRINT:
         {
-            const char *u = (const char*)arg0;
-
-            int n = try_user_cstr_len((uint32_t)arg0);
-
-            if (n < 0)
-            {
-                // Compatibility: some callers may pass the pointer in ECX
-                int n2 = try_user_cstr_len((uint32_t)arg1);
-
-                if (n2 >= 0)
-                {
-#ifdef DIFF_DEBUG
-    puts("[SYSCALL][compat] PRINT from ECX\n");
-#endif
-                    u = (const char*)arg1;
-                }
-                else
-                {
-                    ret = 0;
-
-                    break;
-                }
-            }
-
-            ret = system_print(u);
-
+            ret = system_print((const char*)arg0);
 
             break;
         }

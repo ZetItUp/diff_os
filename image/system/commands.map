@@ -8,6 +8,7 @@ ls=/programs/ls/ls.dex
 ptest=/programs/ptest/ptest.dex
 ttest=/programs/ttest/ttest.dex
 brktest=/programs/brktest/brktest.dex
+malloctest=/programs/malloctest/malloctest.dex
 
 # Games
 doom=/games/doom/doom.dex

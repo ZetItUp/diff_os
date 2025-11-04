@@ -20,7 +20,7 @@ TOOLS_DIR = tools
 DRIVERS_DIR = drivers
 IMAGE = $(TARGET)
 
-DEBUG ?=1
+DEBUG ?=0
 ifeq ($(DEBUG),1)
 CFLAGS += -DDIFF_DEBUG
 endif
