@@ -32,7 +32,7 @@ static int symname_eq(const char *a, const char *b)
     if (*b == '@') while (*b) ++b;
     return *a == 0 && *b == 0;
 }
-
+#undef DIFF_DEBUG
 #ifdef DIFF_DEBUG
 #define DDBG(...) printf(__VA_ARGS__)
 #else

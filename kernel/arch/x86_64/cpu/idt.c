@@ -133,6 +133,44 @@ static inline void panic_putreg(const char *name, uint32_t v) {
     panic_puts(name); panic_putc('='); panic_puthex32(v); panic_putc(' ');
 }
 
+static void panic_print_cpu_context(const struct stack_frame *f)
+{
+    panic_putreg("EAX", f->eax); panic_putreg("EBX", f->ebx);
+    panic_putreg("ECX", f->ecx); panic_putreg("EDX", f->edx); panic_puts("\n");
+    panic_putreg("ESI", f->esi); panic_putreg("EDI", f->edi);
+    panic_putreg("EBP", f->ebp); panic_putreg("ESP", f->esp); panic_puts("\n");
+
+    panic_puts("CS="); panic_puthex32(f->cs);
+    panic_puts(" DS="); panic_puthex32(f->ds);
+    panic_puts(" ES="); panic_puthex32(f->es);
+    panic_puts(" FS="); panic_puthex32(f->fs);
+    panic_puts(" GS="); panic_puthex32(f->gs);
+    panic_puts(" SS="); panic_puthex32(f->ss);
+    panic_puts("\n");
+
+    panic_puts("EIP="); panic_puthex32(f->eip);
+    panic_puts(" EFLAGS="); panic_puthex32(f->eflags);
+    panic_puts(" USERESP="); panic_puthex32(f->useresp);
+    panic_puts("\n");
+}
+
+static void panic_print_process_info(void)
+{
+    process_t *p = process_current();
+    panic_puts("PID=");
+    if (p)
+    {
+        panic_putu32((uint32_t)p->pid);
+        panic_puts(" CR3=");
+        panic_puthex32(p->cr3);
+    }
+    else
+    {
+        panic_puts("none");
+    }
+    panic_puts("\n");
+}
+
 // =====================================================================
 //                           FAULT HANDLING
 // =====================================================================
@@ -168,12 +206,8 @@ static void print_page_fault(struct stack_frame *f, uint32_t cr2, uint32_t cr3, 
     panic_puts(" IF="); panic_putu32((err>>4)&1);
     panic_puts("\n");
 
-    // Register
-    panic_putreg("EAX", f->eax); panic_putreg("EBX", f->ebx);
-    panic_putreg("ECX", f->ecx); panic_putreg("EDX", f->edx); panic_puts("\n");
-    panic_putreg("ESI", f->esi); panic_putreg("EDI", f->edi);
-    panic_putreg("EBP", f->ebp); panic_putreg("ESP", f->esp); panic_puts("\n");
-
+    panic_print_cpu_context(f);
+    panic_print_process_info();
     --s_in_pf;
 }
 
@@ -202,13 +236,8 @@ void fault_handler(struct stack_frame *frame)
         panic_puts(", "); panic_puts(ti ? "LDT" : "GDT");
         panic_puts(", index="); panic_putu32(idx); panic_puts(")\n");
 
-        panic_puts("SS="); panic_puthex32(frame->ss);
-        panic_puts(" ESP="); panic_puthex32(frame->useresp);
-        panic_puts(" DS="); panic_puthex32(frame->ds);
-        panic_puts(" ES="); panic_puthex32(frame->es);
-        panic_puts(" FS="); panic_puthex32(frame->fs);
-        panic_puts(" GS="); panic_puthex32(frame->gs);
-        panic_puts("\n");
+        panic_print_cpu_context(frame);
+        panic_print_process_info();
 
         for(;;) asm volatile("hlt");
     }
@@ -233,8 +262,23 @@ void fault_handler(struct stack_frame *frame)
         // Fallback: minimal serial och häng (PF-säkert)
         panic_serial_init();
         panic_puts("==== CPU EXCEPTION ====\n");
-        panic_puts("int_no="); panic_putu32(frame->int_no);
+        panic_puts("Vector=");
+        panic_putu32(frame->int_no);
+        panic_puts(" (");
+        if (frame->int_no < 32)
+            panic_puts(exception_messages[frame->int_no]);
+        else
+            panic_puts("Unknown");
+        panic_puts(")\n");
+
+        panic_puts("ERR=");
+        panic_puthex32(frame->err_code);
+        panic_puts(" CR3=");
+        panic_puthex32(read_cr3());
         panic_puts("\n");
+
+        panic_print_cpu_context(frame);
+        panic_print_process_info();
         for(;;) asm volatile("hlt");
     }
 }
@@ -252,4 +296,3 @@ void dump_idt(void)
         puts("\n");
     }
 }
-

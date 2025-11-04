@@ -26,6 +26,10 @@ void irq_handler_c(unsigned irq_ptr, void *context)
     {
         irq_handlers[irq](irq, context);
     }
+    else
+    {
+        printf("[IRQ] Unhandled vector %u (real=%u)\n", irq, real_irq);
+    }
     
     // Always send EOI
     if(irq >= 32)
