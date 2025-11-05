@@ -322,7 +322,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
     for r in relocs:
         if r["type"] == R_386_GOT32X:
             got32x_processed += 1
-            if verbose and got32x_processed <= 5:
+            if verbose and (got32x_processed <= 5 or r.get('symname') in ('printf', 'doomgeneric_Create')):
                 print(f"[DEBUG] Processing GOT32X reloc #{got32x_processed}: offset=0x{r['offset']:x}, target_secidx={r['target_secidx']}, symname={r.get('symname', '')}")
 
         tgt_base, tgt_buf = base_for_secidx(r["target_secidx"])
@@ -390,10 +390,14 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
                           f"A=0x{A:08x} S=0x{sym['value']:08x} -> old=0x{init:08x} DEX_REL")
             elif sym and sym["shndx"] == 0:
                 # External -> DEX_ABS32 + import
+                # For GOT32X, A is a GOT offset we don't need - clear it
+                if etype == R_386_GOT32X:
+                    struct.pack_into("<I", tgt_buf, raw_off, 0)
                 idx = ensure_import(name or f"@{si}", False)
                 reloc_table.append((img_off, idx, DEX_ABS32, 0))
                 if verbose:
-                    print(f"[ABS32 ext] sect={sect_name} site_off=0x{img_off:08x} "
+                    reloc_type_str = "GOT32X" if etype == R_386_GOT32X else "ABS32"
+                    print(f"[{reloc_type_str} ext] sect={sect_name} site_off=0x{img_off:08x} "
                           f"A=0x{A:08x} sym='{name}' -> DEX_ABS32 (idx={idx})")
             else:
                 # Odokumenterat/immediater utan symbol – anta data_off + A
