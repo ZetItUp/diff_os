@@ -3,6 +3,9 @@
 #include "string.h"
 #include "paging.h"
 #include "system/usercopy.h"
+#include "debug.h"
+
+#define PAGING_DBG(...) DDBG_IF(DEBUG_AREA_PAGING, __VA_ARGS__)
 
 #ifndef UHEAP_BASE
 #define UHEAP_BASE 0x40000000u
@@ -689,9 +692,7 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
                 return -1;
             }
 
-#ifdef DIFF_DEBUG
-            printf("[PAGING] Allocated dynamic PT phys=%08x for dir=%u va=%08x\n", pt_phys, dir_index, virt_addr);
-#endif
+            PAGING_DBG("[PAGING] Allocated dynamic PT phys=%08x for dir=%u va=%08x\n", pt_phys, dir_index, virt_addr);
 
             // Mappa tillfälligt för att initialisera
             table = (uint32_t*)kmap_phys(pt_phys, 0);
@@ -705,9 +706,7 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
             if (flags & PAGE_PWT)  pd_flags |= PAGE_PWT;
             page_directory[dir_index] = (pt_phys & 0xFFFFF000u) | pd_flags;
 
-#ifdef DIFF_DEBUG
-            printf("[PAGING] Set PDE[%u] = %08x\n", dir_index, page_directory[dir_index]);
-#endif
+            PAGING_DBG("[PAGING] Set PDE[%u] = %08x\n", dir_index, page_directory[dir_index]);
             
             // Invalidate TLB for this directory entry range
             flush_tlb();
@@ -788,10 +787,8 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
     phys_ref_inc_idx(idx);
 
     table[table_index] = desired;
-#ifdef DIFF_DEBUG
-    printf("[PAGING] Set PTE[%u][%u] = %08x for va=%08x (PDE=%08x)\n",
-           dir_index, table_index, desired, virt_addr, page_directory[dir_index]);
-#endif
+    PAGING_DBG("[PAGING] Set PTE[%u][%u] = %08x for va=%08x (PDE=%08x)\n",
+               dir_index, table_index, desired, virt_addr, page_directory[dir_index]);
     // Verify the write actually happened
     uint32_t readback = table[table_index];
     if (readback != desired) {

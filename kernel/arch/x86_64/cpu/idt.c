@@ -7,6 +7,8 @@
 #include "paging.h"
 #include "system/syscall.h"
 #include "system/process.h"
+#include "debug.h"
+#include "system/usercopy.h"
 #include <stdint.h>
 
 // ===== ISR stubs =====
@@ -123,6 +125,11 @@ static inline void panic_puthex32(uint32_t v) {
         panic_putc(hex[nib]);
     }
 }
+static inline void panic_puthex8(uint8_t v) {
+    static const char *hex = "0123456789ABCDEF";
+    panic_putc(hex[(v >> 4) & 0xF]);
+    panic_putc(hex[v & 0xF]);
+}
 static inline void panic_putu32(uint32_t v) {
     char buf[11]; int i = 0;
     if (v == 0) { panic_putc('0'); return; }
@@ -171,6 +178,64 @@ static void panic_print_process_info(void)
     panic_puts("\n");
 }
 
+static void panic_dump_code_window(uint32_t center, size_t pre, size_t post)
+{
+    uint32_t start = center;
+    if (center > pre)
+    {
+        start -= (uint32_t)pre;
+    }
+    else
+    {
+        start = 0;
+    }
+
+    size_t total = pre + post;
+
+    panic_puts("Code bytes around fault:\n");
+
+    for (size_t i = 0; i < total; ++i)
+    {
+        uint32_t addr = start + (uint32_t)i;
+        if ((i & 0x0Fu) == 0)
+        {
+            panic_puts("  ");
+            panic_puthex32(addr);
+            panic_puts(": ");
+        }
+
+        uint8_t val = 0;
+        int rc = 0;
+        if (addr >= KERNEL_BASE)
+        {
+            val = *(const uint8_t *)(uintptr_t)addr;
+        }
+        else
+        {
+            rc = copy_from_user(&val, (const void *)(uintptr_t)addr, 1);
+        }
+
+        if (rc != 0)
+        {
+            panic_puts("?? ");
+            continue;
+        }
+
+        if (addr == center)
+        {
+            panic_putc('[');
+            panic_puthex8(val);
+            panic_putc(']');
+        }
+        else
+        {
+            panic_puthex8(val);
+        }
+        panic_putc(' ');
+    }
+    panic_puts("\n");
+}
+
 // =====================================================================
 //                           FAULT HANDLING
 // =====================================================================
@@ -213,6 +278,11 @@ static void print_page_fault(struct stack_frame *f, uint32_t cr2, uint32_t cr3, 
 
 void fault_handler(struct stack_frame *frame)
 {
+    if (frame->int_no == 1)
+    {
+        if (debug_handle_single_step(frame)) return;
+    }
+
     if (frame->int_no >= 32) return;
 
     if (frame->int_no == 13) // #GP
@@ -276,6 +346,11 @@ void fault_handler(struct stack_frame *frame)
         panic_puts(" CR3=");
         panic_puthex32(read_cr3());
         panic_puts("\n");
+
+        if (frame->int_no == 6)
+        {
+            panic_dump_code_window(frame->eip, 16, 32);
+        }
 
         panic_print_cpu_context(frame);
         panic_print_process_info();

@@ -11,15 +11,10 @@
 #include "system/threads.h"
 #include "system/scheduler.h"
 #include "system/path.h"
+#include "debug.h"
 #include "dex/dex.h"
 #include "dex/exl.h"
 #include "diff.h"
-
-#ifdef DIFF_DEBUG
-#define DDBG(...) printf(__VA_ARGS__)
-#else
-#define DDBG(...) do {} while (0)
-#endif
 
 extern void enter_user_mode(uint32_t entry_eip, uint32_t user_stack_top) __attribute__((noreturn));
 
@@ -127,9 +122,7 @@ void process_destroy(process_t *p)
 
     // Vi får inte förstöra en fortfarande RUNNING process här.
     if (p->state == PROCESS_RUNNING) {
-#ifdef DIFF_DEBUG
-        printf("[PROC][ERR] process_destroy on RUNNING pid=%d\n", p->pid);
-#endif
+        DDBG("[PROC][ERR] process_destroy on RUNNING pid=%d\n", p->pid);
         return;
     }
 
@@ -485,9 +478,7 @@ int system_wait_pid(int pid, int *u_status)
     // Reapa barnets trådar innan vi fortsätter
     scheduler_reap_owned_zombies(child);
     if (child->live_threads != 0) {
-#ifdef DIFF_DEBUG
-        printf("[WAITPID][WARN] child live_threads=%d after reap; forcing zero\n", child->live_threads);
-#endif
+        DDBG("[WAITPID][WARN] child live_threads=%d after reap; forcing zero\n", child->live_threads);
         child->live_threads = 0;
     }
 
@@ -512,9 +503,7 @@ int system_wait_pid(int pid, int *u_status)
         }
 
         if (cpy_rc != 0) {
-#ifdef DIFF_DEBUG
-            printf("[WAITPID][ERR] failed to copy status to user %p\n", u_status);
-#endif
+            DDBG("[WAITPID][ERR] failed to copy status to user %p\n", u_status);
             return -1;
         }
     }

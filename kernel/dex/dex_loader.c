@@ -11,6 +11,9 @@
 #include "paging.h"
 #include "heap.h"
 #include "system/usercopy.h"
+#include "debug.h"
+
+#define DEX_DBG(...) DDBG_IF(DEBUG_AREA_EXL, __VA_ARGS__)
 
 extern void enter_user_mode(uint32_t entry, uint32_t user_stack_top);
 extern FileTable *file_table;
@@ -22,12 +25,6 @@ extern void paging_destroy_address_space(uint32_t cr3);
 
 #ifndef PAGE_ALIGN_UP
 #define PAGE_ALIGN_UP(x) (((uint32_t)(x) + 0xFFFu) & ~0xFFFu)
-#endif
-
-#ifdef DIFF_DEBUG
-#define DDBG(...) printf(__VA_ARGS__)
-#else
-#define DDBG(...) do {} while (0)
 #endif
 
 // Check if address is in user range
@@ -135,7 +132,7 @@ static uint8_t *build_user_exit_stub(uint32_t entry_va)
     // Mark the actual written range as user (covers shorter-than-64 writes)
     paging_set_user((uint32_t)stub, (uint32_t)(p - stub));
 
-    DDBG("[DEX] stub@%p -> call %08x rel=%d\n", stub, entry_va, rel);
+    DEX_DBG("[DEX] stub@%p -> call %08x rel=%d\n", stub, entry_va, rel);
 
     return stub;
 }
@@ -241,7 +238,7 @@ static uint32_t build_user_stack(
 
     kfree(argv_ptrs);
 
-    DDBG("[DEX] stack built base=%08x top=%08x size=%u\n", base, sp, STK_SZ);
+    DEX_DBG("[DEX] stack built base=%08x top=%08x size=%u\n", base, sp, STK_SZ);
     return sp;
 }
 
@@ -304,7 +301,7 @@ static int resolve_imports_user(
         }
 
         out_ptrs[i] = addr;
-        DDBG("[IMP] %s:%s -> %p\n", exl, sym, addr);
+        DEX_DBG("[IMP] %s:%s -> %p\n", exl, sym, addr);
     }
 
     return 0;
@@ -353,7 +350,7 @@ static int relocate_image(
         return -3;
     }
 
-    DDBG("[RELOC] Applying %u relocations\n", hdr->reloc_table_count);
+    DEX_DBG("[RELOC] Applying %u relocations\n", hdr->reloc_table_count);
 
     // Apply relocations
     for (uint32_t i = 0; i < hdr->reloc_table_count; ++i)
@@ -392,7 +389,7 @@ static int relocate_image(
                 }
                 *(uint32_t *)target = (uint32_t)import_ptrs[idx];
 
-                DDBG("[REL] ABS32 @%08x %08x -> %08x S=%08x\n",
+                DEX_DBG("[REL] ABS32 @%08x %08x -> %08x S=%08x\n",
                      (uint32_t)(uintptr_t)target, old, *(uint32_t *)target, (uint32_t)import_ptrs[idx]);
                 break;
             }
@@ -413,7 +410,13 @@ static int relocate_image(
                 int32_t disp = (int32_t)S - (int32_t)((uint32_t)(uintptr_t)target + 4);
                 *(int32_t *)target = disp;
 
-                DDBG("[REL] PC32  @%08x P=%08x S=%08x disp=%d old=%08x new=%08x\n",
+                if (off >= hdr->entry_offset && off < hdr->entry_offset + 0x200)
+                {
+                    printf("[DEX][PC32] off=0x%08x S=%08x P=%08x disp=%08x old=%08x new=%08x\n",
+                           off, S, (uint32_t)(uintptr_t)target + 4, (uint32_t)disp, old, *(uint32_t *)target);
+                }
+
+                DEX_DBG("[REL] PC32  @%08x P=%08x S=%08x disp=%d old=%08x new=%08x\n",
                      (uint32_t)(uintptr_t)target,
                      (uint32_t)(uintptr_t)target + 4,
                      S, disp, old, *(uint32_t *)target);
@@ -424,9 +427,14 @@ static int relocate_image(
             case DEX_RELATIVE:
             {
                 uint32_t val = old + (uint32_t)image;
+                if (off >= hdr->entry_offset && off < hdr->entry_offset + 0x200)
+                {
+                    printf("[DEX][REL] off=0x%08x old=0x%08x base=0x%08x -> 0x%08x\n",
+                           off, old, (uint32_t)image, val);
+                }
                 *(uint32_t *)target = val;
 
-                DDBG("[REL] REL   @%08x %08x -> %08x base=%08x\n",
+                DEX_DBG("[REL] REL   @%08x %08x -> %08x base=%08x\n",
                      (uint32_t)(uintptr_t)target, old, val, (uint32_t)image);
 
                 break;
@@ -445,7 +453,7 @@ static int relocate_image(
             }
         }
 
-        DDBG("new=0x%08x\n", *(uint32_t *)target);
+        DEX_DBG("new=0x%08x\n", *(uint32_t *)target);
     }
 
     if (import_ptrs)
@@ -635,18 +643,16 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
     rel  = (const dex_reloc_t  *)((const uint8_t *)file_data + hdr->reloc_table_offset);
     stab = (const char         *)((const uint8_t *)file_data + hdr->strtab_offset);
 
-#ifdef DIFF_DEBUG
-    DDBG("=== DEX HEADER DEBUG ===\n");
-    DDBG("magic=0x%08x ver=%u.%u\n", hdr->magic, hdr->version_major, hdr->version_minor);
-    DDBG("entry_off=0x%08x\n", hdr->entry_offset);
-    DDBG(".text off=0x%08x sz=%u\n", hdr->text_offset, hdr->text_size);
-    DDBG(".ro   off=0x%08x sz=%u\n", hdr->rodata_offset, hdr->rodata_size);
-    DDBG(".data off=0x%08x sz=%u\n", hdr->data_offset, hdr->data_size);
-    DDBG(".bss  sz=%u\n", hdr->bss_size);
-    DDBG("import off=0x%08x cnt=%u\n", hdr->import_table_offset, hdr->import_table_count);
-    DDBG("reloc  off=0x%08x cnt=%u\n", hdr->reloc_table_offset,  hdr->reloc_table_count);
-    DDBG("========================\n");
-#endif
+    DEX_DBG("=== DEX HEADER DEBUG ===\n");
+    DEX_DBG("magic=0x%08x ver=%u.%u\n", hdr->magic, hdr->version_major, hdr->version_minor);
+    DEX_DBG("entry_off=0x%08x\n", hdr->entry_offset);
+    DEX_DBG(".text off=0x%08x sz=%u\n", hdr->text_offset, hdr->text_size);
+    DEX_DBG(".ro   off=0x%08x sz=%u\n", hdr->rodata_offset, hdr->rodata_size);
+    DEX_DBG(".data off=0x%08x sz=%u\n", hdr->data_offset, hdr->data_size);
+    DEX_DBG(".bss  sz=%u\n", hdr->bss_size);
+    DEX_DBG("import off=0x%08x cnt=%u\n", hdr->import_table_offset, hdr->import_table_count);
+    DEX_DBG("reloc  off=0x%08x cnt=%u\n", hdr->reloc_table_offset,  hdr->reloc_table_count);
+    DEX_DBG("========================\n");
 
     // Apply relocations and imports
     if (relocate_image(hdr, imp, rel, stab, image, total_sz) != 0)
@@ -688,10 +694,26 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
     out->dex_entry  = (void (*)(void))((uint32_t)image + entry_off);
     out->image_size = total_sz;
 
-#ifdef DIFF_DEBUG
-    hexdump_bytes((void *)((uint32_t)image + entry_off), 64);
-    DDBG("[DEX] entry VA=%08x off=0x%x\n", (uint32_t)image + entry_off, entry_off);
-#endif
+    printf("[DEX] entry_va=0x%08x text_off=0x%08x text_sz=0x%08x\n",
+           (uint32_t)out->dex_entry,
+           hdr->text_offset,
+           hdr->text_size);
+
+    {
+        const uint8_t *ep = (const uint8_t *)out->dex_entry;
+        printf("[DEX] entry_bytes:");
+        for (int i = 0; i < 16; ++i)
+        {
+            printf(" %02x", ep[i]);
+        }
+        printf("\n");
+    }
+
+    if (g_debug_mask & DEBUG_AREA_EXL)
+    {
+        hexdump_bytes((void *)((uint32_t)image + entry_off), 64);
+        printf("[DEX] entry VA=%08x off=0x%x\n", (uint32_t)image + entry_off, entry_off);
+    }
 
     return 0;
 }
@@ -778,7 +800,12 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     // Ensure stub is user present and writable while patching
     paging_update_flags((uint32_t)stub, 64, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
 
-    DDBG("[DEX] run: entry=%08x stub=%08x sp=%08x (no process)\n",
+    if (dex.header && dex.header->text_size > 0x10000)
+    {
+        debug_request_single_step((uint32_t)stub, 512);
+    }
+
+    DEX_DBG("[DEX] run: entry=%08x stub=%08x sp=%08x (no process)\n",
          (uint32_t)dex.dex_entry, (uint32_t)stub, user_sp);
 
     
@@ -814,10 +841,11 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     uint8_t *stub;
     process_t *p;
     int pid;
-#ifdef DIFF_DEBUG
-    printf("dex_spawn_process heap_dump:\n");
-    heap_dump();
-#endif
+    if (g_debug_mask & DEBUG_AREA_EXL)
+    {
+        printf("dex_spawn_process heap_dump:\n");
+        heap_dump();
+    }
 
     if (!ft || !path || !path[0])
     {
@@ -845,10 +873,8 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
         return -4;
     }
 
-#ifdef DIFF_DEBUG
-    printf("Trying to read_file(%p, %s, buffer)\n", ft, path);
-    printf("Buffer attempted to allocate: %d bytes\n", fe->file_size_bytes);
-#endif
+    DEX_DBG("Trying to read_file(%p, %s, buffer)\n", (void*)ft, path);
+    DEX_DBG("Buffer attempted to allocate: %d bytes\n", fe->file_size_bytes);
 
     // Read into kernel buffer directly (no PAGE_USER hack)
     if (read_file(ft, path, buffer) < 0)
@@ -915,6 +941,11 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
 
     paging_update_flags((uint32_t)stub, 64, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
 
+    if (dex.header && dex.header->text_size > 0x10000)
+    {
+        debug_request_single_step((uint32_t)stub, 512);
+    }
+
     uintptr_t heap_base = (((uintptr_t)stub + 0xFFFu) & ~0xFFFu);
     uintptr_t heap_size = 64u << 20;
 
@@ -936,10 +967,9 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     }
 
     pid = process_pid(p);
-    DDBG("[DEX] spawn: pid=%d parent_cr3=%08x child_cr3=%08x\n",
+    DEX_DBG("[DEX] spawn: pid=%d parent_cr3=%08x child_cr3=%08x\n",
          pid, cr3_parent, cr3_child);
 
     kfree(buffer);
     return pid;
 }// Spawn new process and load DEX into child address space
-

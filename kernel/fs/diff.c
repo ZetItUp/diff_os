@@ -9,6 +9,7 @@
 #include "system/spinlock.h"
 #include "system/usercopy.h"
 #include "paging.h"
+#include "debug.h"
 
 #define LOOKS_LIKE_KMAP_WIN(p) ((((uintptr_t)(p)) & 0xFFF00000u) == 0xD0000000u)
 
@@ -368,12 +369,10 @@ static int read_at_entry(const FileEntry* fe, uint32_t offset, void* buffer, uin
 
     int read_bytes = (int)(count - bytes_left);
 
-#ifdef DIFF_DEBUG
     if (read_bytes != (int)count)
     {
-        printf("[Diff FS] read_at_entry short read: wanted=%u got=%d\n", count, read_bytes);
+        DDBG("[Diff FS] read_at_entry short read: wanted=%u got=%d\n", count, read_bytes);
     }
-#endif
 
     return read_bytes;
 }
@@ -408,9 +407,7 @@ int disk_read(uint32_t sector, uint32_t count, void* buffer)
     {
         if (sector >= superblock.total_sectors)
         {
-#ifdef DIFF_DEBUG
-            printf("[Diff FS] disk_read OOR: sector=%u total=%u\n", sector, superblock.total_sectors);
-#endif
+            DDBG("[Diff FS] disk_read OOR: sector=%u total=%u\n", sector, superblock.total_sectors);
             return -2;
         }
 
@@ -523,9 +520,7 @@ int disk_write(uint32_t sector, uint32_t count, const void* buffer)
     {
         if (sector >= superblock.total_sectors)
         {
-#ifdef DIFF_DEBUG
-            printf("[Diff FS] disk_write OOR: sector=%u total=%u\n", sector, superblock.total_sectors);
-#endif
+            DDBG("[Diff FS] disk_write OOR: sector=%u total=%u\n", sector, superblock.total_sectors);
             return -2;
         }
 
@@ -634,9 +629,7 @@ static int validate_span(uint32_t start, uint32_t count, const char* what)
 {
     if (count == 0)
     {
-#ifdef DIFF_DEBUG
-        printf("[Diff FS] WARN: %s count=0\n", what);
-#endif
+        DDBG("[Diff FS] WARN: %s count=0\n", what);
         return 0;
     }
 
@@ -1089,19 +1082,15 @@ int read_file(const FileTable* table, const char* path, void* buffer)
     // Bounds checks against disk
     if (superblock.total_sectors && start_sector >= superblock.total_sectors)
     {
-#ifdef DIFF_DEBUG
-        printf("[Diff FS] read_file: start_sector OOR path='%s' start=%u total=%u\n",
-               path, start_sector, superblock.total_sectors);
-#endif
+        DDBG("[Diff FS] read_file: start_sector OOR path='%s' start=%u total=%u\n",
+             path, start_sector, superblock.total_sectors);
         return -2;
     }
 
     if (superblock.total_sectors &&
         (uint64_t)start_sector + (uint64_t)sector_count > (uint64_t)superblock.total_sectors)
     {
-#ifdef DIFF_DEBUG
-        printf("[Diff FS] read_file: clamping sector_count (path='%s')\n", path);
-#endif
+        DDBG("[Diff FS] read_file: clamping sector_count (path='%s')\n", path);
         sector_count = superblock.total_sectors - start_sector;
     }
 
@@ -1113,10 +1102,8 @@ int read_file(const FileTable* table, const char* path, void* buffer)
         file_size_bytes = (uint32_t)capacity_bytes;
     }
 
-#ifdef DIFF_DEBUG
-    printf("[Diff FS] read_file '%s': LBA=%u count=%u size=%u\n",
-           path, start_sector, sector_count, file_size_bytes);
-#endif
+    DDBG("[Diff FS] read_file '%s': LBA=%u count=%u size=%u\n",
+         path, start_sector, sector_count, file_size_bytes);
 
     uint8_t* dst = (uint8_t*)buffer;
 
@@ -1186,9 +1173,7 @@ int read_file(const FileTable* table, const char* path, void* buffer)
         int rr = ata_read(lba, chunk, bounce);
         if (rr < 0)
         {
-#ifdef DIFF_DEBUG
-            printf("[Diff FS] read_file: ata_read failed at LBA=%u (chunk=%u)\n", lba, chunk);
-#endif
+            DDBG("[Diff FS] read_file: ata_read failed at LBA=%u (chunk=%u)\n", lba, chunk);
             kfree(bounce);
             return -2;
         }
@@ -1212,9 +1197,7 @@ int read_file(const FileTable* table, const char* path, void* buffer)
         int rr = ata_read(lba, 1, temp);
         if (rr < 0)
         {
-#ifdef DIFF_DEBUG
-            printf("[Diff FS] read_file: ata_read tail failed at LBA=%u\n", lba);
-#endif
+            DDBG("[Diff FS] read_file: ata_read tail failed at LBA=%u\n", lba);
             kfree(bounce);
             return -2;
         }
@@ -1643,4 +1626,3 @@ int filesystem_fstat(int fd, filesystem_stat_t* st)
 
     return 0;
 }
-

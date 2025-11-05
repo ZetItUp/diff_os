@@ -18,7 +18,7 @@ OBJDIR    := $(BUILDDIR)/obj
 DG_WIDTH  ?= 640
 DG_HEIGHT ?= 400
 
-CFLAGS := -ffreestanding -nostdlib -O2 -m32 -fno-pic -no-pie \
+CFLAGS := -ffreestanding -nostdlib -O2 -m32 -fno-pic -fno-plt \
 		  -mno-mmx -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 \
           -mno-sse4.1 -mno-sse4.2 -mno-avx -mno-avx2 -mno-fma \
 		  -fno-asynchronous-unwind-tables -fno-unwind-tables \
@@ -43,7 +43,7 @@ $(OBJDIR)/%.o: %.c | $(OBJDIR) $(OUT_DIR)
 
 $(SUPEROBJ): $(OBJS) | $(BUILDDIR)
 	@echo "[LD -r] $@"
-	$(LD) -m elf_i386 -r -o $@ $(OBJS)
+	$(LD) -m elf_i386 -r --emit-relocs -o $@ $(OBJS)
 
 $(BUILDDIR)/imports.stamp: $(SUPEROBJ)
 	@echo "[GEN] imports"

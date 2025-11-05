@@ -9,6 +9,9 @@
 #include "paging.h"
 #include "heap.h"
 #include "system/usercopy.h"
+#include "debug.h"
+
+#define EXL_DBG(...) DDBG_IF(DEBUG_AREA_EXL, __VA_ARGS__)
 
 /* zero_user is now declared in system/usercopy.h and implemented in usercopy.c */
 
@@ -32,13 +35,6 @@ static int symname_eq(const char *a, const char *b)
     if (*b == '@') while (*b) ++b;
     return *a == 0 && *b == 0;
 }
-#undef DIFF_DEBUG
-#ifdef DIFF_DEBUG
-#define DDBG(...) printf(__VA_ARGS__)
-#else
-#define DDBG(...) do {} while (0)
-#endif
-
 #define MAX_EXL_IMPORTS 256
 
 static exl_t  exl_files[MAX_EXL_FILES];
@@ -52,21 +48,19 @@ extern FileTable *file_table;
 
 static void debug_print_hdr(const dex_header_t *h)
 {
-#ifndef DIFF_DEBUG
-    (void)h;
-#endif
-    DDBG("=== DEX HEADER DEBUG ===\n");
-    DDBG("magic=0x%08x  ver=%u.%u\n", h->magic, h->version_major, h->version_minor);
-    DDBG("entry_off=0x%08x\n", h->entry_offset);
-    DDBG(".text  off=0x%08x sz=%u\n", h->text_offset, h->text_size);
-    DDBG(".ro    off=0x%08x sz=%u\n", h->rodata_offset, h->rodata_size);
-    DDBG(".data  off=0x%08x sz=%u\n", h->data_offset, h->data_size);
-    DDBG(".bss   sz=%u\n", h->bss_size);
-    DDBG("import off=0x%08x cnt=%u\n", h->import_table_offset, h->import_table_count);
-    DDBG("reloc  off=0x%08x cnt=%u\n", h->reloc_table_offset, h->reloc_table_count);
-    DDBG("symtab off=0x%08x cnt=%u\n", h->symbol_table_offset, h->symbol_table_count);
-    DDBG("strtab off=0x%08x sz =%u\n", h->strtab_offset, h->strtab_size);
-    DDBG("========================\n");
+    if (!(g_debug_mask & DEBUG_AREA_EXL)) return;
+    printf("=== DEX HEADER DEBUG ===\n");
+    printf("magic=0x%08x  ver=%u.%u\n", h->magic, h->version_major, h->version_minor);
+    printf("entry_off=0x%08x\n", h->entry_offset);
+    printf(".text  off=0x%08x sz=%u\n", h->text_offset, h->text_size);
+    printf(".ro    off=0x%08x sz=%u\n", h->rodata_offset, h->rodata_size);
+    printf(".data  off=0x%08x sz=%u\n", h->data_offset, h->data_size);
+    printf(".bss   sz=%u\n", h->bss_size);
+    printf("import off=0x%08x cnt=%u\n", h->import_table_offset, h->import_table_count);
+    printf("reloc  off=0x%08x cnt=%u\n", h->reloc_table_offset, h->reloc_table_count);
+    printf("symtab off=0x%08x cnt=%u\n", h->symbol_table_offset, h->symbol_table_count);
+    printf("strtab off=0x%08x sz =%u\n", h->strtab_offset, h->strtab_size);
+    printf("========================\n");
 }
 
 static int range_ok(uint32_t off, uint32_t sz, uint32_t max)
@@ -322,7 +316,7 @@ static int do_relocate_exl(
         memset(import_ptrs, 0, bytes);
     }
 
-    DDBG("--- IMPORTS DEBUG ---\n");
+    EXL_DBG("--- IMPORTS DEBUG ---\n");
 
     for (uint32_t i = 0; i < hdr->import_table_count; ++i)
     {
@@ -333,7 +327,7 @@ static int do_relocate_exl(
         if (exl_name_equals(exl, self_name))
         {
             p = resolve_local_symbol(hdr, symtab, strtab, image, sym);
-            if (p) DDBG("[EXL] resolved locally %s:%s -> %p\n", exl, sym, p);
+            if (p) EXL_DBG("[EXL] resolved locally %s:%s -> %p\n", exl, sym, p);
         }
 
         if (!p && is_loading(exl))
@@ -368,10 +362,10 @@ static int do_relocate_exl(
         }
 
         import_ptrs[i] = p;
-        DDBG("[%u] %s:%s -> %p\n", i, exl, sym, p);
+        EXL_DBG("[%u] %s:%s -> %p\n", i, exl, sym, p);
     }
 
-    DDBG("----------------------\n");
+    EXL_DBG("----------------------\n");
 
     for (uint32_t i = 0; i < hdr->reloc_table_count; ++i)
     {
@@ -395,20 +389,20 @@ static int do_relocate_exl(
             case DEX_ABS32:
                 if (idx >= hdr->import_table_count) { if (import_ptrs) kfree(import_ptrs); return -7; }
                 *(uint32_t*)target = (uint32_t)import_ptrs[idx];
-                DDBG("[ABS32] @%08x: %08x -> %08x (S=%p)\n", site_la, old, *(uint32_t*)target, import_ptrs[idx]);
+                EXL_DBG("[ABS32] @%08x: %08x -> %08x (S=%p)\n", site_la, old, *(uint32_t*)target, import_ptrs[idx]);
                 break;
 
             case DEX_PC32:
                 if (idx >= hdr->import_table_count) { if (import_ptrs) kfree(import_ptrs); return -8; }
                 *(int32_t*)target = (int32_t)( (uint32_t)import_ptrs[idx] - (site_la + 4) );
-                DDBG("[PC32]  @%08x: P=%08x S=%08x -> disp=%d (old=%08x new=%08x)\n",
+                EXL_DBG("[PC32]  @%08x: P=%08x S=%08x -> disp=%d (old=%08x new=%08x)\n",
                      site_la, site_la + 4, (uint32_t)import_ptrs[idx],
                      *(int32_t*)target, old, *(uint32_t*)target);
                 break;
 
             case DEX_RELATIVE:
                 *(uint32_t*)target = old + (uint32_t)image;
-                DDBG("[REL]   @%08x: %08x -> %08x (base=%08x)\n",
+                EXL_DBG("[REL]   @%08x: %08x -> %08x (base=%08x)\n",
                      site_la, old, *(uint32_t*)target, (uint32_t)image);
                 break;
 
@@ -418,7 +412,7 @@ static int do_relocate_exl(
                 return -13;
         }
 
-        DDBG("new=0x%08x\n", *(uint32_t*)target);
+        EXL_DBG("new=0x%08x\n", *(uint32_t*)target);
     }
 
     if (import_ptrs) 
@@ -435,10 +429,11 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
         return NULL;
     }
 
-#ifdef DIFF_DEBUG
-    printf("load_exl heapdump:\n");
-    heap_dump();
-#endif
+    if (g_debug_mask & DEBUG_AREA_EXL)
+    {
+        printf("load_exl heapdump:\n");
+        heap_dump();
+    }
 
     char tmp_name[EXL_NAME_LENGTH];
     canon_exl_name(exl_name, tmp_name, sizeof(tmp_name));
@@ -456,7 +451,7 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
             if (lib->image_base && paging_check_user_range((uint32_t)lib->image_base, 4) == 0)
                 return lib;
 
-            DDBG("[EXL] stale cache for CR3=%08x, invalidating\n", cur_cr3);
+            EXL_DBG("[EXL] stale cache for CR3=%08x, invalidating\n", cur_cr3);
             exl_invalidate_for_cr3(cur_cr3);
             break;
         }
@@ -464,7 +459,7 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
 
     if (is_loading(tmp_name))
     {
-        DDBG("[EXL] already loading '%s' – skip\n", tmp_name);
+        EXL_DBG("[EXL] already loading '%s' – skip\n", tmp_name);
         return NULL;
     }
 
@@ -789,9 +784,10 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     const dex_import_t *imp = (const dex_import_t*)(filebuf + hdr->import_table_offset);
     const dex_reloc_t  *rel = (const dex_reloc_t *)(filebuf + hdr->reloc_table_offset);
 
-#ifdef DIFF_DEBUG
-    paging_dump_range((uint32_t)(image + hdr->text_offset), PAGE_ALIGN_UP(text_sz));
-#endif
+    if (g_debug_mask & DEBUG_AREA_EXL)
+    {
+        paging_dump_range((uint32_t)(image + hdr->text_offset), PAGE_ALIGN_UP(text_sz));
+    }
 
     if (do_relocate_exl(image, total_sz, hdr, imp, rel, symtab, strtab, tmp_name) != 0)
     {
@@ -873,18 +869,15 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
     pop_loading(tmp_name);
 
-    DDBG("[EXL] loaded '%s' base=%p size=%u (.text RX, .data/.bss RW) cr3=%08x\n",
+    EXL_DBG("[EXL] loaded '%s' base=%p size=%u (.text RX, .data/.bss RW) cr3=%08x\n",
          lib->name, lib->image_base, lib->image_size, cur_cr3);
 
-#ifdef DIFF_DEBUG
+    if (g_debug_mask & DEBUG_AREA_EXL)
     {
         uint32_t entry = (uint32_t)image + hdr->entry_offset;
         dump_pde_pte(entry);
-        DDBG("[EXL] entry VA=%08x (off=0x%x)\n", entry, hdr->entry_offset);
+        printf("[EXL] entry VA=%08x (off=0x%x)\n", entry, hdr->entry_offset);
     }
-#endif
 
     return lib;
 }
-
-

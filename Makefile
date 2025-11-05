@@ -20,7 +20,7 @@ TOOLS_DIR = tools
 DRIVERS_DIR = drivers
 IMAGE = $(TARGET)
 
-DEBUG ?=1
+DEBUG ?=0
 ifeq ($(DEBUG),1)
 CFLAGS += -DDIFF_DEBUG
 endif
@@ -53,6 +53,7 @@ KERNEL_SRC = \
 	kernel/system/syscall.c \
 	kernel/system/syscall_dir.c \
 	kernel/system/syscall_file.c \
+	kernel/system/debug.c \
 	kernel/system/path.c \
 	kernel/system/threads.c \
 	kernel/system/process.c \

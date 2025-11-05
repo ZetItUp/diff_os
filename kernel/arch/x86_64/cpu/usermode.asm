@@ -2,6 +2,10 @@
 
 global enter_user_mode
 extern thread_exit
+extern debug_prepare_single_step
+extern g_ss_entry
+extern g_ss_arg_a
+extern g_ss_arg_b
 
 %define USER_CS  0x1B
 %define USER_DS  0x23
@@ -35,14 +39,35 @@ enter_user_mode:
     mov     es, ax
     mov     fs, ax
     mov     gs, ax
-    mov     eax, [esp + 4]                ; entry_eip
-    mov     ecx, [esp + 8]                ; user_stack_top
+    mov     eax, [esp + 4]                ; candidate A
+    mov     ecx, [esp + 8]                ; candidate B
+    mov     ebx, [g_ss_entry]
+    mov     [g_ss_arg_a], eax
+    mov     [g_ss_arg_b], ecx
+    cmp     eax, ebx
+    je      .have_order
+    cmp     ecx, ebx
+    jne     .have_order
+    xchg    eax, ecx
+.have_order:
+    mov     esi, eax                      ; preserve entry
+    mov     edi, ecx                      ; preserve stack
+    push    esi
+    call    debug_prepare_single_step
+    add     esp, 4
+    mov     edx, eax                      ; single-step flag
+    mov     eax, esi
+    mov     ecx, edi
 
     ; Build IRET frame: SS, ESP, EFLAGS, CS, EIP
     push    dword USER_DS
     push    ecx
     pushfd
     or      dword [esp], 0x200            ; IF=1
+    test    edx, edx
+    jz      .no_tf
+    or      dword [esp], 0x100            ; enable TF if requested
+.no_tf:
     push    dword USER_CS
     push    eax
     iretd
@@ -51,4 +76,3 @@ enter_user_mode:
     call    thread_exit
     hlt
     jmp     $
-

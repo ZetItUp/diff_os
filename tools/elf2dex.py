@@ -21,6 +21,7 @@ R_386_NONE  = 0
 R_386_32    = 1
 R_386_PC32  = 2
 R_386_PLT32 = 4
+R_386_GOT32X = 43
 
 FILE_ALIGN = 1
 HDR_SIZE   = 0x100
@@ -311,8 +312,19 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
     # DEX relocation table: (img_off, sym_or_idx, dex_type, 0)
     reloc_table = []
 
+    # DEBUG: Count GOT32X relocations
+    got32x_count = sum(1 for r in relocs if r["type"] == R_386_GOT32X)
+    if verbose and got32x_count > 0:
+        print(f"[DEBUG] Found {got32x_count} GOT32X relocations in input")
+
     # Konvertera ELF relocs -> DEX relocs / patch immediates
+    got32x_processed = 0
     for r in relocs:
+        if r["type"] == R_386_GOT32X:
+            got32x_processed += 1
+            if verbose and got32x_processed <= 5:
+                print(f"[DEBUG] Processing GOT32X reloc #{got32x_processed}: offset=0x{r['offset']:x}, target_secidx={r['target_secidx']}, symname={r.get('symname', '')}")
+
         tgt_base, tgt_buf = base_for_secidx(r["target_secidx"])
         if tgt_base is None or tgt_buf is None:
             # Vi kan få relocs som riktar mot BSS (target i .bss är ogiltigt),
@@ -320,6 +332,8 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
             # Om tgt_buf är None betyder det att vi inte kan skriva tillbaka där -> hoppa.
             if verbose:
                 print(f"[SKIP] reloc target secidx={r['target_secidx']} unsupported (no buffer)")
+                if r["type"] == R_386_GOT32X:
+                    print(f"[DEBUG] GOT32X reloc was skipped!")
             continue
 
         raw_off = r["offset"]
@@ -359,7 +373,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
                     print(f"[PC32 ext] site_off=0x{img_off:08x} target='{name}' -> DEX_PC32 (idx={idx})")
             continue
 
-        if etype == R_386_32:
+        if etype in (R_386_32, R_386_GOT32X):
             A = struct.unpack_from("<I", tgt_buf, raw_off)[0]
             if sym and sym["shndx"] != 0:
                 # Local absolute -> gör bildrelativ och markera DEX_REL
