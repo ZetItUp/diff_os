@@ -17,11 +17,15 @@ DEX_PC32  = 2
 DEX_REL   = 8
 
 # ELF i386 relocation types
-R_386_NONE  = 0
-R_386_32    = 1
-R_386_PC32  = 2
-R_386_PLT32 = 4
-R_386_GOT32X = 43
+R_386_NONE     = 0
+R_386_32       = 1
+R_386_PC32     = 2
+R_386_GOT32    = 3
+R_386_PLT32    = 4
+R_386_RELATIVE = 8
+R_386_GOTOFF   = 9
+R_386_GOTPC    = 10
+R_386_GOT32X   = 43
 
 FILE_ALIGN = 1
 HDR_SIZE   = 0x100
@@ -255,22 +259,22 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
     ro_off   = align_up(text_off + len(text_buf), FILE_ALIGN)
     data_off = align_up(ro_off   + len(ro_buf),   FILE_ALIGN)
 
-    # Hjälpare: kartlägg (secidx) -> (img_base, buf_ref)
+    # Hjälpare: kartlägg (secidx) -> (img_base, buf_ref, buf_offset)
     def base_for_secidx(secidx):
         inf = secinfo.get(secidx)
         if not inf:
-            return None, None
+            return None, None, 0
         g, rel = inf["group"], inf["rel"]
         if g == "text":
-            return text_off + rel, text_buf
+            return text_off + rel, text_buf, rel
         if g == "ro":
-            return ro_off + rel, ro_buf
+            return ro_off + rel, ro_buf, rel
         if g == "data":
-            return data_off + rel, dat_buf
+            return data_off + rel, dat_buf, rel
         if g == "bss":
             # BSS ligger direkt efter data i minnet
-            return data_off + len(dat_buf) + rel, None
-        return None, None
+            return data_off + len(dat_buf) + rel, None, 0
+        return None, None, 0
 
     strtab = StrTab()
     if default_exl:
@@ -325,15 +329,15 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
             if verbose and (got32x_processed <= 5 or r.get('symname') in ('printf', 'doomgeneric_Create')):
                 print(f"[DEBUG] Processing GOT32X reloc #{got32x_processed}: offset=0x{r['offset']:x}, target_secidx={r['target_secidx']}, symname={r.get('symname', '')}")
 
-        tgt_base, tgt_buf = base_for_secidx(r["target_secidx"])
+        tgt_base, tgt_buf, buf_offset = base_for_secidx(r["target_secidx"])
         if tgt_base is None or tgt_buf is None:
             # Vi kan få relocs som riktar mot BSS (target i .bss är ogiltigt),
             # men själva relocations-platsen (site) måste alltid ligga i text/ro/data.
             # Om tgt_buf är None betyder det att vi inte kan skriva tillbaka där -> hoppa.
-            if verbose:
+            if r["type"] == R_386_GOT32X:
+                print(f"[SKIP GOT32X] reloc target secidx={r['target_secidx']} unsupported (no buffer), symname={r.get('symname', '')}, offset=0x{r['offset']:x}")
+            elif verbose:
                 print(f"[SKIP] reloc target secidx={r['target_secidx']} unsupported (no buffer)")
-                if r["type"] == R_386_GOT32X:
-                    print(f"[DEBUG] GOT32X reloc was skipped!")
             continue
 
         raw_off = r["offset"]
@@ -353,7 +357,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
             # Local symbol -> lös disp direkt
             if sym and sym["shndx"] != 0:
                 A = struct.unpack_from("<I", tgt_buf, raw_off)[0]
-                S_base, _ = base_for_secidx(sym["shndx"])
+                S_base, _, _ = base_for_secidx(sym["shndx"])
                 if S_base is None:
                     if verbose:
                         print(f"[SKIP] PC32 to unknown shndx={sym['shndx']}")
@@ -376,8 +380,54 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
         if etype in (R_386_32, R_386_GOT32X):
             A = struct.unpack_from("<I", tgt_buf, raw_off)[0]
             if sym and sym["shndx"] != 0:
-                # Local absolute -> gör bildrelativ och markera DEX_REL
-                src_base, _ = base_for_secidx(sym["shndx"])
+                # Local symbol
+                # Check if GOT32X with indirect call instruction
+                if etype == R_386_GOT32X:
+                    buf_pos = buf_offset + raw_off
+                    is_indirect = False
+                    if buf_pos >= 2:
+                        opcode = tgt_buf[buf_pos-2:buf_pos]
+                        if opcode == b'\xff\x15' or opcode == b'\xff\x25':
+                            is_indirect = True
+
+                    if is_indirect:
+                        # Transform indirect call to direct call for local symbol
+                        src_base, _, _ = base_for_secidx(sym["shndx"])
+                        if src_base is None:
+                            if verbose:
+                                print(f"[SKIP] GOT32X local to unknown shndx={sym['shndx']}")
+                            continue
+
+                        # Transform instruction but keep same length (6 bytes)
+                        # ff 15 XX XX XX XX (call [mem]) -> e8 XX XX XX XX 90 (call rel32; nop)
+                        # ff 25 XX XX XX XX (jmp [mem])  -> e9 XX XX XX XX 90 (jmp rel32; nop)
+                        if tgt_buf[buf_pos-1] == 0x15:  # call
+                            tgt_buf[buf_pos-2] = 0xe8
+                        elif tgt_buf[buf_pos-1] == 0x25:  # jmp
+                            tgt_buf[buf_pos-2] = 0xe9
+
+                        new_buf_pos = buf_pos - 1
+                        new_img_off = img_off - 1
+
+                        # Calculate PC32 displacement: S - P
+                        # For GOT32X transformed to direct call, we don't use the addend
+                        # P is at opcode_start + 5, i.e. new_img_off + 4
+                        S = (src_base + sym["value"]) & 0xffffffff
+                        P = (new_img_off + 4) & 0xffffffff
+                        disp = (S - P) & 0xffffffff
+                        struct.pack_into("<I", tgt_buf, new_buf_pos, disp)
+
+                        # Add NOP to keep instruction at 6 bytes
+                        if new_buf_pos + 4 < len(tgt_buf):
+                            tgt_buf[new_buf_pos + 4] = 0x90
+
+                        if verbose:
+                            print(f"[GOT32X->CALL local] sect={sect_name} site_off=0x{new_img_off:08x} "
+                                  f"S=0x{S:08x} P=0x{P:08x} disp=0x{disp:08x} -> {name}")
+                        continue
+
+                # Standard local absolute relocation
+                src_base, _, _ = base_for_secidx(sym["shndx"])
                 if src_base is None:
                     if verbose:
                         print(f"[SKIP] ABS32 rel to unknown shndx={sym['shndx']}")
@@ -389,16 +439,63 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
                     print(f"[ABS32 rel] sect={sect_name} site_off=0x{img_off:08x} "
                           f"A=0x{A:08x} S=0x{sym['value']:08x} -> old=0x{init:08x} DEX_REL")
             elif sym and sym["shndx"] == 0:
-                # External -> DEX_ABS32 + import
-                # For GOT32X, A is a GOT offset we don't need - clear it
+                # External symbol
                 if etype == R_386_GOT32X:
+                    # GOT32X for external symbols: Check if it's an indirect call/jmp
+                    # Look at the instruction bytes before the relocation site
+                    # ff 15 = call [mem32], ff 25 = jmp [mem32]
+                    is_indirect = False
+                    buf_pos = buf_offset + raw_off
+                    if buf_pos >= 2:
+                        opcode = tgt_buf[buf_pos-2:buf_pos]
+                        if verbose and (name == 'printf' or img_off == 0x3015f):
+                            print(f"[DEBUG GOT32X] sect={sect_name} raw_off=0x{raw_off:x} buf_offset=0x{buf_offset:x} buf_pos=0x{buf_pos:x} img_off=0x{img_off:x} opcode={opcode.hex() if opcode else 'None'}")
+                        if opcode == b'\xff\x15' or opcode == b'\xff\x25':
+                            is_indirect = True
+
+                    if is_indirect:
+                        # Transform indirect call/jmp to direct call/jmp but keep same length (6 bytes)
+                        # ff 15 XX XX XX XX (call [mem]) -> e8 XX XX XX XX 90 (call rel32; nop)
+                        # ff 25 XX XX XX XX (jmp [mem])  -> e9 XX XX XX XX 90 (jmp rel32; nop)
+                        if tgt_buf[buf_pos-1] == 0x15:  # call
+                            tgt_buf[buf_pos-2] = 0xe8
+                        elif tgt_buf[buf_pos-1] == 0x25:  # jmp
+                            tgt_buf[buf_pos-2] = 0xe9
+
+                        new_buf_pos = buf_pos - 1
+                        new_img_off = img_off - 1
+
+                        # Now treat as PC32 relocation (relative offset)
+                        # The displacement now starts one byte earlier
+                        idx = ensure_import(name or f"@{si}", True)
+                        reloc_table.append((new_img_off, idx, DEX_PC32, 0))
+                        # Clear the immediate (will be filled by PC32 relocation)
+                        struct.pack_into("<I", tgt_buf, new_buf_pos, 0)
+
+                        # Add NOP to keep instruction at 6 bytes
+                        if new_buf_pos + 4 < len(tgt_buf):
+                            tgt_buf[new_buf_pos + 4] = 0x90
+
+                        if verbose:
+                            print(f"[GOT32X->PC32] sect={sect_name} site_off=0x{new_img_off:08x} "
+                                  f"sym='{name}' -> transformed indirect to direct call (idx={idx})")
+                    else:
+                        # Not an indirect call - treat as absolute reference
+                        struct.pack_into("<I", tgt_buf, raw_off, 0)
+                        idx = ensure_import(name or f"@{si}", True)
+                        reloc_table.append((img_off, idx, DEX_ABS32, 0))
+                        if verbose:
+                            print(f"[GOT32X ext] sect={sect_name} site_off=0x{img_off:08x} "
+                                  f"A=0x{A:08x} sym='{name}' -> DEX_ABS32 (idx={idx})")
+                else:
+                    # R_386_32 - direct absolute reference
                     struct.pack_into("<I", tgt_buf, raw_off, 0)
-                idx = ensure_import(name or f"@{si}", False)
-                reloc_table.append((img_off, idx, DEX_ABS32, 0))
-                if verbose:
-                    reloc_type_str = "GOT32X" if etype == R_386_GOT32X else "ABS32"
-                    print(f"[{reloc_type_str} ext] sect={sect_name} site_off=0x{img_off:08x} "
-                          f"A=0x{A:08x} sym='{name}' -> DEX_ABS32 (idx={idx})")
+                    is_func = False
+                    idx = ensure_import(name or f"@{si}", is_func)
+                    reloc_table.append((img_off, idx, DEX_ABS32, 0))
+                    if verbose:
+                        print(f"[ABS32 ext] sect={sect_name} site_off=0x{img_off:08x} "
+                              f"A=0x{A:08x} sym='{name}' -> DEX_ABS32 (idx={idx})")
             else:
                 # Odokumenterat/immediater utan symbol – anta data_off + A
                 init = (data_off + A) & 0xffffffff
@@ -409,6 +506,40 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
                           f"A=0x{A:08x} -> old=data_off+A=0x{init:08x} DEX_REL")
             continue
 
+        if etype == R_386_RELATIVE:
+            # Base-relative relocation - add image base to existing value
+            A = struct.unpack_from("<I", tgt_buf, raw_off)[0]
+            # Don't modify the value, just mark it for base relocation
+            reloc_table.append((img_off, 0, DEX_REL, 0))
+            if verbose:
+                print(f"[RELATIVE] sect={sect_name} site_off=0x{img_off:08x} "
+                      f"A=0x{A:08x} -> DEX_REL")
+            continue
+
+        if etype in (R_386_GOT32, R_386_GOTOFF, R_386_GOTPC):
+            # These are GOT-relative relocations
+            # For non-PIC static executables, treat like GOT32X
+            if verbose:
+                print(f"[WARN] GOT-relative reloc type {etype} at off=0x{raw_off:08x} - treating as absolute")
+            # Handle like R_386_32/GOT32X
+            A = struct.unpack_from("<I", tgt_buf, raw_off)[0]
+            if sym and sym["shndx"] != 0:
+                # Local symbol
+                src_base, _, _ = base_for_secidx(sym["shndx"])
+                if src_base is None:
+                    if verbose:
+                        print(f"[SKIP] GOT reloc to unknown shndx={sym['shndx']}")
+                    continue
+                init = (src_base + sym["value"] + A) & 0xffffffff
+                struct.pack_into("<I", tgt_buf, raw_off, init)
+                reloc_table.append((img_off, 0, DEX_REL, 0))
+            elif sym and sym["shndx"] == 0:
+                # External symbol - GOT relocations are typically for functions
+                struct.pack_into("<I", tgt_buf, raw_off, 0)
+                idx = ensure_import(name or f"@{si}", True)
+                reloc_table.append((img_off, idx, DEX_ABS32, 0))
+            continue
+
         if verbose:
             print(f"[WARN] Unknown ELF reloc type {etype} at off=0x{raw_off:08x}")
 
@@ -416,7 +547,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
     # Entry: use DEX bases (not ELF offsets)
     # -------------------------
     def entry_for_symbol(sym):
-        base, _ = base_for_secidx(sym["shndx"])
+        base, _, _ = base_for_secidx(sym["shndx"])
         return None if base is None else (base + (sym["value"] or 0))
 
     entry_off = text_off  # fallback
@@ -577,4 +708,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
