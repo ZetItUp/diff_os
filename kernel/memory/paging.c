@@ -1334,13 +1334,14 @@ int paging_handle_page_fault(uint32_t fault_va, uint32_t err)
     int present = !!(err & 1);
     int write   = !!(err & 2);
     int user    = !!(err & 4);
+    int user_va = is_user_addr_inline(fault_va);
 
-    if (present && write && user)
+    if (present && write && (user || user_va))
     {
         if (paging_handle_cow_fault(fault_va) == 0) return 1;
     }
 
-    if (!present && user)
+    if (!present && (user || user_va))
     {
         if (paging_handle_demand_fault(fault_va) == 0) return 1;
     }
