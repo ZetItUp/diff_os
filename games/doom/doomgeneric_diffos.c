@@ -1,6 +1,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <vbe/vbe.h>
+#include <syscall.h>
+#include <unistd.h>
 #include "doomkeys.h"
 #include "m_argv.h"
 #include "doomgeneric.h"
@@ -12,6 +14,12 @@ void DG_Init(void)
 
     size_t n = (size_t)DOOMGENERIC_RESX * DOOMGENERIC_RESY;
     DG_ScreenBuffer = (pixel_t*)malloc(n * sizeof(pixel_t));
+
+    char exec_root[256];
+    if (system_getexecroot(exec_root, sizeof(exec_root)) >= 0 && exec_root[0] != '\0')
+    {
+        chdir(exec_root);
+    }
 
     vbe_set_video_mode(w, h, 32);
 
@@ -85,4 +93,3 @@ int main(int argc, char **argv)
 
     return 0;
 }
-

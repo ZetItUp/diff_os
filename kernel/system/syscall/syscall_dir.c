@@ -182,6 +182,33 @@ int system_getcwd(char *out, size_t out_sz)
     return (int)need;
 }
 
+int system_getexecroot(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0)
+    {
+        return -1;
+    }
+
+    process_t *proc = process_current();
+    const char *root = process_exec_root(proc);
+    char buf[256];
+
+    (void)strlcpy(buf, root, sizeof(buf));
+
+    size_t need = strlen(buf) + 1;
+    if (need > out_sz)
+    {
+        return -1;
+    }
+
+    if (copy_to_user(out, buf, need) != 0)
+    {
+        return -1;
+    }
+
+    return (int)need;
+}
+
 // Read entry from dir handle
 int system_read_dir(int handle, struct dirent *out)
 {

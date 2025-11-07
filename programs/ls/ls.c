@@ -71,6 +71,7 @@ static void sort_by_name(struct dirent *arr, size_t n)
 int main(int argc, char *argv[])
 {
     const char *target = (argc > 1 && argv[1] && argv[1][0]) ? argv[1] : ".";
+
     DIR *d = opendir(target);
     if (!d)
     {

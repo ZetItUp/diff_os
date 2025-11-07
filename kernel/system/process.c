@@ -87,6 +87,21 @@ static void process_inherit_cwd_from_parent(process_t *p, process_t *parent)
     }
 }
 
+void process_set_exec_root(process_t *p, const char *abs_dir)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    if (!abs_dir || abs_dir[0] == '\0')
+    {
+        abs_dir = "/";
+    }
+
+    (void)strlcpy(p->exec_root, abs_dir, sizeof(p->exec_root));
+}
+
 // Unlink process from global list
 static void process_unlink_from_all(process_t *p)
 {
@@ -221,6 +236,7 @@ void process_init(void)
     k->main_thread = NULL;
     k->waiter = NULL;
     process_assign_default_cwd(k);
+    process_set_exec_root(k, "/");
 
     // Link and set as current
     process_link(k);
@@ -256,6 +272,7 @@ process_t *process_create_kernel(void (*entry)(void *),
     p->main_thread = NULL;
     p->waiter = NULL;
     process_inherit_cwd_from_parent(p, p->parent);
+    process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 
     process_link(p);
 
@@ -295,6 +312,7 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
     p->main_thread = NULL;
     p->waiter = NULL;
     process_inherit_cwd_from_parent(p, p->parent);
+    process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 
     process_link(p);
 
@@ -451,6 +469,16 @@ const char *process_cwd_path(const process_t *p)
     return p->cwd_path;
 }
 
+const char *process_exec_root(const process_t *p)
+{
+    if (!p || p->exec_root[0] == '\0')
+    {
+        return "/";
+    }
+
+    return p->exec_root;
+}
+
 // Wait for a child to become zombie and reap it
 int system_wait_pid(int pid, int *u_status)
 {
@@ -532,7 +560,8 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
 
     process_t *caller = process_current();
     char norm_path[256];
-    if (path_normalize(process_cwd_path(caller), kpath, norm_path, sizeof(norm_path)) != 0)
+    const char *base = process_cwd_path(caller);
+    if (path_normalize(base, kpath, norm_path, sizeof(norm_path)) != 0)
     {
         kfree(kpath);
         return -1;
@@ -549,7 +578,31 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
     }
 
     // Create process
-    int pid = dex_spawn_process(file_table, norm_path, argc, kargv);
+    // Determine the directory portion of the path for exec_root.
+    char exec_dir[256];
+    (void)strlcpy(exec_dir, norm_path, sizeof(exec_dir));
+    char *slash = NULL;
+    for (char *p = exec_dir; *p; ++p)
+    {
+        if (*p == '/')
+        {
+            slash = p;
+        }
+    }
+    if (slash == NULL)
+    {
+        (void)strlcpy(exec_dir, "/", sizeof(exec_dir));
+    }
+    else if (slash == exec_dir)
+    {
+        exec_dir[1] = '\0';
+    }
+    else
+    {
+        *slash = '\0';
+    }
+
+    int pid = dex_spawn_process(file_table, norm_path, argc, kargv, exec_dir, 0);
 
     // Free temporary buffers
     free_kargv(kargv);

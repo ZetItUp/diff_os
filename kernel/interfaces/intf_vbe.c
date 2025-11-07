@@ -55,8 +55,6 @@ int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_
         return -1;
     }
 
-    console_use_vbe(0);
-    
     int w = (packed_wh >> 16) & 0xFFFF;
     int h =  packed_wh         & 0xFFFF;
 
@@ -306,8 +304,6 @@ int system_video_mode_set(int w, int h, int bpp)
     if (vbe_set_mode(w, h, bpp) != 0) 
         return -1;
 
-    console_use_vbe(0);
-
     uint16_t rx = vbe_read_reg(VBE_DISPI_INDEX_XRES);
     uint16_t ry = vbe_read_reg(VBE_DISPI_INDEX_YRES);
     uint16_t rbpp = vbe_read_reg(VBE_DISPI_INDEX_BPP);
@@ -327,4 +323,3 @@ int system_video_mode_set(int w, int h, int bpp)
 
     return 0;
 }
-

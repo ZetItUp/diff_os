@@ -119,7 +119,7 @@ static void init_thread(void* argument)
             }
             else
             {
-                int pid = dex_spawn_process(file_table, shell_path, 0, 0);
+                int pid = dex_spawn_process(file_table, shell_path, 0, 0, "/", 0);
                 kfree(shell_path);
 
                 if (pid > 0)
@@ -158,4 +158,3 @@ void display_sys_info(void)
 {
     printf("\n[RAM] Available Memory: %u MB\n", system.ram_mb);
 }
-

@@ -2,6 +2,7 @@
 #include "dex/exl.h"
 #include "system/process.h"
 #include "system/syscall.h"
+#include "system/path.h"
 #include "diff.h"
 #include "string.h"
 #include "stdint.h"
@@ -827,7 +828,8 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     return 0;
 }
 
-int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **argv)
+int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **argv,
+                      const char *exec_dir, int set_cwd)
 {
     int file_index;
     const FileEntry *fe;
@@ -971,5 +973,24 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
          pid, cr3_parent, cr3_child);
 
     kfree(buffer);
+
+    if (p)
+    {
+        const char *launch_dir = (exec_dir && exec_dir[0]) ? exec_dir : "/";
+        process_set_exec_root(p, launch_dir);
+
+        if (set_cwd)
+        {
+            uint32_t dir_id = vfs_root_id();
+
+            if (vfs_resolve_dir(launch_dir, &dir_id) != 0)
+            {
+                dir_id = vfs_root_id();
+                launch_dir = "/";
+            }
+
+            process_set_cwd(p, dir_id, launch_dir);
+        }
+    }
     return pid;
 }// Spawn new process and load DEX into child address space

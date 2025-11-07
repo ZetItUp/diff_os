@@ -28,6 +28,11 @@ typedef struct process
     thread_t *main_thread;
     thread_t *waiter;
     int live_threads;
+
+    // Absolute path to the executable (directory component). Used to
+    // re-root child processes when resolving relative paths while still
+    // allowing the caller's cwd to remain intact.
+    char exec_root[256];
 } process_t;
 
 typedef struct user_boot_args
@@ -53,4 +58,5 @@ uint32_t read_cr3_local(void);
 void process_set_cwd(process_t *p, uint32_t dir_id, const char *abs_path);
 uint32_t process_cwd_id(const process_t *p);
 const char *process_cwd_path(const process_t *p);
-
+const char *process_exec_root(const process_t *p);
+void process_set_exec_root(process_t *p, const char *abs_dir);

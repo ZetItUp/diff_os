@@ -2,6 +2,7 @@
 #include "system.h"
 #include "stdio.h"
 #include "stdint.h"
+#include "console.h"
 
 #ifdef DIFF_DEBUG
 uint32_t g_debug_mask = DEBUG_AREA_GENERIC | DEBUG_AREA_PAGING | DEBUG_AREA_EXL;
@@ -55,6 +56,12 @@ int debug_handle_single_step(struct stack_frame *frame)
         frame->eflags &= ~(1u << 8); // clear TF
         printf("[SSTEP] done\n");
         g_ss_entry = 0;
+
+        if (!console_is_vbe_active())
+        {
+            console_use_vbe(1);
+            console_flush_log();
+        }
     }
     return 1;
 }

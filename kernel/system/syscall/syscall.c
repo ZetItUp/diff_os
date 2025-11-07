@@ -429,6 +429,31 @@ int system_call_dispatch(struct syscall_frame *f)
                 break;
             }
 
+            char exec_dir[256];
+            (void)strlcpy(exec_dir, kpath, sizeof(exec_dir));
+            char *slash = NULL;
+            for (char *p = exec_dir; *p; ++p)
+            {
+                if (*p == '/')
+                {
+                    slash = p;
+                }
+            }
+            if (slash == NULL)
+            {
+                (void)strlcpy(exec_dir, "/", sizeof(exec_dir));
+            }
+            else if (slash == exec_dir)
+            {
+                exec_dir[1] = '\0';
+            }
+            else
+            {
+                *slash = '\0';
+            }
+
+            process_set_exec_root(process_current(), exec_dir);
+
             ret = system_exec_dex(f, kpath, argc, kargv);
 
             if (kargv)
@@ -578,6 +603,26 @@ int system_call_dispatch(struct syscall_frame *f)
         case SYSTEM_GETCWD:
         {
             ret = system_getcwd((char*)arg0, (size_t)arg1);
+
+            break;
+        }
+        case SYSTEM_GETEXECROOT:
+        {
+            process_t *proc = process_current();
+            ret = -1;
+
+            if (proc != NULL && arg0 != 0 && arg1 > 0)
+            {
+                const char *root = process_exec_root(proc);
+                size_t need = strlen(root) + 1;
+                char *dst = (char *)(uintptr_t)arg0;
+                size_t maxlen = (size_t)arg1;
+
+                if (need <= maxlen && copy_to_user(dst, root, need) == 0)
+                {
+                    ret = (int)need;
+                }
+            }
 
             break;
         }

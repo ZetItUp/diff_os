@@ -44,6 +44,7 @@ enum
     SYSTEM_VIDEO_GET_GRAPHICS_MODE = 31,
     SYSTEM_CHDIR = 32,
     SYSTEM_GETCWD = 33,
+    SYSTEM_GETEXECROOT = 34,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -277,6 +278,11 @@ static inline int system_chdir(const char *path)
 static inline int system_getcwd(char *buf, size_t len)
 {
     return do_sys(SYSTEM_GETCWD, (int)(uintptr_t)buf, (int)len, 0, 0);
+}
+
+static inline int system_getexecroot(char *buf, size_t len)
+{
+    return do_sys(SYSTEM_GETEXECROOT, (int)(uintptr_t)buf, (int)len, 0, 0);
 }
 
 static inline int system_video_toggle_graphics_mode(void)

@@ -43,6 +43,7 @@ enum
     SYSTEM_VIDEO_GET_GRAPHICS_MODE = 31,
     SYSTEM_CHDIR = 32,
     SYSTEM_GETCWD = 33,
+    SYSTEM_GETEXECROOT = 34,
 };
 
 struct syscall_frame 
@@ -99,3 +100,4 @@ int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_
 int system_video_mode_set(int w, int h, int bpp);
 int system_chdir(const char *path);
 int system_getcwd(char *out, size_t out_sz);
+int system_getexecroot(char *out, size_t out_sz);

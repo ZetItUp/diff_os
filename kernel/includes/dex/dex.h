@@ -72,6 +72,7 @@ typedef struct
     uint32_t image_size;
 } dex_executable_t;
 
-int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **argv);
+int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **argv,
+                      const char *exec_dir, int set_cwd);
 int dex_run(const FileTable *ft, const char *path, int argc, char **argv);
 int dex_load(const void *file_data, size_t file_size, dex_executable_t *out);

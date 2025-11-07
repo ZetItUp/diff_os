@@ -751,11 +751,14 @@ void set_cursor_pos(unsigned short x, unsigned short y)
 
 int console_toggle_graphics_mode(void)
 {
-    s_vbe_console_active = !s_vbe_console_active;
-
-    if(s_vbe_console_active == 1)
+    if (!s_vbe_console_active)
     {
+        console_use_vbe(1);
         console_flush_log();
+    }
+    else
+    {
+        console_use_vbe(0);
     }
 
     return s_vbe_console_active;
@@ -765,4 +768,3 @@ int console_get_graphics_mode(void)
 {
     return s_vbe_console_active;
 }
-
