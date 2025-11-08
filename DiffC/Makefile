@@ -5,7 +5,7 @@ LD        := i386-elf-ld
 PYTHON    := python3
 ELF2DEX   := elf2dexlib.py
 
-CFLAGS    := -ffreestanding -nostdlib -Wall -Wextra -O2 -Iinclude/
+CFLAGS    := -ffreestanding -nostdlib -Wall -Wextra -O0 -Iinclude/
 SRCDIR    := source
 OBJDIR    := build
 EXLDIR    := exls

@@ -233,7 +233,7 @@ diffc:
 
 progs:
 	@echo "[Programs] Compiling all programs"
-	@$(MAKE) -C programs/ $(PROGRAMS_LIST)
+	@$(MAKE) -C programs/
 
 allclean: clean
 	@echo "[CLEAN] Cleaning everything!"

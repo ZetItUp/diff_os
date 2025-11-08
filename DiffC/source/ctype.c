@@ -30,11 +30,14 @@ int isxdigit(int c)
     return 0;
 }
 
-int tolower(int c)
+__attribute__((noinline)) int tolower(int c)
 {
+    // Zero-extend the input parameter to avoid garbage in upper bytes
+    c = c & 0xFF;
+
     if (c >= 'A' && c <= 'Z')
     {
-        return c - 'A' + 'a';
+        return (c - 'A' + 'a');
     }
 
     return c;

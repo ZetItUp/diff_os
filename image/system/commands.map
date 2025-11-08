@@ -9,6 +9,10 @@ ptest=/programs/ptest/ptest.dex
 ttest=/programs/ttest/ttest.dex
 brktest=/programs/brktest/brktest.dex
 malloctest=/programs/malloctest/malloctest.dex
+strtest=/programs/strtest/strtest.dex
+testlower=/programs/testlower/testlower.dex
+testcmp=/programs/testcmp/testcmp.dex
+testcall=/programs/testcall/testcall.dex
 
 # Games
 doom=/games/doom/doom.dex

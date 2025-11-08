@@ -596,6 +596,8 @@ void W_CheckCorrectIWAD(GameMission_t mission)
 
             if (lumpnum >= 0)
             {
+                printf("  ERROR: Found '%s' but actual lump name is '%s' at index %d\n",
+                       unique_lumps[i].lumpname, lumpinfo[lumpnum].name, lumpnum);
                 I_Error("\nYou are trying to use a %s IWAD file with "
                         "the %s%s binary.\nThis isn't going to work.\n"
                         "You probably want to use the %s%s binary.",
@@ -609,4 +611,3 @@ void W_CheckCorrectIWAD(GameMission_t mission)
         }
     }
 }
-

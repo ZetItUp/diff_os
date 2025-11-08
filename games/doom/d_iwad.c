@@ -65,8 +65,13 @@ static void AddIWADDir(char *dir)
 {
     if (num_iwad_dirs < MAX_IWAD_DIRS)
     {
-        iwad_dirs[num_iwad_dirs] = dir;
-        ++num_iwad_dirs;
+        char *copy = strdup(dir);
+
+        if (copy != NULL)
+        {
+            iwad_dirs[num_iwad_dirs] = copy;
+            ++num_iwad_dirs;
+        }
     }
 }
 
