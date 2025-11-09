@@ -30,6 +30,8 @@ $(PROGRAMS):
 
 	$(PYTHON) $(ELF2DEX) $@/build/dump.txt $@/build/$@.o $(OUT_ROOT)/$@/$@.dex --default-exl diffc.exl --verbose
 
+	@cp -f $@/*.bin $(OUT_ROOT)/$@/ 2>/dev/null || true
+
 	@echo "[OUT]  $(OUT_ROOT)/$@/$@.dex"
 	@echo "[INFO] artifacts: $@/build/dump.txt, undefined.txt, imports_map.txt, libs.txt"
 
@@ -41,4 +43,3 @@ clean:
 		rm -rf $$dir/build; \
 		rm -f $(OUT_ROOT)/$$dir/$$dir.dex; \
 	done
-

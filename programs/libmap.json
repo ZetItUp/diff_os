@@ -1,4 +1,16 @@
 {
-  "diffc": ["printf", "puts", "putchar", "malloc", "free", "memcpy", "memset"]
+  "diffc": [
+    "printf",
+    "puts",
+    "putchar",
+    "malloc",
+    "free",
+    "memcpy",
+    "memset",
+    "fopen",
+    "fread",
+    "fseek",
+    "ftell",
+    "fgets"
+  ]
 }
-

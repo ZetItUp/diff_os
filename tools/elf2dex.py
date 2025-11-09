@@ -27,7 +27,7 @@ R_386_GOTOFF   = 9
 R_386_GOTPC    = 10
 R_386_GOT32X   = 43
 
-FILE_ALIGN = 1
+FILE_ALIGN = 4
 HDR_SIZE   = 0x100
 MAX_IMP    = 4096  # match kernel limit
 
@@ -109,6 +109,12 @@ def parse_dump(path):
     # Map relocation section -> target section via SECTION.info
     for r in relocs:
         r["target_secidx"] = sections.get(r["relsec"], {}).get("info", 0)
+
+    # DEBUG: Count relocations by type
+    got32x_in_dump = sum(1 for r in relocs if r["type"] == 43)
+    putchar_in_dump = sum(1 for r in relocs if r.get("symname") == "putchar")
+    print(f"[DUMP-DEBUG] Total relocs={len(relocs)}, GOT32X={got32x_in_dump}, putchar={putchar_in_dump}")
+
     return sections, symbols, relocs
 
 def read_bytes(path, off, size):
@@ -323,27 +329,48 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
 
     # Konvertera ELF relocs -> DEX relocs / patch immediates
     got32x_processed = 0
+    pc32_processed = 0
+    skipped_relocs = []
+
+    putchar_seen = 0
     for r in relocs:
+        # DEBUG: Track putchar relocations
+        if r.get('symname') == 'putchar':
+            putchar_seen += 1
+            if putchar_seen <= 3:
+                print(f"[PUTCHAR-DEBUG #{putchar_seen}] Found putchar reloc: type={r['type']} offset=0x{r['offset']:x} target_secidx={r.get('target_secidx', 'N/A')}")
+
         if r["type"] == R_386_GOT32X:
             got32x_processed += 1
             if verbose and (got32x_processed <= 5 or r.get('symname') in ('printf', 'doomgeneric_Create')):
                 print(f"[DEBUG] Processing GOT32X reloc #{got32x_processed}: offset=0x{r['offset']:x}, target_secidx={r['target_secidx']}, symname={r.get('symname', '')}")
+
+        if r["type"] in (R_386_PC32, R_386_PLT32):
+            pc32_processed += 1
+            if verbose and r.get('symname') == 'W_CheckNumForName':
+                print(f"[DEBUG-PC32] Processing PC32 reloc to W_CheckNumForName: offset=0x{r['offset']:x}, target_secidx={r['target_secidx']}, symidx={r['symidx']}")
 
         tgt_base, tgt_buf, buf_offset = base_for_secidx(r["target_secidx"])
         if tgt_base is None or tgt_buf is None:
             # Vi kan få relocs som riktar mot BSS (target i .bss är ogiltigt),
             # men själva relocations-platsen (site) måste alltid ligga i text/ro/data.
             # Om tgt_buf är None betyder det att vi inte kan skriva tillbaka där -> hoppa.
+            skip_reason = f"target secidx={r['target_secidx']} unsupported (no buffer)"
+            skipped_relocs.append((r["type"], r.get('symname', ''), r['offset'], skip_reason))
             if r["type"] == R_386_GOT32X:
-                print(f"[SKIP GOT32X] reloc target secidx={r['target_secidx']} unsupported (no buffer), symname={r.get('symname', '')}, offset=0x{r['offset']:x}")
+                print(f"[SKIP GOT32X] reloc {skip_reason}, symname={r.get('symname', '')}, offset=0x{r['offset']:x}")
+            elif r["type"] == R_386_PC32:
+                print(f"[SKIP PC32] reloc {skip_reason}, symname={r.get('symname', '')}, offset=0x{r['offset']:x}")
             elif verbose:
-                print(f"[SKIP] reloc target secidx={r['target_secidx']} unsupported (no buffer)")
+                print(f"[SKIP] reloc {skip_reason}")
             continue
 
         raw_off = r["offset"]
         if raw_off + 4 > len(tgt_buf):
+            skip_reason = f"offset OOR: 0x{raw_off:x} + 4 > {len(tgt_buf)}"
+            skipped_relocs.append((r["type"], r.get('symname', ''), r['offset'], skip_reason))
             if verbose:
-                print(f"[SKIP] reloc off OOR: 0x{raw_off:x}")
+                print(f"[SKIP] reloc {skip_reason}")
             continue
 
         img_off = tgt_base + raw_off
@@ -356,19 +383,27 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
         if etype in (R_386_PC32, R_386_PLT32):
             # Local symbol -> lös disp direkt
             if sym and sym["shndx"] != 0:
-                A = struct.unpack_from("<I", tgt_buf, raw_off)[0]
+                # For PC32 relocations, the addend in the ELF file is relative to ELF layout
+                # We need to recalculate the displacement for DEX layout
+                # Do NOT use the embedded addend A from the ELF file
                 S_base, _, _ = base_for_secidx(sym["shndx"])
                 if S_base is None:
+                    skip_reason = f"PC32 to unknown shndx={sym['shndx']}"
+                    skipped_relocs.append((r["type"], name, r['offset'], skip_reason))
                     if verbose:
-                        print(f"[SKIP] PC32 to unknown shndx={sym['shndx']}")
+                        print(f"[SKIP] {skip_reason}, symname={name}")
                     continue
                 S = (S_base + sym["value"]) & 0xffffffff
                 P = (img_off + 4) & 0xffffffff
-                disp = (S + A - P) & 0xffffffff
+                # Calculate fresh displacement without using ELF's embedded addend
+                disp = (S - P) & 0xffffffff
                 struct.pack_into("<I", tgt_buf, raw_off, disp)
-                if verbose:
+                if verbose and name == 'W_CheckNumForName':
+                    print(f"[PC32 local W_CheckNumForName] sect={sect_name} site=0x{img_off:08x} "
+                          f"S=0x{S:08x} P=0x{P:08x} -> disp=0x{disp:08x}")
+                elif verbose:
                     print(f"[PC32 local] sect={sect_name} site=0x{img_off:08x} "
-                          f"S=0x{S:08x} A=0x{A:08x} P=0x{P:08x} -> disp=0x{disp:08x}")
+                          f"S=0x{S:08x} P=0x{P:08x} -> disp=0x{disp:08x}")
             else:
                 # External symbol -> DEX_PC32 + import
                 idx = ensure_import(name or f"@{si}", True)
@@ -450,10 +485,15 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
                         opcode = tgt_buf[buf_pos-2:buf_pos]
                         if verbose and (name == 'printf' or img_off == 0x3015f):
                             print(f"[DEBUG GOT32X] sect={sect_name} raw_off=0x{raw_off:x} buf_offset=0x{buf_offset:x} buf_pos=0x{buf_pos:x} img_off=0x{img_off:x} opcode={opcode.hex() if opcode else 'None'}")
+                        if name == 'putchar' or name == 'printf':
+                            print(f"[{name.upper()}-GOT32X] sect={sect_name} buf_pos=0x{buf_pos:x} img_off=0x{img_off:x} opcode={opcode.hex() if len(opcode)==2 else 'None'} raw_off=0x{raw_off:x}")
                         if opcode == b'\xff\x15' or opcode == b'\xff\x25':
                             is_indirect = True
 
                     if is_indirect:
+                        if name == 'putchar':
+                            print(f"[PUTCHAR-CONVERT] Converting to direct call at img_off=0x{img_off:x}")
+
                         # Transform indirect call/jmp to direct call/jmp but keep same length (6 bytes)
                         # ff 15 XX XX XX XX (call [mem]) -> e8 XX XX XX XX 90 (call rel32; nop)
                         # ff 25 XX XX XX XX (jmp [mem])  -> e9 XX XX XX XX 90 (jmp rel32; nop)
@@ -468,6 +508,8 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
                         # Now treat as PC32 relocation (relative offset)
                         # The displacement now starts one byte earlier
                         idx = ensure_import(name or f"@{si}", True)
+                        if name == 'putchar':
+                            print(f"[PUTCHAR-IMPORT] Created import idx={idx}, adding PC32 reloc at off=0x{new_img_off:x}")
                         reloc_table.append((new_img_off, idx, DEX_PC32, 0))
                         # Clear the immediate (will be filled by PC32 relocation)
                         struct.pack_into("<I", tgt_buf, new_buf_pos, 0)
@@ -542,6 +584,29 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
 
         if verbose:
             print(f"[WARN] Unknown ELF reloc type {etype} at off=0x{raw_off:08x}")
+
+    # Print relocation processing summary
+    print(f"\n=== Relocation Processing Summary ===")
+    print(f"Total relocations in ELF: {len(relocs)}")
+    print(f"PC32/PLT32 relocations processed: {pc32_processed}")
+    print(f"GOT32X relocations processed: {got32x_processed}")
+    print(f"DEX relocations generated: {len(reloc_table)}")
+    print(f"Relocations skipped: {len(skipped_relocs)}")
+    if len(skipped_relocs) > 0:
+        print(f"\nSkipped relocation details:")
+        skip_by_reason = {}
+        for rtype, symname, offset, reason in skipped_relocs:
+            key = reason
+            if key not in skip_by_reason:
+                skip_by_reason[key] = []
+            skip_by_reason[key].append((rtype, symname, offset))
+        for reason, items in skip_by_reason.items():
+            print(f"  {reason}: {len(items)} relocations")
+            if verbose:
+                for rtype, symname, offset in items[:5]:
+                    print(f"    type={rtype} symname={symname} offset=0x{offset:x}")
+                if len(items) > 5:
+                    print(f"    ... and {len(items) - 5} more")
 
     # -------------------------
     # Entry: use DEX bases (not ELF offsets)

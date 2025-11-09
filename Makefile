@@ -93,7 +93,7 @@ KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))
 # Targets
 TARGET = $(BUILD)/diffos.img
 
-.PHONY: all clean run debug tools drivers
+.PHONY: all clean run games debug tools drivers
 
 all: tools drivers $(TARGET)
 
@@ -234,6 +234,11 @@ diffc:
 progs:
 	@echo "[Programs] Compiling all programs"
 	@$(MAKE) -C programs/
+
+games:
+	@echo "[Games] Compiling all games"
+	@$(MAKE) -C games/doom clean
+	@$(MAKE) -C games/doom
 
 allclean: clean
 	@echo "[CLEAN] Cleaning everything!"

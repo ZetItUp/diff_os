@@ -13,6 +13,7 @@ strtest=/programs/strtest/strtest.dex
 testlower=/programs/testlower/testlower.dex
 testcmp=/programs/testcmp/testcmp.dex
 testcall=/programs/testcall/testcall.dex
+filetest=/programs/filetest/filetest.dex
 
 # Games
 doom=/games/doom/doom.dex

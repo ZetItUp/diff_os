@@ -195,47 +195,53 @@ static uint32_t build_user_stack(
         argv_ptrs[i] = sp;
     }
 
+    // Linux ELF convention: stack layout from SP is:
+    // [SP]    = undefined (fake return address, always 0)
+    // [SP+4]  = argc
+    // [SP+8]  = argv[0]
+    // [SP+12] = argv[1]
+    // ...
+    // [SP+4*(argc+2)] = NULL (end of argv)
+    // [SP+4*(argc+3)] = NULL (end of envp, we have no envp)
+    //
+    // The fake return address is needed because GCC's main() prologue
+    // does "lea 0x4(%esp),%ecx" expecting a return address at ESP
+    //
+    // CRITICAL: SP must be 16-byte aligned BEFORE we write anything,
+    // because GCC's "and $0xfffffff0,%esp" expects to not move more than
+    // 12 bytes, and it needs [ECX-4] (where ECX = old ESP + 4) to still
+    // be valid after alignment.
+
+    // We need space for: fake_ret + argc + argv[argc] + NULL + envp_NULL
+    uint32_t needed = 4 + 4 + (uint32_t)((argc + 1) * sizeof(uint32_t)) + 4;
+    if (sp < base + needed)
+    {
+        kfree(argv_ptrs);
+        return 0;
+    }
+    sp -= needed;
+
+    // Ensure SP ends up 16-byte aligned (pointing to fake return address)
+    // This way GCC's alignment won't move ESP more than necessary
     sp &= ~0xFu;
 
-    if (sp < base + 4)
-    {
-        kfree(argv_ptrs);
-        return 0;
-    }
-    sp -= 4;
+    // Write fake return address (0 = no return)
     *(uint32_t *)sp = 0;
 
-    uint32_t argv_bytes = (uint32_t)((argc + 1) * sizeof(uint32_t));
-    if (sp < base + argv_bytes)
-    {
-        kfree(argv_ptrs);
-        return 0;
-    }
-    sp -= argv_bytes;
+    // Write argc at SP+4
+    *(uint32_t *)(sp + 4) = (uint32_t)argc;
 
-    uint32_t argv_array = sp;
-
+    // Write argv[] array starting at SP+8
     for (int i = 0; i < argc; ++i)
     {
-        ((uint32_t *)argv_array)[i] = argv_ptrs[i];
+        ((uint32_t *)(sp + 8))[i] = argv_ptrs[i];
     }
-    ((uint32_t *)argv_array)[argc] = 0;
 
-    if (sp < base + 4)
-    {
-        kfree(argv_ptrs);
-        return 0;
-    }
-    sp -= 4;
-    *(uint32_t *)sp = argv_array;
+    // NULL terminator for argv
+    ((uint32_t *)(sp + 8))[argc] = 0;
 
-    if (sp < base + 4)
-    {
-        kfree(argv_ptrs);
-        return 0;
-    }
-    sp -= 4;
-    *(uint32_t *)sp = (uint32_t)argc;
+    // NULL terminator for envp (we have no environment variables)
+    ((uint32_t *)(sp + 8))[argc + 1] = 0;
 
     kfree(argv_ptrs);
 
@@ -319,6 +325,8 @@ static int relocate_image(
 {
     void **import_ptrs = NULL;
 
+    printf("[DEX-RELOC-DEBUG] imports=%u relocs=%u\n", hdr->import_table_count, hdr->reloc_table_count);
+
     if (hdr->import_table_count > 4096)
     {
         printf("[DEX] Too many imports (%u)\n", hdr->import_table_count);
@@ -399,6 +407,8 @@ static int relocate_image(
             {
                 if (idx >= hdr->import_table_count)
                 {
+                    printf("[DEX][ERROR] PC32 reloc idx=%u >= import_count=%u at off=0x%08x\n",
+                           idx, hdr->import_table_count, off);
                     if (import_ptrs)
                     {
                         kfree(import_ptrs);
@@ -411,10 +421,25 @@ static int relocate_image(
                 int32_t disp = (int32_t)S - (int32_t)((uint32_t)(uintptr_t)target + 4);
                 *(int32_t *)target = disp;
 
-                if (off >= hdr->entry_offset && off < hdr->entry_offset + 0x200)
+                // Temporarily log ALL PC32 relocations
+                static int pc32_count = 0;
+                pc32_count++;
+
+                const char *sym_name = (idx < hdr->import_table_count)
+                                           ? (strtab + imp[idx].symbol_name_offset)
+                                           : "<bad-idx>";
+                const char *lib_name = (idx < hdr->import_table_count)
+                                           ? (strtab + imp[idx].exl_name_offset)
+                                           : "<bad-idx>";
+
+                // Log putchar/printf or first 100
+                int is_putchar = (strcmp(sym_name, "putchar") == 0);
+                int is_printf = (strcmp(sym_name, "printf") == 0);
+                if (pc32_count <= 100 || is_putchar || is_printf || (off >= hdr->entry_offset && off < hdr->entry_offset + 0x200))
                 {
-                    printf("[DEX][PC32] off=0x%08x S=%08x P=%08x disp=%08x old=%08x new=%08x\n",
-                           off, S, (uint32_t)(uintptr_t)target + 4, (uint32_t)disp, old, *(uint32_t *)target);
+                    printf("[DEX][PC32 #%d] off=0x%08x S=%08x P=%08x disp=%08x old=%08x new=%08x sym=%s:%s\n",
+                           pc32_count, off, S, (uint32_t)(uintptr_t)target + 4,
+                           (uint32_t)disp, old, *(uint32_t *)target, lib_name, sym_name);
                 }
 
                 DEX_DBG("[REL] PC32  @%08x P=%08x S=%08x disp=%d old=%08x new=%08x\n",
@@ -456,6 +481,8 @@ static int relocate_image(
 
         DEX_DBG("new=0x%08x\n", *(uint32_t *)target);
     }
+
+    printf("[DEX] Applied %u relocations successfully\n", hdr->reloc_table_count);
 
     if (import_ptrs)
     {
