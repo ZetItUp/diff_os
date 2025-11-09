@@ -66,4 +66,5 @@ void console_get_colors_kernel(uint8_t *out_fg, uint8_t *out_bg);
 // VBE registration and state
 extern vbe_exports_t g_vbe;
 void vbe_register(uint32_t phys_base, uint32_t width, uint32_t height, uint32_t bpp, uint32_t pitch);
+void vbe_restore_text_mode(void);
 

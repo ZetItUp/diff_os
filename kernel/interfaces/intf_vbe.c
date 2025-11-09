@@ -294,14 +294,14 @@ int system_video_mode_set(int w, int h, int bpp)
 {
     if (!(bpp == 8 || bpp == 15 || bpp == 16 || bpp == 24 || bpp == 32))
         return -1;
-    
-    if (w == 0 || h == 0 || w > 8192 || h > 8192) 
-        return -1;
-    
-    if (g_vbe.phys_base == 0) 
+
+    if (w == 0 || h == 0 || w > 8192 || h > 8192)
         return -1;
 
-    if (vbe_set_mode(w, h, bpp) != 0) 
+    if (g_vbe.phys_base == 0)
+        return -1;
+
+    if (vbe_set_mode(w, h, bpp) != 0)
         return -1;
 
     uint16_t rx = vbe_read_reg(VBE_DISPI_INDEX_XRES);
@@ -310,10 +310,10 @@ int system_video_mode_set(int w, int h, int bpp)
     uint16_t vwid = vbe_read_reg(VBE_DISPI_INDEX_VIRT_WIDTH);
     uint16_t vhgt = vbe_read_reg(VBE_DISPI_INDEX_VIRT_HEIGHT);
 
-    if (vwid == 0 || vwid < rx || vwid > 8192) 
+    if (vwid == 0 || vwid < rx || vwid > 8192)
         vwid = rx;
-    
-    if (vhgt == 0 || vhgt < ry || vhgt > 8192) 
+
+    if (vhgt == 0 || vhgt < ry || vhgt > 8192)
         vhgt = ry;
 
     uint32_t bpp_bytes = ((uint32_t)rbpp + 7u) / 8u;
@@ -322,4 +322,15 @@ int system_video_mode_set(int w, int h, int bpp)
     vbe_register(g_vbe.phys_base, rx, ry, rbpp, pitch_bytes);
 
     return 0;
+}
+
+// Restore VBE to default text mode (1024x768x32)
+// Called when returning from a program that used custom graphics mode
+void vbe_restore_text_mode(void)
+{
+    if (g_vbe.phys_base == 0)
+        return;
+
+    // Restore to default VBE text mode resolution
+    system_video_mode_set(1024, 768, 32);
 }
