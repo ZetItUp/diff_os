@@ -281,6 +281,18 @@ static int vcbprintf(void (*sink)(int, void*), void *ctx, const char *fmt, va_li
             width = width * 10 + (*p++ - '0');
         }
 
+        /* ---- parse precision ---- */
+        int precision = -1;
+        if (*p == '.')
+        {
+            p++;
+            precision = 0;
+            while (*p >= '0' && *p <= '9')
+            {
+                precision = precision * 10 + (*p++ - '0');
+            }
+        }
+
         /* ---- length (only 'l' for 32-bit) ---- */
         int is_long = 0;
         if (*p == 'l')
@@ -355,6 +367,13 @@ static int vcbprintf(void (*sink)(int, void*), void *ctx, const char *fmt, va_li
                     u /= 10;
                 }
                 while (u);
+
+                /* Apply precision (minimum digits with leading zeros) */
+                int min_digits = (precision >= 0) ? precision : 1;
+                while (i < min_digits)
+                {
+                    buf[i++] = '0';
+                }
 
                 int need = i + (neg ? 1 : 0);
                 int pad = (width > need) ? (width - need) : 0;

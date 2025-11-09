@@ -70,13 +70,6 @@ static const char lumpname_ettna1[] = "ETTNA1";
 static const char lumpname_possa1[] = "POSSA1";
 static const char lumpname_agrda1[] = "AGRDA1";
 
-static const char *trace_lumpnames[] = {
-    lumpname_impxa1,
-    lumpname_ettna1,
-    lumpname_possa1,
-    lumpname_agrda1,
-};
-
 static void W_CopyLumpName(const char src[8], char dst[9])
 {
     memcpy(dst, src, 8);
@@ -180,14 +173,7 @@ static int W_LumpNameMatches(const char lump[8], const char *name)
     W_CopyLumpName(lump, lhs);
     W_CopyCStringName(name, rhs);
 
-    if (!W_LumpNameEqual(lump, name))
-    {
-        printf("[IWADDBG] strncasecmp bug! matched '%s' vs '%s' but W_LumpNameEqual disagrees\n",
-               lhs, rhs);
-        return 0;
-    }
-
-    return 1;
+    return W_LumpNameEqual(lump, name);
 }
 
 // Hash function used for lump names.
@@ -371,14 +357,6 @@ int W_NumLumps (void)
     return numlumps;
 }
 
-
-
-// TEMP: Dummy function to work around linking issue
-static void DummyPrintFunc(void)
-{
-    printf("DUMMY\n");
-}
-
 //
 // W_CheckNumForName
 // Returns -1 if name not found.
@@ -386,59 +364,8 @@ static void DummyPrintFunc(void)
 
 int W_CheckNumForName (char* name)
 {
-    putchar('X');
     lumpinfo_t *lump_p;
     int i;
-    char normalized[9];
-
-    // Debug: use putchar only to avoid printf issues
-    putchar('[');
-    putchar('W');
-    putchar(']');
-    W_CopyCStringName(name, normalized);
-    putchar('Y');
-    printf("[WCHECK] W_CheckNumForName called: name=%p normalized='%s'\n", (void*)name, normalized);
-    putchar('Z');
-
-    // Debug IMPXA1 lookups specifically - ALWAYS print this
-    int is_impx_lookup = (strcasecmp(normalized, "IMPXA1") == 0);
-    if (is_impx_lookup)
-    {
-        printf("[DEBUG-IMPX] W_CheckNumForName called for IMPXA1, lumphash=%p\n", (void *)lumphash);
-    }
-
-    // TEMP: Log first 8 bytes of name pointer to see what we're actually getting
-    static int call_count = 0;
-    call_count++;
-    if (call_count > 500 && call_count < 520)
-    {
-        printf("[IWADDBG] W_CheckNumForName #%d: input ptr=%p normalized='%s'\n",
-               call_count, (void *)name, normalized);
-        printf("  raw bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-               (unsigned char)name[0], (unsigned char)name[1], (unsigned char)name[2], (unsigned char)name[3],
-               (unsigned char)name[4], (unsigned char)name[5], (unsigned char)name[6], (unsigned char)name[7]);
-    }
-
-    // TEMP DEBUG: unconditionally trace lookups that match these names
-    int is_imp = (strcasecmp(normalized, "IMPXA1") == 0);
-    int is_ett = (strcasecmp(normalized, "ETTNA1") == 0);
-    int is_poss = (strcasecmp(normalized, "POSSA1") == 0);
-    int is_agr = (strcasecmp(normalized, "AGRDA1") == 0);
-
-    int trace_by_ptr = 0;
-
-    for (int idx = 0; idx < (int)(sizeof(trace_lumpnames) / sizeof(trace_lumpnames[0])); ++idx)
-    {
-        if (name == trace_lumpnames[idx])
-        {
-            printf("[IWADDBG] W_CheckNumForName pointer match idx=%d normalized=%s ptr=%p\n",
-                   idx, normalized, (void *)name);
-            trace_by_ptr = 1;
-            break;
-        }
-    }
-
-    int trace_unique = is_imp || is_ett || is_poss || is_agr || trace_by_ptr;
 
     // Do we have a hash table yet?
 
@@ -450,55 +377,22 @@ int W_CheckNumForName (char* name)
 
         hash = W_LumpNameHash(name) % numlumps;
 
-        // ALWAYS trace IMPXA1 lookups
-        if (trace_unique || is_impx_lookup)
-        {
-            printf("[IWADDBG] W_CheckNumForName ENTER target=%s hash=%d numlumps=%u\n",
-                   normalized, hash, numlumps);
-        }
-
         for (lump_p = lumphash[hash]; lump_p != NULL; lump_p = lump_p->next)
         {
-            if (trace_unique || is_impx_lookup)
-            {
-                char cand[9];
-                W_CopyLumpName(lump_p->name, cand);
-                printf("[IWADDBG]   candidate '%s' index=%d\n", cand, (int)(lump_p - lumpinfo));
-            }
-
             if (W_LumpNameMatches(lump_p->name, name))
             {
-                int result_idx = lump_p - lumpinfo;
-                if (trace_unique || is_impx_lookup)
-                {
-                    char matched[9];
-                    W_CopyLumpName(lump_p->name, matched);
-                    printf("[IWADDBG]   MATCHED '%s' at index=%d\n", matched, result_idx);
-                }
-                return result_idx;
+                return lump_p - lumpinfo;
             }
         }
-
-        if (trace_unique)
-        {
-            printf("[IWADDBG]   not found in hash table\n");
-        }
-    } 
+    }
     else
     {
         // We don't have a hash table generate yet. Linear search :-(
-        // 
+        //
         // scan backwards so patch lump files take precedence
 
         for (i=numlumps-1; i >= 0; --i)
         {
-            if (trace_unique)
-            {
-                char cand[9];
-                W_CopyLumpName(lumpinfo[i].name, cand);
-                printf("[IWADDBG] linear candidate idx=%d '%s'\n", i, cand);
-            }
-
             if (W_LumpNameMatches(lumpinfo[i].name, name))
             {
                 return i;
@@ -508,8 +402,6 @@ int W_CheckNumForName (char* name)
 
     // TFB. Not found.
 
-    printf("[IWADDBG-EXIT] W_CheckNumForName returning -1 (not found) for '%s'\n",
-           name ? name : "(null)");
     return -1;
 }
 
@@ -802,42 +694,17 @@ static const struct
 
 void W_CheckCorrectIWAD(GameMission_t mission)
 {
-    printf("[WCORR] W_CheckCorrectIWAD ENTER mission=%d\n", (int)mission);
     int i;
     int lumpnum;
-    static int printed_trace_ptrs = 0;
-
-    if (!printed_trace_ptrs)
-    {
-        printed_trace_ptrs = 1;
-        printf("[IWADDBG] trace_lump ptrs: IMPXA1=%p ETTNA1=%p POSSA1=%p AGRDA1=%p\n",
-               (void *)lumpname_impxa1,
-               (void *)lumpname_ettna1,
-               (void *)lumpname_possa1,
-               (void *)lumpname_agrda1);
-    }
 
     for (i = 0; i < arrlen(unique_lumps); ++i)
     {
         if (mission != unique_lumps[i].mission)
         {
-            char expected[9];
-            W_CopyCStringName(unique_lumps[i].lumpname, expected);
-            printf("[IWADDBG-v2] mission=%d checking unique lump '%s' ptr=%p\n",
-                   (int)mission, expected, (void *)unique_lumps[i].lumpname);
-
             lumpnum = W_CheckNumForName(unique_lumps[i].lumpname);
 
             if (lumpnum >= 0)
             {
-                char actual[9];
-                W_CopyLumpName(lumpinfo[lumpnum].name, actual);
-
-                printf("[IWADDBG] lookup '%s' returned index=%d actual='%s'\n",
-                       expected, lumpnum, actual);
-
-                printf("  ERROR: Found '%s' but actual lump name is '%s' at index %d\n",
-                       unique_lumps[i].lumpname, actual, lumpnum);
                 I_Error("\nYou are trying to use a %s IWAD file with "
                         "the %s%s binary.\nThis isn't going to work.\n"
                         "You probably want to use the %s%s binary.",
@@ -848,13 +715,6 @@ void W_CheckCorrectIWAD(GameMission_t mission)
                         PROGRAM_PREFIX,
                         D_GameMissionString(unique_lumps[i].mission));
             }
-            else
-            {
-                printf("[IWADDBG] unique lump '%s' not found (mission=%d)\n",
-                       expected, (int)mission);
-            }
         }
     }
-
-    printf("[IWADDBG] W_CheckCorrectIWAD done for mission=%d\n", (int)mission);
 }

@@ -870,10 +870,7 @@ static boolean D_AddFile(char *filename)
     wad_file_t *handle;
 
     printf(" adding %s\n", filename);
-    printf("[IWADDBG] D_AddFile entering: %s\n", filename);
     handle = W_AddFile(filename);
-    printf("[IWADDBG] D_AddFile exiting: %s handle=%p numlumps=%u\n",
-           filename, handle, numlumps);
 
     return handle != NULL;
 }
@@ -1384,7 +1381,6 @@ void D_DoomMain (void)
     numiwadlumps = numlumps;
 #endif
 
-    printf("[DMAIN] About to call W_CheckCorrectIWAD\n");
     W_CheckCorrectIWAD(doom);
 
     // Now that we've loaded the IWAD, we can figure out what gamemission
