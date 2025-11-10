@@ -65,117 +65,6 @@ unsigned int numlumps = 0;
 
 static lumpinfo_t **lumphash;
 
-static const char lumpname_impxa1[] = "IMPXA1";
-static const char lumpname_ettna1[] = "ETTNA1";
-static const char lumpname_possa1[] = "POSSA1";
-static const char lumpname_agrda1[] = "AGRDA1";
-
-static void W_CopyLumpName(const char src[8], char dst[9])
-{
-    memcpy(dst, src, 8);
-    dst[8] = '\0';
-    for (int i = 7; i >= 0; --i)
-    {
-        if (dst[i] == ' ' || dst[i] == '\0')
-        {
-            dst[i] = '\0';
-        }
-        else
-        {
-            break;
-        }
-    }
-}
-
-static void W_CopyCStringName(const char *src, char dst[9])
-{
-    if (src == NULL)
-    {
-        dst[0] = '\0';
-        return;
-    }
-
-    int i = 0;
-
-    // Copy up to 8 characters or until we hit '\0'
-    for (; i < 8 && src[i] != '\0'; ++i)
-    {
-        dst[i] = src[i];
-    }
-
-    // Pad remaining bytes with NUL
-    for (; i < 8; ++i)
-    {
-        dst[i] = '\0';
-    }
-
-    dst[8] = '\0';
-
-    // Trim trailing spaces to match WAD comparisons
-    for (i = 7; i >= 0; --i)
-    {
-        if (dst[i] == ' ' || dst[i] == '\0')
-        {
-            dst[i] = '\0';
-        }
-        else
-        {
-            break;
-        }
-    }
-}
-
-static int W_LumpNameEqual(const char lump[8], const char *name)
-{
-    for (int i = 0; i < 8; ++i)
-    {
-        unsigned char c1 = (unsigned char)lump[i];
-        unsigned char c2 = (unsigned char)name[i];
-
-        if (c1 >= 'a' && c1 <= 'z')
-        {
-            c1 = (unsigned char)(c1 - 'a' + 'A');
-        }
-        if (c2 >= 'a' && c2 <= 'z')
-        {
-            c2 = (unsigned char)(c2 - 'a' + 'A');
-        }
-
-        if (c2 == '\0')
-        {
-            return c1 == '\0';
-        }
-
-        if (c1 != c2)
-        {
-            return 0;
-        }
-
-        if (c1 == '\0')
-        {
-            return 1;
-        }
-    }
-
-    return name[8] == '\0';
-}
-
-static int W_LumpNameMatches(const char lump[8], const char *name)
-{
-    int cmp = strncasecmp(lump, name, 8);
-
-    if (cmp != 0)
-    {
-        return 0;
-    }
-
-    char lhs[9], rhs[9];
-    W_CopyLumpName(lump, lhs);
-    W_CopyCStringName(name, rhs);
-
-    return W_LumpNameEqual(lump, name);
-}
-
 // Hash function used for lump names.
 
 unsigned int W_LumpNameHash(const char *s)
@@ -357,6 +246,8 @@ int W_NumLumps (void)
     return numlumps;
 }
 
+
+
 //
 // W_CheckNumForName
 // Returns -1 if name not found.
@@ -372,28 +263,28 @@ int W_CheckNumForName (char* name)
     if (lumphash != NULL)
     {
         int hash;
-
+        
         // We do! Excellent.
 
         hash = W_LumpNameHash(name) % numlumps;
-
+        
         for (lump_p = lumphash[hash]; lump_p != NULL; lump_p = lump_p->next)
         {
-            if (W_LumpNameMatches(lump_p->name, name))
+            if (!strncasecmp(lump_p->name, name, 8))
             {
                 return lump_p - lumpinfo;
             }
         }
-    }
+    } 
     else
     {
         // We don't have a hash table generate yet. Linear search :-(
-        //
+        // 
         // scan backwards so patch lump files take precedence
 
         for (i=numlumps-1; i >= 0; --i)
         {
-            if (W_LumpNameMatches(lumpinfo[i].name, name))
+            if (!strncasecmp(lumpinfo[i].name, name, 8))
             {
                 return i;
             }
@@ -686,10 +577,10 @@ static const struct
     GameMission_t mission;
     char *lumpname;
 } unique_lumps[] = {
-    { doom,    (char *)lumpname_possa1 },
-    { heretic, (char *)lumpname_impxa1 },
-    { hexen,   (char *)lumpname_ettna1 },
-    { strife,  (char *)lumpname_agrda1 },
+    { doom,    "POSSA1" },
+    { heretic, "IMPXA1" },
+    { hexen,   "ETTNA1" },
+    { strife,  "AGRDA1" },
 };
 
 void W_CheckCorrectIWAD(GameMission_t mission)
@@ -718,3 +609,4 @@ void W_CheckCorrectIWAD(GameMission_t mission)
         }
     }
 }
+

@@ -43,7 +43,7 @@ FixedMul
 //
 // FixedDiv, C version.
 //
-__attribute__((visibility("default")))
+
 fixed_t FixedDiv(fixed_t a, fixed_t b)
 {
     if ((abs(a) >> 14) >= abs(b))

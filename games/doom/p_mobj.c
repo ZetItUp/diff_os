@@ -790,14 +790,27 @@ void P_SpawnMapThing (mapthing_t* mthing)
 	return;
 	
     // find which type to spawn
+    // DEBUG: Print raw structure bytes
+    {
+        unsigned char *bytes = (unsigned char *)mthing;
+        printf("[DEBUG] mapthing @ %p: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+               mthing, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4],
+               bytes[5], bytes[6], bytes[7], bytes[8], bytes[9]);
+        printf("[DEBUG] mapthing: x=%d y=%d angle=%d type=%d options=%d\n",
+               mthing->x, mthing->y, mthing->angle, mthing->type, mthing->options);
+    }
+
     for (i=0 ; i< NUMMOBJTYPES ; i++)
 	if (mthing->type == mobjinfo[i].doomednum)
 	    break;
-	
+
     if (i==NUMMOBJTYPES)
-	I_Error ("P_SpawnMapThing: Unknown type %i at (%i, %i)",
+    {
+	printf ("P_SpawnMapThing: Unknown type %i at (%i, %i)\n",
 		 mthing->type,
 		 mthing->x, mthing->y);
+	return;  // Just ignore unknown thing types instead of crashing
+    }
 		
     // don't spawn keycards and players in deathmatch
     if (deathmatch && mobjinfo[i].flags & MF_NOTDMATCH)

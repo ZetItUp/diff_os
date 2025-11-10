@@ -343,11 +343,30 @@ void P_LoadThings (int lump)
 
     data = W_CacheLumpNum (lump,PU_STATIC);
     numthings = W_LumpLength (lump) / sizeof(mapthing_t);
-	
+
+    printf("[P_LoadThings] lump=%d data=%p numthings=%d lump_len=%d\n",
+           lump, data, numthings, W_LumpLength(lump));
+
+    // DEBUG: Print first 70 bytes of raw data (first 7 things)
+    printf("[P_LoadThings] Raw data: ");
+    for (i = 0; i < 70 && i < W_LumpLength(lump); i++) {
+        printf("%02x ", data[i]);
+        if ((i+1) % 10 == 0) printf(" | ");  // Mark each 10-byte thing
+    }
+    printf("\n");
+
     mt = (mapthing_t *)data;
     for (i=0 ; i<numthings ; i++, mt++)
     {
 	spawn = true;
+
+	// DEBUG: Print raw bytes at current mt pointer
+	if (i < 10) {
+	    unsigned char *bytes = (unsigned char *)mt;
+	    printf("[DEBUG] Loop i=%d mt=%p: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+	           i, mt, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4],
+	           bytes[5], bytes[6], bytes[7], bytes[8], bytes[9]);
+	}
 
 	// Do not spawn cool, new monsters if !commercial
 	if (gamemode != commercial)
@@ -371,14 +390,26 @@ void P_LoadThings (int lump)
 	if (spawn == false)
 	    break;
 
-	// Do spawn all other stuff. 
+	// Do spawn all other stuff.
 	spawnthing.x = SHORT(mt->x);
 	spawnthing.y = SHORT(mt->y);
 	spawnthing.angle = SHORT(mt->angle);
 	spawnthing.type = SHORT(mt->type);
 	spawnthing.options = SHORT(mt->options);
-	
+
+	// DEBUG: Print before calling P_SpawnMapThing
+	if (i < 10) {
+	    printf("[P_LoadThings] Before spawn i=%d: x=%d y=%d type=%d spawnthing@%p\n",
+	           i, spawnthing.x, spawnthing.y, spawnthing.type, &spawnthing);
+	}
+
 	P_SpawnMapThing(&spawnthing);
+
+	// DEBUG: Print after calling P_SpawnMapThing
+	if (i < 10) {
+	    printf("[P_LoadThings] After spawn i=%d: spawnthing@%p type now=%d\n",
+	           i, &spawnthing, spawnthing.type);
+	}
     }
 
     W_ReleaseLumpNum(lump);

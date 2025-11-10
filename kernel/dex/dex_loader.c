@@ -362,6 +362,8 @@ static int relocate_image(
     DEX_DBG("[RELOC] Applying %u relocations\n", hdr->reloc_table_count);
 
     // Apply relocations
+    printf("[DEX] Processing %u relocations from reloc table\n", hdr->reloc_table_count);
+
     for (uint32_t i = 0; i < hdr->reloc_table_count; ++i)
     {
         uint32_t off = rel[i].reloc_offset;
@@ -453,12 +455,52 @@ static int relocate_image(
             case DEX_RELATIVE:
             {
                 uint32_t val = old + (uint32_t)image;
+                // DEBUG: Track specific relocations
+                if (off == 0x2AEA)
+                {
+                    printf("[DEX][DEBUG-0x2AEA] D_QuitNetGame reloc: off=0x%08x old=0x%08x base=0x%08x -> val=0x%08x\n",
+                           off, old, (uint32_t)image, val);
+                    printf("[DEX][DEBUG-0x2AEA] target=%p *target_before=0x%08x\n",
+                           target, *(uint32_t *)target);
+                }
+                if (off == 0x4044)
+                {
+                    printf("[DEX][DEBUG-0x4044] G_CheckDemoStatus reloc: off=0x%08x old=0x%08x base=0x%08x -> val=0x%08x\n",
+                           off, old, (uint32_t)image, val);
+                    printf("[DEX][DEBUG-0x4044] target=%p *target_before=0x%08x\n",
+                           target, *(uint32_t *)target);
+                }
+                // Warn if old value is suspiciously large (> 100MB)
+                if (old > 100 * 1024 * 1024)
+                {
+                    printf("[DEX][WARN] Large RELATIVE old value: off=0x%08x old=0x%08x base=0x%08x -> val=0x%08x\n",
+                           off, old, (uint32_t)image, val);
+                }
+                // Check if the RESULT looks like x86 code (common function prologues)
+                uint8_t byte0 = val & 0xFF;
+                uint8_t byte1 = (val >> 8) & 0xFF;
+                uint8_t byte2 = (val >> 16) & 0xFF;
+                // 0x55 = push ebp, 0x53 = push ebx, 0x56 = push esi, 0x57 = push edi, 0x83 = sub, 0x8b = mov
+                if ((byte0 == 0x55 || byte0 == 0x53 || byte0 == 0x56 || byte0 == 0x57) &&
+                    (byte1 == 0x89 || byte1 == 0x8B || byte1 == 0x83 || byte1 == 0x56 || byte1 == 0x53))
+                {
+                    printf("[DEX][WARN] SUSPICIOUS RELOC: off=0x%08x old=0x%08x base=0x%08x -> val=0x%08x (looks like x86 code!)\n",
+                           off, old, (uint32_t)image, val);
+                }
                 if (off >= hdr->entry_offset && off < hdr->entry_offset + 0x200)
                 {
                     printf("[DEX][REL] off=0x%08x old=0x%08x base=0x%08x -> 0x%08x\n",
                            off, old, (uint32_t)image, val);
                 }
                 *(uint32_t *)target = val;
+                if (off == 0x2AEA)
+                {
+                    printf("[DEX][DEBUG-0x2AEA] *target_after=0x%08x\n", *(uint32_t *)target);
+                }
+                if (off == 0x4044)
+                {
+                    printf("[DEX][DEBUG-0x4044] *target_after=0x%08x\n", *(uint32_t *)target);
+                }
 
                 DEX_DBG("[REL] REL   @%08x %08x -> %08x base=%08x\n",
                      (uint32_t)(uintptr_t)target, old, val, (uint32_t)image);
@@ -837,13 +879,20 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
          (uint32_t)dex.dex_entry, (uint32_t)stub, user_sp);
 
     
-    uintptr_t heap_base = (((uintptr_t)stub + 0xFFFu) & ~0xFFFu);  // Page-align above stub
-    uintptr_t heap_size  = 64u << 20;                              // 64 MB window
+    uintptr_t image_end = PAGE_ALIGN_UP((uintptr_t)dex.image_base + dex.image_size);
+    uintptr_t heap_base = image_end;
+    uintptr_t heap_size  = 64u << 20;  // 64 MB window
 
     system_brk_init_window(heap_base, heap_size);
+    printf("[DEX] image_base=%p size=%u -> heap_base=%p window=%u\n",
+           (void *)dex.image_base,
+           (unsigned)dex.image_size,
+           (void *)heap_base,
+           (unsigned)heap_size);
 
     // Reserve demand-zero window before committing initial brk
     paging_reserve_range(heap_base, heap_size);
+    paging_set_user_heap(heap_base);
     commit_initial_heap(heap_base, heap_size, 8u << 20);
     
     // Jump to user mode
@@ -975,11 +1024,18 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
         debug_request_single_step((uint32_t)stub, 512);
     }
 
-    uintptr_t heap_base = (((uintptr_t)stub + 0xFFFu) & ~0xFFFu);
+    uintptr_t image_end = PAGE_ALIGN_UP((uintptr_t)dex.image_base + dex.image_size);
+    uintptr_t heap_base = image_end;
     uintptr_t heap_size = 64u << 20;
 
     system_brk_init_window(heap_base, heap_size);
+    printf("[DEX] image_base=%p size=%u -> heap_base=%p window=%u\n",
+           (void *)dex.image_base,
+           (unsigned)dex.image_size,
+           (void *)heap_base,
+           (unsigned)heap_size);
     paging_reserve_range(heap_base, heap_size);
+    paging_set_user_heap(heap_base);
     commit_initial_heap(heap_base, heap_size, 8u << 20);
     
     paging_switch_address_space(cr3_parent);

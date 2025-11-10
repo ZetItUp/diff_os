@@ -65,13 +65,8 @@ static void AddIWADDir(char *dir)
 {
     if (num_iwad_dirs < MAX_IWAD_DIRS)
     {
-        char *copy = strdup(dir);
-
-        if (copy != NULL)
-        {
-            iwad_dirs[num_iwad_dirs] = copy;
-            ++num_iwad_dirs;
-        }
+        iwad_dirs[num_iwad_dirs] = dir;
+        ++num_iwad_dirs;
     }
 }
 
@@ -618,32 +613,6 @@ static void BuildIWADDirList(void)
 
 #endif
 #else
-    // Prefer IWADs that live next to the executable so we work out of the
-    // DiffOS image tree without extra configuration.
-    if (myargc > 0 && myargv != NULL && myargv[0] != NULL)
-    {
-        char *exe_path = myargv[0];
-        char *last_sep = strrchr(exe_path, DIR_SEPARATOR);
-
-        if (last_sep != NULL)
-        {
-            size_t dir_len = (size_t)(last_sep - exe_path);
-            char *exe_dir = malloc(dir_len + 1u);
-
-            if (exe_dir != NULL)
-            {
-                strncpy(exe_dir, exe_path, dir_len);
-                exe_dir[dir_len] = '\0';
-                AddIWADDir(exe_dir);
-                free(exe_dir);
-            }
-        }
-        else
-        {
-            AddIWADDir(".");
-        }
-    }
-
     AddIWADDir (FILES_DIR);
 
     // Don't run this function again.
@@ -876,3 +845,4 @@ char *D_SuggestGameName(GameMission_t mission, GameMode_t mode)
 
     return "Unknown game?";
 }
+

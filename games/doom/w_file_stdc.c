@@ -76,11 +76,22 @@ size_t W_StdC_Read(wad_file_t *wad, unsigned int offset,
 
     // Jump to the specified position in the file.
 
+    long pre_tell = ftell(stdc_wad->fstream);
     fseek(stdc_wad->fstream, offset, SEEK_SET);
+    long post_tell = ftell(stdc_wad->fstream);
 
     // Read into the buffer.
 
     result = fread(buffer, 1, buffer_len, stdc_wad->fstream);
+
+    // DEBUG: Log reads that might be related to mapthing loading
+    if (buffer_len == 10 || (offset >= 0x8000 && offset < 0x20000))
+    {
+        printf("[W_Read] off=0x%x len=%zu pre_tell=%ld post_tell=%ld result=%zu buf[0..3]=%02x %02x %02x %02x\n",
+               offset, buffer_len, pre_tell, post_tell, result,
+               ((unsigned char*)buffer)[0], ((unsigned char*)buffer)[1],
+               ((unsigned char*)buffer)[2], ((unsigned char*)buffer)[3]);
+    }
 
     return result;
 }

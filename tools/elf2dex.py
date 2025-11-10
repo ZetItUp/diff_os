@@ -334,6 +334,11 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
 
     putchar_seen = 0
     for r in relocs:
+        # DEBUG: Track specific problematic relocation
+        if r['offset'] == 0x29EA:
+            print(f"[DEBUG-0x29EA] Found D_QuitNetGame reloc: type={r['type']} offset=0x{r['offset']:x} target_secidx={r.get('target_secidx', 'N/A')} symname={r.get('symname', '')}")
+            print(f"[DEBUG-0x29EA] relsec={r.get('relsec', 'N/A')} symidx={r.get('symidx', 'N/A')}")
+
         # DEBUG: Track putchar relocations
         if r.get('symname') == 'putchar':
             putchar_seen += 1
@@ -560,13 +565,56 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
 
         if etype in (R_386_GOT32, R_386_GOTOFF, R_386_GOTPC):
             # These are GOT-relative relocations
-            # For non-PIC static executables, treat like GOT32X
-            if verbose:
-                print(f"[WARN] GOT-relative reloc type {etype} at off=0x{raw_off:08x} - treating as absolute")
-            # Handle like R_386_32/GOT32X
+            # For non-PIC static executables, need to convert from indirect to direct reference
             A = struct.unpack_from("<I", tgt_buf, raw_off)[0]
             if sym and sym["shndx"] != 0:
-                # Local symbol
+                # Local symbol - convert from indirect to direct reference
+                # Check for "ff 35 XX XX XX XX" (push [mem32]) or "ff 15 XX XX XX XX" (call [mem32])
+                if raw_off >= 2:
+                    opcode = tgt_buf[raw_off-2:raw_off]
+                    if opcode == b'\xff\x35':
+                        # Convert push [mem] to push imm: "68 XX XX XX XX 90"
+                        tgt_buf[raw_off-2] = 0x68  # push imm32
+                        src_base, _, _ = base_for_secidx(sym["shndx"])
+                        if src_base is None:
+                            if verbose:
+                                print(f"[SKIP] GOT reloc to unknown shndx={sym['shndx']}")
+                            continue
+                        init = (src_base + sym["value"] + A) & 0xffffffff
+                        struct.pack_into("<I", tgt_buf, raw_off-1, init)
+                        if raw_off + 3 < len(tgt_buf):
+                            tgt_buf[raw_off+3] = 0x90
+                        new_img_off = img_off - 1
+                        reloc_table.append((new_img_off, 0, DEX_REL, 0))
+                        if verbose:
+                            print(f"[GOT32->PUSH] sect={sect_name} site_off=0x{new_img_off:08x} "
+                                  f"S=0x{sym['value']:08x} A=0x{A:08x} -> old=0x{init:08x} DEX_REL")
+                        continue
+                    elif opcode == b'\xff\x15':
+                        # Convert call [mem] to call rel32: "e8 XX XX XX XX 90"
+                        tgt_buf[raw_off-2] = 0xe8  # call rel32
+                        src_base, _, _ = base_for_secidx(sym["shndx"])
+                        if src_base is None:
+                            if verbose:
+                                print(f"[SKIP] GOT reloc to unknown shndx={sym['shndx']}")
+                            continue
+                        target_addr = (src_base + sym["value"] + A) & 0xffffffff
+                        # For call rel32, displacement = target - (EIP after instruction)
+                        # EIP after instruction = (image_base + img_off + 4)
+                        # But we're converting from 6-byte to 5-byte + NOP, so EIP = image_base + img_off + 3
+                        # Actually, pack as PC32-style: target - next_instr
+                        # We'll use DEX_PC32 relocation type
+                        struct.pack_into("<I", tgt_buf, raw_off-1, target_addr)
+                        if raw_off + 3 < len(tgt_buf):
+                            tgt_buf[raw_off+3] = 0x90
+                        new_img_off = img_off - 1
+                        reloc_table.append((new_img_off, 0, DEX_PC32, 0))
+                        if verbose:
+                            print(f"[GOT32->CALL] sect={sect_name} site_off=0x{new_img_off:08x} "
+                                  f"S=0x{sym['value']:08x} A=0x{A:08x} target=0x{target_addr:08x} DEX_PC32")
+                        continue
+
+                # Fallback: treat as normal absolute relocation
                 src_base, _, _ = base_for_secidx(sym["shndx"])
                 if src_base is None:
                     if verbose:
@@ -575,6 +623,8 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
                 init = (src_base + sym["value"] + A) & 0xffffffff
                 struct.pack_into("<I", tgt_buf, raw_off, init)
                 reloc_table.append((img_off, 0, DEX_REL, 0))
+                if verbose:
+                    print(f"[GOT32 local fallback] sect={sect_name} site_off=0x{img_off:08x} -> DEX_REL")
             elif sym and sym["shndx"] == 0:
                 # External symbol - GOT relocations are typically for functions
                 struct.pack_into("<I", tgt_buf, raw_off, 0)

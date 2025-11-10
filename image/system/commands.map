@@ -14,6 +14,7 @@ testlower=/programs/testlower/testlower.dex
 testcmp=/programs/testcmp/testcmp.dex
 testcall=/programs/testcall/testcall.dex
 filetest=/programs/filetest/filetest.dex
+wad=/programs/testwad/testwad.dex
 
 # Games
 doom=/games/doom/doom.dex

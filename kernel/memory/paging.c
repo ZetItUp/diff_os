@@ -1736,6 +1736,15 @@ void paging_user_heap_reset(void)
     uresv_count = 0;
 }
 
+void paging_set_user_heap(uintptr_t addr)
+{
+    if (addr < USER_MIN)
+    {
+        addr = USER_MIN;
+    }
+    uheap_next = PAGE_ALIGN_UP((uint32_t)addr);
+}
+
 void paging_free_all_user_in(uint32_t cr3_phys)
 {
     uint32_t old;
