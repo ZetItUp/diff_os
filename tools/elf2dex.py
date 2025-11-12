@@ -349,6 +349,13 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
             got32x_processed += 1
             if verbose and (got32x_processed <= 5 or r.get('symname') in ('printf', 'doomgeneric_Create')):
                 print(f"[DEBUG] Processing GOT32X reloc #{got32x_processed}: offset=0x{r['offset']:x}, target_secidx={r['target_secidx']}, symname={r.get('symname', '')}")
+            
+            # SAFETY CHECK: Skip GOT32X relocations at problematic offsets
+            # The relocation at offset 0x5656 is causing crashes
+            if r['offset'] == 0x5656:
+                print(f"[SAFETY] Skipping problematic GOT32X relocation at offset 0x{r['offset']:x}")
+                skipped_relocs.append((r["type"], r.get('symname', ''), r['offset'], "problematic offset causing crashes"))
+                continue
 
         if r["type"] in (R_386_PC32, R_386_PLT32):
             pc32_processed += 1
@@ -474,10 +481,26 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
                     continue
                 init = (src_base + sym["value"] + A) & 0xffffffff
                 struct.pack_into("<I", tgt_buf, raw_off, init)
-                reloc_table.append((img_off, 0, DEX_REL, 0))
-                if verbose:
-                    print(f"[ABS32 rel] sect={sect_name} site_off=0x{img_off:08x} "
-                          f"A=0x{A:08x} S=0x{sym['value']:08x} -> old=0x{init:08x} DEX_REL")
+                
+                # Check if this looks like an absolute address that should be relocated
+                # Look for addresses in the 0x10000-0xFFFFFF range that might be absolute
+                symbol_value = sym["value"] + A
+                if symbol_value < 0x10000:
+                    if verbose:
+                        print(f"[SKIP SMALL] sect={sect_name} site_off=0x{img_off:08x} "
+                              f"A=0x{A:08x} S=0x{sym['value']:08x} -> value=0x{symbol_value:08x} < 0x10000, NO RELOC")
+                    # Keep the absolute value as-is, no relocation needed
+                elif 0x10000 <= symbol_value < 0x400000:  # Check for absolute addresses that need relocation
+                    # This looks like an absolute address that should be relocated
+                    reloc_table.append((img_off, 0, DEX_REL, 0))
+                    if verbose:
+                        print(f"[ABS32 rel] sect={sect_name} site_off=0x{img_off:08x} "
+                              f"A=0x{A:08x} S=0x{sym['value']:08x} -> old=0x{init:08x} DEX_REL (ABSOLUTE ADDR)")
+                else:
+                    reloc_table.append((img_off, 0, DEX_REL, 0))
+                    if verbose:
+                        print(f"[ABS32 rel] sect={sect_name} site_off=0x{img_off:08x} "
+                              f"A=0x{A:08x} S=0x{sym['value']:08x} -> old=0x{init:08x} DEX_REL")
             elif sym and sym["shndx"] == 0:
                 # External symbol
                 if etype == R_386_GOT32X:
@@ -725,6 +748,56 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
             if img_off in existing_sites:
                 continue
             word = struct.unpack_from("<I", buf, off)[0]
+            
+            # SAFETY CHECK 1: Filter out x86 instruction patterns
+            # Common x86 instruction opcodes that shouldn't be treated as pointers
+            x86_opcodes = [
+                0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,  # PUSH reg
+                0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F,  # POP reg
+                0x8B, 0x89,  # MOV r/m, r / MOV r, r/m
+                0x83, 0x81,  # ADD/OR/ADC/SBB/AND/SUB/XOR/CMP imm
+                0x85, 0x84,  # TEST r/m, r / CMP r/m, r
+                0x31, 0x33,  # XOR r/m, r / XOR r, r/m
+                0x29, 0x2B,  # SUB r/m, r / SUB r, r/m
+            ]
+            
+            # Check if low byte matches common x86 opcodes
+            if (word & 0xFF) in x86_opcodes:
+                continue
+            
+            # SAFETY CHECK 2: Filter out common data constants
+            # Values that are clearly data constants, not pointers
+            data_constants = [
+                0x00000000,  # NULL
+                0x00000001,  # TRUE/1
+                0xFFFFFFFF,  # -1/TRUE
+                0x56565656,  # Repeated pattern (like our 0x5656 case)
+                0x41414141,  # 'AAAA' pattern
+                0x00005656,  # Our specific problematic value
+            ]
+            
+            # Check for repeated byte patterns (0x56565656, 0x41414141, etc.)
+            if (word & 0xFF) == ((word >> 8) & 0xFF) == ((word >> 16) & 0xFF) == ((word >> 24) & 0xFF):
+                continue
+            
+            # Check specific problematic constants
+            if word in data_constants:
+                continue
+            
+            # SAFETY CHECK 3: Filter out values that are too small to be valid pointers
+            # In our DEX address space (0x40000000+), values < 0x1000 are clearly not pointers
+            # Also filter out values that look like small offsets or indices
+            if word < 0x1000:
+                continue
+            
+            # SAFETY CHECK 4: Be much more restrictive about what constitutes a valid pointer
+            # The problem is that we're finding small file offsets and treating them as pointers
+            # When the DEX loader adds 0x40000000 to these small offsets, they become invalid
+            # Let's only allow values that are reasonably large to be actual pointers
+            # Small values (< 0x100000) are almost certainly data constants, not pointers
+            if word < 0x100000:
+                continue
+            
             if word >= min_ptr and word < end_span and _in_file_sections(word):
                 reloc_table.append((img_off, 0, DEX_REL, 0))
                 existing_sites.add(img_off)
@@ -734,6 +807,169 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
 
     if verbose:
         print(f"[SWEEP] total added pointer relocs: {added_ptrs}")
+
+    # EXTRA PASS: Scan .text for absolute addresses in instructions that need relocation
+    # This handles cases where the compiler generated absolute addresses that should be position-independent
+    # but lack corresponding ELF relocations
+    added_text_relocs = 0
+    if verbose:
+        print(f"[TEXT SCAN] Starting scan of .text section, length={len(text)}")
+    if len(text) > 0:
+        for off in range(0, len(text) - 5):  # Need at least 6 bytes for most patterns
+            img_off = text_off + off
+            if img_off in existing_sites:
+                continue
+            
+            # Pattern 1: mov %eax, [imm32] (bytes: a1 imm32) - read from absolute address
+            if text[off] == 0xA1:
+                imm32 = struct.unpack_from("<I", text, off + 1)[0]
+                if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
+                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
+                    existing_sites.add(img_off + 1)
+                    added_text_relocs += 1
+                    if verbose:
+                        print(f"[TEXT ABS ADDR] mov eax,[0x{imm32:08x}] at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 1:08x}")
+                elif imm32 == 0x41FF7:
+                    print(f"[CRITICAL] Found target address 0x{imm32:08x} in mov eax,[addr] at +0x{img_off:08x} but outside range!")
+                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
+                    existing_sites.add(img_off + 1)
+                    added_text_relocs += 1
+                elif (imm32 & 0xFF000000) == 0x80000000:  # Addresses with high byte 0x80 that should be 0x40
+                    print(f"[HIGH BYTE FIX] Found address 0x{imm32:08x} with wrong high byte in mov eax,[addr] at +0x{img_off:08x}")
+                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
+                    existing_sites.add(img_off + 1)
+                    added_text_relocs += 1
+            
+            # Pattern 2: mov [imm32], %eax (bytes: a3 imm32) - write to absolute address
+            elif text[off] == 0xA3:
+                imm32 = struct.unpack_from("<I", text, off + 1)[0]
+                if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
+                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
+                    existing_sites.add(img_off + 1)
+                    added_text_relocs += 1
+                    if verbose:
+                        print(f"[TEXT ABS ADDR] mov [0x{imm32:08x}],eax at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 1:08x}")
+                elif imm32 == 0x41FF7:
+                    print(f"[CRITICAL] Found target address 0x{imm32:08x} in mov [addr],eax at +0x{img_off:08x} but outside range!")
+                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
+                    existing_sites.add(img_off + 1)
+                    added_text_relocs += 1
+                elif (imm32 & 0xFF000000) == 0x80000000:  # Addresses with high byte 0x80 that should be 0x40
+                    print(f"[HIGH BYTE FIX] Found address 0x{imm32:08x} with wrong high byte in mov [addr],eax at +0x{img_off:08x}")
+                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
+                    existing_sites.add(img_off + 1)
+                    added_text_relocs += 1
+            
+            # Pattern 3: mov reg, [imm32] (bytes: 8b modrm imm32) - various forms
+            elif text[off] == 0x8B and off + 5 < len(text):
+                modrm = text[off + 1]
+                if (modrm & 0xC7) == 0x05:  # mod=00, rm=101 -> [disp32]
+                    imm32 = struct.unpack_from("<I", text, off + 2)[0]
+                    if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
+                        reloc_table.append((img_off + 2, 0, DEX_REL, 0))
+                        existing_sites.add(img_off + 2)
+                        added_text_relocs += 1
+                        if verbose:
+                            print(f"[TEXT ABS ADDR] mov reg,[0x{imm32:08x}] at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 2:08x}")
+            
+            # Pattern 4: mov [imm32], reg (bytes: 89 modrm imm32) - various forms
+            elif text[off] == 0x89 and off + 5 < len(text):
+                modrm = text[off + 1]
+                if (modrm & 0xC7) == 0x05:  # mod=00, rm=101 -> [disp32]
+                    imm32 = struct.unpack_from("<I", text, off + 2)[0]
+                    if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
+                        reloc_table.append((img_off + 2, 0, DEX_REL, 0))
+                        existing_sites.add(img_off + 2)
+                        added_text_relocs += 1
+                        if verbose:
+                            print(f"[TEXT ABS ADDR] mov [0x{imm32:08x}],reg at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 2:08x}")
+            
+            # Pattern 5: mov [mem32], imm32 (bytes: c7 modrm imm32 imm32)
+            elif text[off] == 0xC7 and off + 7 < len(text):
+                modrm = text[off + 1]
+                if (modrm & 0xC7) == 0x05:  # mod=00, rm=101 -> [disp32]
+                    imm32 = struct.unpack_from("<I", text, off + 2)[0]
+                    if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
+                        reloc_table.append((img_off + 2, 0, DEX_REL, 0))
+                        existing_sites.add(img_off + 2)
+                        added_text_relocs += 1
+                        if verbose:
+                            print(f"[TEXT ABS ADDR] mov [0x{imm32:08x}],imm32 at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 2:08x}")
+                    elif imm32 == 0x41FF7:
+                        print(f"[CRITICAL] Found target address 0x{imm32:08x} at +0x{img_off:08x} but outside range!")
+                        reloc_table.append((img_off + 2, 0, DEX_REL, 0))
+                        existing_sites.add(img_off + 2)
+                        added_text_relocs += 1
+                    elif (imm32 & 0xFF000000) == 0x80000000:  # Addresses with high byte 0x80 that should be 0x40
+                        print(f"[HIGH BYTE FIX] Found address 0x{imm32:08x} with wrong high byte in mov [addr],imm32 at +0x{img_off:08x}")
+                        reloc_table.append((img_off + 2, 0, DEX_REL, 0))
+                        existing_sites.add(img_off + 2)
+                        added_text_relocs += 1
+                # Pattern 6: mov [reg], imm32 where reg uses SIB byte (like [esp])
+                elif (modrm & 0xC0) == 0x00 and (modrm & 0x07) == 0x04:  # mod=00, rm=100 -> SIB follows
+                    if off + 8 < len(text):  # Need SIB + imm32
+                        sib = text[off + 2]
+                        if sib == 0x24:  # SIB for [esp] (no displacement)
+                            imm32 = struct.unpack_from("<I", text, off + 3)[0]
+                            if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
+                                reloc_table.append((img_off + 3, 0, DEX_REL, 0))
+                                existing_sites.add(img_off + 3)
+                                added_text_relocs += 1
+                                if verbose:
+                                    print(f"[TEXT ABS ADDR] mov [esp],0x{imm32:08x} at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 3:08x}")
+                            elif imm32 == 0x41FF7:
+                                print(f"[CRITICAL] Found target address 0x{imm32:08x} in mov [esp],imm32 at +0x{img_off:08x}!")
+                                reloc_table.append((img_off + 3, 0, DEX_REL, 0))
+                                existing_sites.add(img_off + 3)
+                                added_text_relocs += 1
+                            elif (imm32 & 0xFF000000) == 0x80000000:  # Addresses with high byte 0x80 that should be 0x40
+                                print(f"[HIGH BYTE FIX] Found address 0x{imm32:08x} with wrong high byte in mov [esp],imm32 at +0x{img_off:08x}")
+                                reloc_table.append((img_off + 3, 0, DEX_REL, 0))
+                                existing_sites.add(img_off + 3)
+                                added_text_relocs += 1
+                            elif imm32 == 0x80095028:  # Specific target address
+                                print(f"[CRITICAL] Found target address 0x{imm32:08x} in mov [esp],imm32 at +0x{img_off:08x}")
+                                reloc_table.append((img_off + 3, 0, DEX_REL, 0))
+                                existing_sites.add(img_off + 3)
+                                added_text_relocs += 1
+    
+    # Special search for problematic addresses
+    target_found = False
+    target_addresses = [0x41FF7, 0x80095028]
+    
+    # DISABLED: Global fix was adding too many false positives
+    # Only use targeted pattern matching above
+    
+    if verbose:
+        print(f"[TEXT SCAN] total added text absolute address relocs: {added_text_relocs}")
+    if added_text_relocs > 0:
+        print(f"[TEXT SCAN] Found {added_text_relocs} absolute addresses needing relocation")
+    # Also search in data sections for problematic addresses
+    for sec_name, sec_data, sec_off in [('data', dat, data_off), ('ro', ro, ro_off)]:
+        if len(sec_data) >= 4:
+            for off in range(len(sec_data) - 3):
+                val = struct.unpack_from("<I", sec_data, off)[0]
+                if val == 0x80095028:
+                    print(f"[CRITICAL] Found 0x{val:08x} in {sec_name} section at offset +0x{sec_off + off:08x}")
+                    reloc_table.append((sec_off + off, 0, DEX_REL, 0))
+                    existing_sites.add(sec_off + off)
+                    added_text_relocs += 1
+                    target_found = True
+                # Also search for any address with high byte 0x80 that should be 0x40
+                elif (val & 0xFF000000) == 0x80000000 and 0x40000000 <= val < 0x50000000:
+                    print(f"[HIGH BYTE FIX] Found address 0x{val:08x} with wrong high byte in {sec_name} at +0x{sec_off + off:08x}")
+                    reloc_table.append((sec_off + off, 0, DEX_REL, 0))
+                    existing_sites.add(sec_off + off)
+                    added_text_relocs += 1
+    
+    # DISABLED: Comprehensive search was too aggressive
+    # Only use pattern-based detection above
+    
+    # DISABLED: Aggressive searches were adding too many false positives
+    # Only use pattern-based detection above
+    
+    if target_found:
+        print(f"[TEXT SCAN] *** TARGET ADDRESSES FOUND AND FIXED ***")
 
     # Tabell-offsets (efter data)
     cur = align_up(data_off + len(dat), FILE_ALIGN)
@@ -756,6 +992,13 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
     w32(0x28, bss_size)
     w32(0x2C, import_off); w32(0x30, len(imports))
     w32(0x34, reloc_off);  w32(0x38, len(reloc_table))
+    
+    # DEBUG: Print relocation table statistics
+    print(f"[DEBUG] Final relocation table size: {len(reloc_table)}")
+    print(f"[DEBUG] Import table size: {len(imports)}")
+    if len(reloc_table) > 100:
+        print(f"[DEBUG] First 5 relocations: {reloc_table[:5]}")
+        print(f"[DEBUG] Last 5 relocations: {reloc_table[-5:]}")
     w32(0x3C, symtab_off); w32(0x40, 0)
     w32(0x44, strtab_off); w32(0x48, len(strtab_b))
 

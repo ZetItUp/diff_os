@@ -9,6 +9,9 @@
 *.exl
 *.zip
 *.log
+.*
+AGENT_OS_PROGRAMMING.md
+AGENTS.md
 build/
 cross/
 1token
