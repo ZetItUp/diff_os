@@ -127,7 +127,7 @@ static void keyboard_process_scancode(uint8_t sc)
 
     if (sc == 0x1C)  // Enter (main)
     {
-        ch_push('\n');
+        ch_push(13);  // Send 0x0D (KEY_ENTER for Doom), not '\n'
         e0 = 0;
 
         return;
@@ -135,7 +135,7 @@ static void keyboard_process_scancode(uint8_t sc)
 
     if (e0 && sc == 0x1C)  // Enter (keypad)
     {
-        ch_push('\n');
+        ch_push(13);  // Send 0x0D (KEY_ENTER for Doom), not '\n'
         e0 = 0;
 
         return;
