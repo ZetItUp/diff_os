@@ -28,6 +28,11 @@ static inline int ch_full(void)
     return ((ch_tail + 1) & (CH_FIFO_SIZE - 1)) == ch_head;
 }
 
+static inline unsigned ch_count(void)
+{
+    return (ch_tail - ch_head) & (CH_FIFO_SIZE - 1);
+}
+
 static inline void ch_push(uint8_t c)
 {
     unsigned t = (ch_tail + 1) & (CH_FIFO_SIZE - 1);
@@ -52,6 +57,31 @@ static inline int ch_pop(uint8_t *out)
     return 1;
 }
 
+static int keyboard_try_pop_event(uint8_t *pressed, uint8_t *key)
+{
+    if (ch_count() < 2)
+    {
+        return 0;
+    }
+
+    uint8_t state = 0;
+    uint8_t code = 0;
+    ch_pop(&state);
+    ch_pop(&code);
+
+    if (pressed)
+    {
+        *pressed = state;
+    }
+
+    if (key)
+    {
+        *key = code;
+    }
+
+    return 1;
+}
+
 static uint8_t map[128] =
 {
     /*00*/ 0,  27,'1','2','3','4','5','6','7','8','9','0','-','=', '\b',
@@ -69,6 +99,13 @@ static uint8_t shift_map[128] =
 };
 
 static int shift, caps, ctrl, alt, e0;
+
+// Helper to push a key event (press or release) as 2 bytes
+static void push_key_event(int pressed, uint8_t key)
+{
+    ch_push(pressed ? 1 : 0);
+    ch_push(key);
+}
 
 static void keyboard_process_scancode(uint8_t sc)
 {
@@ -110,32 +147,17 @@ static void keyboard_process_scancode(uint8_t sc)
         return;
     }
 
-    if (release)  // Ignore releases
-    {
-        e0 = 0;
-
-        return;
-    }
-
     if (sc == 0x0E)  // Backspace
     {
-        ch_push(0x08);
+        push_key_event(!release, 0x08);
         e0 = 0;
 
         return;
     }
 
-    if (sc == 0x1C)  // Enter (main)
+    if (sc == 0x1C)  // Enter (main or keypad with E0)
     {
-        ch_push(13);  // Send 0x0D (KEY_ENTER for Doom), not '\n'
-        e0 = 0;
-
-        return;
-    }
-
-    if (e0 && sc == 0x1C)  // Enter (keypad)
-    {
-        ch_push(13);  // Send 0x0D (KEY_ENTER for Doom), not '\n'
+        push_key_event(!release, 13);
         e0 = 0;
 
         return;
@@ -143,7 +165,7 @@ static void keyboard_process_scancode(uint8_t sc)
 
     if (sc == 0x0F)  // Tab
     {
-        ch_push('\t');
+        push_key_event(!release, '\t');
         e0 = 0;
 
         return;
@@ -157,52 +179,52 @@ static void keyboard_process_scancode(uint8_t sc)
         // Arrow keys with E0 prefix
         if (sc == 0x48)  // Up arrow
         {
-            ch_push(0xad);
+            push_key_event(!release, 0xad);
             return;
         }
         if (sc == 0x50)  // Down arrow
         {
-            ch_push(0xaf);
+            push_key_event(!release, 0xaf);
             return;
         }
         if (sc == 0x4B)  // Left arrow
         {
-            ch_push(0xac);
+            push_key_event(!release, 0xac);
             return;
         }
         if (sc == 0x4D)  // Right arrow
         {
-            ch_push(0xae);
+            push_key_event(!release, 0xae);
             return;
         }
         if (sc == 0x47)  // Home
         {
-            ch_push(0x80 + 0x47);
+            push_key_event(!release, 0x80 + 0x47);
             return;
         }
         if (sc == 0x4F)  // End
         {
-            ch_push(0x80 + 0x4F);
+            push_key_event(!release, 0x80 + 0x4F);
             return;
         }
         if (sc == 0x49)  // Page Up
         {
-            ch_push(0x80 + 0x49);
+            push_key_event(!release, 0x80 + 0x49);
             return;
         }
         if (sc == 0x51)  // Page Down
         {
-            ch_push(0x80 + 0x51);
+            push_key_event(!release, 0x80 + 0x51);
             return;
         }
         if (sc == 0x52)  // Insert
         {
-            ch_push(0x80 + 0x52);
+            push_key_event(!release, 0x80 + 0x52);
             return;
         }
         if (sc == 0x53)  // Delete
         {
-            ch_push(0x80 + 0x53);
+            push_key_event(!release, 0x80 + 0x53);
             return;
         }
 
@@ -213,17 +235,17 @@ static void keyboard_process_scancode(uint8_t sc)
     // Handle F-keys (send as 0x80 + scancode for Doom)
     if (sc >= 0x3B && sc <= 0x44)  // F1-F10
     {
-        ch_push(0x80 + sc);
+        push_key_event(!release, 0x80 + sc);
         return;
     }
     if (sc == 0x57)  // F11
     {
-        ch_push(0x80 + sc);
+        push_key_event(!release, 0x80 + sc);
         return;
     }
     if (sc == 0x58)  // F12
     {
-        ch_push(0x80 + sc);
+        push_key_event(!release, 0x80 + sc);
         return;
     }
 
@@ -255,7 +277,7 @@ static void keyboard_process_scancode(uint8_t sc)
         ch = shift_map[sc];
     }
 
-    ch_push(ch);
+    push_key_event(!release, ch);
     e0 = 0;
 }
 
@@ -281,39 +303,85 @@ void keyboard_drain(void)
     }
 }
 
+int keyboard_try_get_event(keyboard_event_t *event)
+{
+    keyboard_drain();
+
+    uint8_t pressed = 0;
+    uint8_t key = 0;
+
+    if (!keyboard_try_pop_event(&pressed, &key))
+    {
+        return 0;
+    }
+
+    if (event)
+    {
+        event->pressed = pressed ? 1 : 0;
+        event->key = key;
+    }
+
+    return 1;
+}
+
+int keyboard_get_event(keyboard_event_t *event)
+{
+    keyboard_event_t tmp;
+
+    for (;;)
+    {
+        if (keyboard_try_get_event(&tmp))
+        {
+            if (event)
+            {
+                *event = tmp;
+            }
+
+            return 1;
+        }
+
+        asm volatile("sti; hlt");
+    }
+}
+
 uint8_t keyboard_getch(void)
 {
     for (;;)
     {
-        keyboard_drain();
+        keyboard_event_t ev;
 
-        uint8_t c;
+        keyboard_get_event(&ev);
 
-        if (ch_pop(&c))
+        if (!ev.pressed)
         {
-            return c;
+            continue;
         }
 
-        asm volatile("sti; hlt");  // Sleep until next interrupt
+        return ev.key;
     }
 }
 
 int keyboard_trygetch(uint8_t *out)
 {
-    keyboard_drain();
-
-    uint8_t c;
-
-    if (ch_pop(&c))
+    for (;;)
     {
+        keyboard_event_t ev;
+
+        if (!keyboard_try_get_event(&ev))
+        {
+            return 0;
+        }
+
+        if (!ev.pressed)
+        {
+            continue;
+        }
+
         if (out)
         {
-            *out = c;
+            *out = ev.key;
         }
 
         return 1;
     }
-
-    return 0;
 }
-

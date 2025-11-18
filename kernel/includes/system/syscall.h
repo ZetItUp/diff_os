@@ -44,6 +44,8 @@ enum
     SYSTEM_CHDIR = 32,
     SYSTEM_GETCWD = 33,
     SYSTEM_GETEXECROOT = 34,
+    SYSTEM_KEYBOARD_EVENT_GET = 35,
+    SYSTEM_KEYBOARD_EVENT_TRY = 36,
 };
 
 struct syscall_frame 

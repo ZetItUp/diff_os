@@ -48,22 +48,20 @@ uint32_t DG_GetTicksMs(void)
 
 int DG_GetKey(int *pressed, unsigned char *key)
 {
-    uint8_t c = 0;
-
     if (!pressed || !key)
     {
         return 0;
     }
 
-    if (!system_trygetch(&c) || c == 0)
-    {
-        *pressed = 0;
+    system_key_event_t ev;
 
-        return 1;
+    if (!system_keyboard_event_try(&ev))
+    {
+        return 0;
     }
 
-    *pressed = 1;
-    *key = (unsigned char)c;
+    *pressed = ev.pressed ? 1 : 0;
+    *key = ev.key;
 
     return 1;
 }

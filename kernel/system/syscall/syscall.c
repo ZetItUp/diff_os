@@ -280,6 +280,29 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_KEYBOARD_EVENT_GET:
+        {
+            keyboard_event_t ev;
+            keyboard_get_event(&ev);
+            ret = ((int)ev.pressed << 8) | (int)ev.key;
+
+            break;
+        }
+        case SYSTEM_KEYBOARD_EVENT_TRY:
+        {
+            keyboard_event_t ev;
+
+            if (keyboard_try_get_event(&ev))
+            {
+                ret = ((int)ev.pressed << 8) | (int)ev.key;
+            }
+            else
+            {
+                ret = -1;
+            }
+
+            break;
+        }
         case SYSTEM_CONSOLE_GETXY:
         {
             int x, y;
