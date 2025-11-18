@@ -82,23 +82,102 @@ static int keyboard_try_pop_event(uint8_t *pressed, uint8_t *key)
     return 1;
 }
 
-static uint8_t map[128] =
+static const uint8_t map[128] =
 {
-    /*00*/ 0,  27,'1','2','3','4','5','6','7','8','9','0','-','=', '\b',
-    /*10*/ '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n', 0,
-    /*20*/ 'a','s','d','f','g','h','j','k','l',';','\'','`', 0,'\\','z','x',
-    /*30*/ 'c','v','b','n','m',',','.','/', 0,   0,   0,  ' ',
+    [0x01] = 27,
+    [0x02] = '1',
+    [0x03] = '2',
+    [0x04] = '3',
+    [0x05] = '4',
+    [0x06] = '5',
+    [0x07] = '6',
+    [0x08] = '7',
+    [0x09] = '8',
+    [0x0A] = '9',
+    [0x0B] = '0',
+    [0x0C] = '-',
+    [0x0D] = '=',
+    [0x0E] = '\b',
+    [0x0F] = '\t',
+    [0x10] = 'q',
+    [0x11] = 'w',
+    [0x12] = 'e',
+    [0x13] = 'r',
+    [0x14] = 't',
+    [0x15] = 'y',
+    [0x16] = 'u',
+    [0x17] = 'i',
+    [0x18] = 'o',
+    [0x19] = 'p',
+    [0x1A] = '[',
+    [0x1B] = ']',
+    [0x1C] = '\n',
+    [0x1E] = 'a',
+    [0x1F] = 's',
+    [0x20] = 'd',
+    [0x21] = 'f',
+    [0x22] = 'g',
+    [0x23] = 'h',
+    [0x24] = 'j',
+    [0x25] = 'k',
+    [0x26] = 'l',
+    [0x27] = ';',
+    [0x28] = '\'',
+    [0x29] = '`',
+    [0x2B] = '\\',
+    [0x2C] = 'z',
+    [0x2D] = 'x',
+    [0x2E] = 'c',
+    [0x2F] = 'v',
+    [0x30] = 'b',
+    [0x31] = 'n',
+    [0x32] = 'm',
+    [0x33] = ',',
+    [0x34] = '.',
+    [0x35] = '/',
+    [0x37] = '*',
+    [0x39] = ' ',
+    [0x47] = '7',
+    [0x48] = '8',
+    [0x49] = '9',
+    [0x4A] = '-',
+    [0x4B] = '4',
+    [0x4C] = '5',
+    [0x4D] = '6',
+    [0x4E] = '+',
+    [0x4F] = '1',
+    [0x50] = '2',
+    [0x51] = '3',
+    [0x52] = '0',
+    [0x53] = '.',
 };
 
-static uint8_t shift_map[128] =
+static const uint8_t shift_map[128] =
 {
-    /*02..0D*/ 0, 0,'!','@','#','$','%','^','&','*','(',')','_','+', 0,
-    /*10..1B*/ 0, 0,'Q','W','E','R','T','Y','U','I','O','P','{','}', 0,
-    /*1E..28*/ 0,'A','S','D','F','G','H','J','K','L',':','"','~', 0,
-    /*2B..35*/ 0,'Z','X','C','V','B','N','M','<','>','?', 0,
+    [0x02] = '!',
+    [0x03] = '@',
+    [0x04] = '#',
+    [0x05] = '$',
+    [0x06] = '%',
+    [0x07] = '^',
+    [0x08] = '&',
+    [0x09] = '*',
+    [0x0A] = '(',
+    [0x0B] = ')',
+    [0x0C] = '_',
+    [0x0D] = '+',
+    [0x1A] = '{',
+    [0x1B] = '}',
+    [0x27] = ':',
+    [0x28] = '"',
+    [0x29] = '~',
+    [0x2B] = '|',
+    [0x33] = '<',
+    [0x34] = '>',
+    [0x35] = '?',
 };
 
-static int shift, caps, ctrl, alt, e0;
+static int shift, caps, ctrl, alt, e0, num_lock;
 
 // Helper to push a key event (press or release) as 2 bytes
 static void push_key_event(int pressed, uint8_t key)
@@ -147,6 +226,14 @@ static void keyboard_process_scancode(uint8_t sc)
         return;
     }
 
+    if (sc == 0x45 && !release)  // Num Lock toggle
+    {
+        num_lock ^= 1;
+        e0 = 0;
+
+        return;
+    }
+
     if (sc == 0x0E)  // Backspace
     {
         push_key_event(!release, 0x08);
@@ -166,6 +253,14 @@ static void keyboard_process_scancode(uint8_t sc)
     if (sc == 0x0F)  // Tab
     {
         push_key_event(!release, '\t');
+        e0 = 0;
+
+        return;
+    }
+
+    if (!e0 && sc == 0x37)  // Keypad *
+    {
+        push_key_event(!release, '*');
         e0 = 0;
 
         return;
@@ -227,8 +322,64 @@ static void keyboard_process_scancode(uint8_t sc)
             push_key_event(!release, 0x80 + 0x53);
             return;
         }
+        if (sc == 0x35)  // Keypad /
+        {
+            push_key_event(!release, '/');
+            return;
+        }
+        if (sc == 0x1C)  // Keypad Enter
+        {
+            push_key_event(!release, 13);
+            return;
+        }
 
         // Ignore other E0 keys
+        return;
+    }
+
+    if (sc >= 0x47 && sc <= 0x53)  // Keypad cluster
+    {
+        if (sc == 0x4A || sc == 0x4E)  // - and +
+        {
+            push_key_event(!release, sc == 0x4A ? '-' : '+');
+            e0 = 0;
+            return;
+        }
+
+        static const uint8_t keypad_chars[13] =
+        {
+            '7','8','9',0,'4','5','6',0,'1','2','3','0','.'
+        };
+
+        if (num_lock)
+        {
+            uint8_t sym = keypad_chars[sc - 0x47];
+
+            if (sym)
+            {
+                push_key_event(!release, sym);
+            }
+        }
+        else
+        {
+            static const uint8_t keypad_nav[13] =
+            {
+                (uint8_t)(0x80 + 0x47), 0xad, (uint8_t)(0x80 + 0x49), 0,
+                0xac, 0, 0xae, 0,
+                (uint8_t)(0x80 + 0x4F), 0xaf, (uint8_t)(0x80 + 0x51),
+                (uint8_t)(0x80 + 0x52), (uint8_t)(0x80 + 0x53)
+            };
+
+            uint8_t nav = keypad_nav[sc - 0x47];
+
+            if (nav)
+            {
+                push_key_event(!release, nav);
+            }
+        }
+
+        e0 = 0;
+
         return;
     }
 
@@ -288,6 +439,7 @@ void keyboard_init(void)
     ctrl = 0;
     alt = 0;
     e0 = 0;
+    num_lock = 1;
 
     ch_head = 0;
     ch_tail = 0;

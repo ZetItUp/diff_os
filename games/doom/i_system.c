@@ -73,11 +73,12 @@ static atexit_listentry_t *exit_funcs = NULL;
 void I_AtExit(atexit_func_t func, boolean run_on_error)
 {
     atexit_listentry_t *entry;
+    void *caller = __builtin_return_address(0);
 
     entry = malloc(sizeof(*entry));
 
-    printf("[I_AtExit] Registered func=%p run_on_error=%d entry=%p\n",
-           (void*)func, run_on_error, (void*)entry);
+    printf("[I_AtExit] Registered func=%p run_on_error=%d entry=%p caller=%p\n",
+           (void*)func, run_on_error, (void*)entry, caller);
 
     entry->func = func;
     entry->run_on_error = run_on_error;
@@ -586,4 +587,3 @@ boolean I_GetMemoryValue(unsigned int offset, void *value, int size)
 
     return false;
 }
-
