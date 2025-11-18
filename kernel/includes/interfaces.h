@@ -33,6 +33,12 @@ typedef struct keyboard_exports
     uint8_t (*keyboard_read_blocking)(void);
 } __attribute__((packed)) keyboard_exports_t;
 
+typedef struct keyboard_event
+{
+    uint8_t pressed;
+    uint8_t key;
+} keyboard_event_t;
+
 // Shared VBE info
 typedef struct vbe_exports
 {
@@ -56,6 +62,8 @@ extern keyboard_exports_t g_keyboard;
 void keyboard_register(int (*read_fn)(uint8_t*), uint8_t (*block_fn)(void));
 void keyboard_init(void);
 void keyboard_drain(void);
+int keyboard_get_event(keyboard_event_t *event);
+int keyboard_try_get_event(keyboard_event_t *event);
 int keyboard_trygetch(uint8_t *out);
 uint8_t keyboard_getch(void);
 
@@ -67,4 +75,3 @@ void console_get_colors_kernel(uint8_t *out_fg, uint8_t *out_bg);
 extern vbe_exports_t g_vbe;
 void vbe_register(uint32_t phys_base, uint32_t width, uint32_t height, uint32_t bpp, uint32_t pitch);
 void vbe_restore_text_mode(void);
-

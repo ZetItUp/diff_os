@@ -28,6 +28,11 @@ static inline int ch_full(void)
     return ((ch_tail + 1) & (CH_FIFO_SIZE - 1)) == ch_head;
 }
 
+static inline unsigned ch_count(void)
+{
+    return (ch_tail - ch_head) & (CH_FIFO_SIZE - 1);
+}
+
 static inline void ch_push(uint8_t c)
 {
     unsigned t = (ch_tail + 1) & (CH_FIFO_SIZE - 1);
@@ -52,23 +57,134 @@ static inline int ch_pop(uint8_t *out)
     return 1;
 }
 
-static uint8_t map[128] =
+static int keyboard_try_pop_event(uint8_t *pressed, uint8_t *key)
 {
-    /*00*/ 0,  27,'1','2','3','4','5','6','7','8','9','0','-','=', '\b',
-    /*10*/ '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n', 0,
-    /*20*/ 'a','s','d','f','g','h','j','k','l',';','\'','`', 0,'\\','z','x',
-    /*30*/ 'c','v','b','n','m',',','.','/', 0,   0,   0,  ' ',
+    if (ch_count() < 2)
+    {
+        return 0;
+    }
+
+    uint8_t state = 0;
+    uint8_t code = 0;
+    ch_pop(&state);
+    ch_pop(&code);
+
+    if (pressed)
+    {
+        *pressed = state;
+    }
+
+    if (key)
+    {
+        *key = code;
+    }
+
+    return 1;
+}
+
+static const uint8_t map[128] =
+{
+    [0x01] = 27,
+    [0x02] = '1',
+    [0x03] = '2',
+    [0x04] = '3',
+    [0x05] = '4',
+    [0x06] = '5',
+    [0x07] = '6',
+    [0x08] = '7',
+    [0x09] = '8',
+    [0x0A] = '9',
+    [0x0B] = '0',
+    [0x0C] = '-',
+    [0x0D] = '=',
+    [0x0E] = '\b',
+    [0x0F] = '\t',
+    [0x10] = 'q',
+    [0x11] = 'w',
+    [0x12] = 'e',
+    [0x13] = 'r',
+    [0x14] = 't',
+    [0x15] = 'y',
+    [0x16] = 'u',
+    [0x17] = 'i',
+    [0x18] = 'o',
+    [0x19] = 'p',
+    [0x1A] = '[',
+    [0x1B] = ']',
+    [0x1C] = '\n',
+    [0x1E] = 'a',
+    [0x1F] = 's',
+    [0x20] = 'd',
+    [0x21] = 'f',
+    [0x22] = 'g',
+    [0x23] = 'h',
+    [0x24] = 'j',
+    [0x25] = 'k',
+    [0x26] = 'l',
+    [0x27] = ';',
+    [0x28] = '\'',
+    [0x29] = '`',
+    [0x2B] = '\\',
+    [0x2C] = 'z',
+    [0x2D] = 'x',
+    [0x2E] = 'c',
+    [0x2F] = 'v',
+    [0x30] = 'b',
+    [0x31] = 'n',
+    [0x32] = 'm',
+    [0x33] = ',',
+    [0x34] = '.',
+    [0x35] = '/',
+    [0x37] = '*',
+    [0x39] = ' ',
+    [0x47] = '7',
+    [0x48] = '8',
+    [0x49] = '9',
+    [0x4A] = '-',
+    [0x4B] = '4',
+    [0x4C] = '5',
+    [0x4D] = '6',
+    [0x4E] = '+',
+    [0x4F] = '1',
+    [0x50] = '2',
+    [0x51] = '3',
+    [0x52] = '0',
+    [0x53] = '.',
 };
 
-static uint8_t shift_map[128] =
+static const uint8_t shift_map[128] =
 {
-    /*02..0D*/ 0, 0,'!','@','#','$','%','^','&','*','(',')','_','+', 0,
-    /*10..1B*/ 0, 0,'Q','W','E','R','T','Y','U','I','O','P','{','}', 0,
-    /*1E..28*/ 0,'A','S','D','F','G','H','J','K','L',':','"','~', 0,
-    /*2B..35*/ 0,'Z','X','C','V','B','N','M','<','>','?', 0,
+    [0x02] = '!',
+    [0x03] = '@',
+    [0x04] = '#',
+    [0x05] = '$',
+    [0x06] = '%',
+    [0x07] = '^',
+    [0x08] = '&',
+    [0x09] = '*',
+    [0x0A] = '(',
+    [0x0B] = ')',
+    [0x0C] = '_',
+    [0x0D] = '+',
+    [0x1A] = '{',
+    [0x1B] = '}',
+    [0x27] = ':',
+    [0x28] = '"',
+    [0x29] = '~',
+    [0x2B] = '|',
+    [0x33] = '<',
+    [0x34] = '>',
+    [0x35] = '?',
 };
 
-static int shift, caps, ctrl, alt, e0;
+static int shift, caps, ctrl, alt, e0, num_lock;
+
+// Helper to push a key event (press or release) as 2 bytes
+static void push_key_event(int pressed, uint8_t key)
+{
+    ch_push(pressed ? 1 : 0);
+    ch_push(key);
+}
 
 static void keyboard_process_scancode(uint8_t sc)
 {
@@ -110,8 +226,9 @@ static void keyboard_process_scancode(uint8_t sc)
         return;
     }
 
-    if (release)  // Ignore releases
+    if (sc == 0x45 && !release)  // Num Lock toggle
     {
+        num_lock ^= 1;
         e0 = 0;
 
         return;
@@ -119,23 +236,15 @@ static void keyboard_process_scancode(uint8_t sc)
 
     if (sc == 0x0E)  // Backspace
     {
-        ch_push(0x08);
+        push_key_event(!release, 0x08);
         e0 = 0;
 
         return;
     }
 
-    if (sc == 0x1C)  // Enter (main)
+    if (sc == 0x1C)  // Enter (main or keypad with E0)
     {
-        ch_push('\n');
-        e0 = 0;
-
-        return;
-    }
-
-    if (e0 && sc == 0x1C)  // Enter (keypad)
-    {
-        ch_push('\n');
+        push_key_event(!release, 13);
         e0 = 0;
 
         return;
@@ -143,9 +252,151 @@ static void keyboard_process_scancode(uint8_t sc)
 
     if (sc == 0x0F)  // Tab
     {
-        ch_push('\t');
+        push_key_event(!release, '\t');
         e0 = 0;
 
+        return;
+    }
+
+    if (!e0 && sc == 0x37)  // Keypad *
+    {
+        push_key_event(!release, '*');
+        e0 = 0;
+
+        return;
+    }
+
+    // Handle E0-prefixed keys (arrow keys, etc.)
+    if (e0)
+    {
+        e0 = 0;
+
+        // Arrow keys with E0 prefix
+        if (sc == 0x48)  // Up arrow
+        {
+            push_key_event(!release, 0xad);
+            return;
+        }
+        if (sc == 0x50)  // Down arrow
+        {
+            push_key_event(!release, 0xaf);
+            return;
+        }
+        if (sc == 0x4B)  // Left arrow
+        {
+            push_key_event(!release, 0xac);
+            return;
+        }
+        if (sc == 0x4D)  // Right arrow
+        {
+            push_key_event(!release, 0xae);
+            return;
+        }
+        if (sc == 0x47)  // Home
+        {
+            push_key_event(!release, 0x80 + 0x47);
+            return;
+        }
+        if (sc == 0x4F)  // End
+        {
+            push_key_event(!release, 0x80 + 0x4F);
+            return;
+        }
+        if (sc == 0x49)  // Page Up
+        {
+            push_key_event(!release, 0x80 + 0x49);
+            return;
+        }
+        if (sc == 0x51)  // Page Down
+        {
+            push_key_event(!release, 0x80 + 0x51);
+            return;
+        }
+        if (sc == 0x52)  // Insert
+        {
+            push_key_event(!release, 0x80 + 0x52);
+            return;
+        }
+        if (sc == 0x53)  // Delete
+        {
+            push_key_event(!release, 0x80 + 0x53);
+            return;
+        }
+        if (sc == 0x35)  // Keypad /
+        {
+            push_key_event(!release, '/');
+            return;
+        }
+        if (sc == 0x1C)  // Keypad Enter
+        {
+            push_key_event(!release, 13);
+            return;
+        }
+
+        // Ignore other E0 keys
+        return;
+    }
+
+    if (sc >= 0x47 && sc <= 0x53)  // Keypad cluster
+    {
+        if (sc == 0x4A || sc == 0x4E)  // - and +
+        {
+            push_key_event(!release, sc == 0x4A ? '-' : '+');
+            e0 = 0;
+            return;
+        }
+
+        static const uint8_t keypad_chars[13] =
+        {
+            '7','8','9',0,'4','5','6',0,'1','2','3','0','.'
+        };
+
+        if (num_lock)
+        {
+            uint8_t sym = keypad_chars[sc - 0x47];
+
+            if (sym)
+            {
+                push_key_event(!release, sym);
+            }
+        }
+        else
+        {
+            static const uint8_t keypad_nav[13] =
+            {
+                (uint8_t)(0x80 + 0x47), 0xad, (uint8_t)(0x80 + 0x49), 0,
+                0xac, 0, 0xae, 0,
+                (uint8_t)(0x80 + 0x4F), 0xaf, (uint8_t)(0x80 + 0x51),
+                (uint8_t)(0x80 + 0x52), (uint8_t)(0x80 + 0x53)
+            };
+
+            uint8_t nav = keypad_nav[sc - 0x47];
+
+            if (nav)
+            {
+                push_key_event(!release, nav);
+            }
+        }
+
+        e0 = 0;
+
+        return;
+    }
+
+    // Handle F-keys (send as 0x80 + scancode for Doom)
+    if (sc >= 0x3B && sc <= 0x44)  // F1-F10
+    {
+        push_key_event(!release, 0x80 + sc);
+        return;
+    }
+    if (sc == 0x57)  // F11
+    {
+        push_key_event(!release, 0x80 + sc);
+        return;
+    }
+    if (sc == 0x58)  // F12
+    {
+        push_key_event(!release, 0x80 + sc);
         return;
     }
 
@@ -177,7 +428,7 @@ static void keyboard_process_scancode(uint8_t sc)
         ch = shift_map[sc];
     }
 
-    ch_push(ch);
+    push_key_event(!release, ch);
     e0 = 0;
 }
 
@@ -188,6 +439,7 @@ void keyboard_init(void)
     ctrl = 0;
     alt = 0;
     e0 = 0;
+    num_lock = 1;
 
     ch_head = 0;
     ch_tail = 0;
@@ -203,39 +455,85 @@ void keyboard_drain(void)
     }
 }
 
+int keyboard_try_get_event(keyboard_event_t *event)
+{
+    keyboard_drain();
+
+    uint8_t pressed = 0;
+    uint8_t key = 0;
+
+    if (!keyboard_try_pop_event(&pressed, &key))
+    {
+        return 0;
+    }
+
+    if (event)
+    {
+        event->pressed = pressed ? 1 : 0;
+        event->key = key;
+    }
+
+    return 1;
+}
+
+int keyboard_get_event(keyboard_event_t *event)
+{
+    keyboard_event_t tmp;
+
+    for (;;)
+    {
+        if (keyboard_try_get_event(&tmp))
+        {
+            if (event)
+            {
+                *event = tmp;
+            }
+
+            return 1;
+        }
+
+        asm volatile("sti; hlt");
+    }
+}
+
 uint8_t keyboard_getch(void)
 {
     for (;;)
     {
-        keyboard_drain();
+        keyboard_event_t ev;
 
-        uint8_t c;
+        keyboard_get_event(&ev);
 
-        if (ch_pop(&c))
+        if (!ev.pressed)
         {
-            return c;
+            continue;
         }
 
-        asm volatile("sti; hlt");  // Sleep until next interrupt
+        return ev.key;
     }
 }
 
 int keyboard_trygetch(uint8_t *out)
 {
-    keyboard_drain();
-
-    uint8_t c;
-
-    if (ch_pop(&c))
+    for (;;)
     {
+        keyboard_event_t ev;
+
+        if (!keyboard_try_get_event(&ev))
+        {
+            return 0;
+        }
+
+        if (!ev.pressed)
+        {
+            continue;
+        }
+
         if (out)
         {
-            *out = c;
+            *out = ev.key;
         }
 
         return 1;
     }
-
-    return 0;
 }
-

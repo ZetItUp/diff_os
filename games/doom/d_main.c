@@ -1797,11 +1797,13 @@ void D_DoomMain (void)
     if (gamemode == commercial && W_CheckNumForName("map01") < 0)
         storedemo = true;
 
+#if ORIGCODE
     if (M_CheckParmWithArgs("-statdump", 1))
     {
         I_AtExit(StatDump, true);
         DEH_printf("External statistics registered.\n");
     }
+#endif
 
     //!
     // @arg <x>

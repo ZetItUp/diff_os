@@ -45,6 +45,8 @@ enum
     SYSTEM_CHDIR = 32,
     SYSTEM_GETCWD = 33,
     SYSTEM_GETEXECROOT = 34,
+    SYSTEM_KEYBOARD_EVENT_GET = 35,
+    SYSTEM_KEYBOARD_EVENT_TRY = 36,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -123,6 +125,41 @@ static inline __attribute__((always_inline)) int system_trygetch(uint8_t *out)
     if(out)
     {
         *out = (uint8_t)(r & 0xFF);
+    }
+
+    return 1;
+}
+
+typedef struct system_key_event
+{
+    uint8_t pressed;
+    uint8_t key;
+} system_key_event_t;
+
+static inline __attribute__((always_inline)) system_key_event_t system_keyboard_event_get(void)
+{
+    int r = do_sys(SYSTEM_KEYBOARD_EVENT_GET, 0, 0, 0, 0);
+
+    system_key_event_t ev;
+    ev.pressed = (uint8_t)((r >> 8) & 0xFF);
+    ev.key = (uint8_t)(r & 0xFF);
+
+    return ev;
+}
+
+static inline __attribute__((always_inline)) int system_keyboard_event_try(system_key_event_t *out)
+{
+    int r = do_sys(SYSTEM_KEYBOARD_EVENT_TRY, 0, 0, 0, 0);
+
+    if (r < 0)
+    {
+        return 0;
+    }
+
+    if (out)
+    {
+        out->pressed = (uint8_t)((r >> 8) & 0xFF);
+        out->key = (uint8_t)(r & 0xFF);
     }
 
     return 1;
