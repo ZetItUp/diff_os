@@ -149,6 +149,84 @@ static void keyboard_process_scancode(uint8_t sc)
         return;
     }
 
+    // Handle E0-prefixed keys (arrow keys, etc.)
+    if (e0)
+    {
+        e0 = 0;
+
+        // Arrow keys with E0 prefix
+        if (sc == 0x48)  // Up arrow
+        {
+            ch_push(0xad);
+            return;
+        }
+        if (sc == 0x50)  // Down arrow
+        {
+            ch_push(0xaf);
+            return;
+        }
+        if (sc == 0x4B)  // Left arrow
+        {
+            ch_push(0xac);
+            return;
+        }
+        if (sc == 0x4D)  // Right arrow
+        {
+            ch_push(0xae);
+            return;
+        }
+        if (sc == 0x47)  // Home
+        {
+            ch_push(0x80 + 0x47);
+            return;
+        }
+        if (sc == 0x4F)  // End
+        {
+            ch_push(0x80 + 0x4F);
+            return;
+        }
+        if (sc == 0x49)  // Page Up
+        {
+            ch_push(0x80 + 0x49);
+            return;
+        }
+        if (sc == 0x51)  // Page Down
+        {
+            ch_push(0x80 + 0x51);
+            return;
+        }
+        if (sc == 0x52)  // Insert
+        {
+            ch_push(0x80 + 0x52);
+            return;
+        }
+        if (sc == 0x53)  // Delete
+        {
+            ch_push(0x80 + 0x53);
+            return;
+        }
+
+        // Ignore other E0 keys
+        return;
+    }
+
+    // Handle F-keys (send as 0x80 + scancode for Doom)
+    if (sc >= 0x3B && sc <= 0x44)  // F1-F10
+    {
+        ch_push(0x80 + sc);
+        return;
+    }
+    if (sc == 0x57)  // F11
+    {
+        ch_push(0x80 + sc);
+        return;
+    }
+    if (sc == 0x58)  // F12
+    {
+        ch_push(0x80 + sc);
+        return;
+    }
+
     if (sc >= 128)
     {
         e0 = 0;
