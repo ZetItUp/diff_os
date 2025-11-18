@@ -4,38 +4,43 @@ import argparse
 import struct
 import sys
 
-# -------------------------
-# DEX constants / formats
-# -------------------------
-DEX_MAGIC = 0x58454400  # "DEX\0"
+DEX_MAGIC = 0x58454400
 DEX_MAJ = 1
 DEX_MIN = 0
 
-# DEX relocation types
 DEX_ABS32 = 0
-DEX_PC32  = 2
-DEX_REL   = 8
+DEX_PC32 = 2
+DEX_REL = 8
 
-# ELF i386 relocation types
-R_386_NONE     = 0
-R_386_32       = 1
-R_386_PC32     = 2
-R_386_GOT32    = 3
-R_386_PLT32    = 4
+R_386_NONE = 0
+R_386_32 = 1
+R_386_PC32 = 2
+R_386_GOT32 = 3
+R_386_PLT32 = 4
 R_386_RELATIVE = 8
-R_386_GOTOFF   = 9
-R_386_GOTPC    = 10
-R_386_GOT32X   = 43
+R_386_GOTOFF = 9
+R_386_GOTPC = 10
+R_386_GOT32X = 43
+
+STB_LOCAL = 0
+STB_GLOBAL = 1
+STB_WEAK = 2
+
+STT_NOTYPE = 0
+STT_OBJECT = 1
+STT_FUNC = 2
+STT_SECTION = 3
+STT_FILE = 4
+STT_TLS = 6
 
 FILE_ALIGN = 4
-HDR_SIZE   = 0x100
-MAX_IMP    = 4096  # match kernel limit
+HDR_SIZE = 0x100
+MAX_IMP = 4096
 
-# -------------------------
-# Helpers
-# -------------------------
+
 def align_up(x, a):
     return (x + (a - 1)) & ~(a - 1)
+
 
 def _to_int(s, base=0):
     s = (s or "0").strip().rstrip(",")
@@ -43,17 +48,11 @@ def _to_int(s, base=0):
         return int(s, 16)
     return int(s, base or 10)
 
+
 def parse_dump(path):
-    """
-    Parser for a text-dump that contains lines like:
-      SECTION idx=... name=... off=0x... size=0x... info=...
-      SYMBOL  name=... value=0x...|value_off=0x... shndx=...
-      RELOC   secidx=... offset=0x... type=R_386_* symidx=... symname=...
-    Supports both 'value=' and 'value_off=' (your elfdump uses the latter).
-    """
-    sections = {}   # idx -> {name, off, size, info}
-    symbols  = []   # [{name, value, shndx}]
-    relocs   = []   # [{relsec, offset, type, symidx, symname, target_secidx}]
+    sections = {}
+    symbols = []
+    relocs = []
     with open(path, "r", encoding="utf-8") as f:
         for raw in f:
             line = raw.strip()
@@ -68,9 +67,9 @@ def parse_dump(path):
                     "name": kv.get("name", ""),
                     "off": _to_int(kv.get("off", "0"), 16),
                     "size": _to_int(kv.get("size", "0"), 16),
+                    "addr": _to_int(kv.get("addr", "0"), 16),
                     "info": _to_int(kv.get("info", "0")),
                 }
-
             elif line.startswith("SYMBOL "):
                 kv = dict(tok.split("=", 1) for tok in line.split()[1:] if "=" in tok)
                 sval = kv.get("value") or kv.get("value_off") or kv.get("addr")
@@ -78,8 +77,10 @@ def parse_dump(path):
                     "name": kv.get("name", ""),
                     "value": _to_int(sval, 16),
                     "shndx": _to_int(kv.get("shndx", "-1")),
+                    "bind": _to_int(kv.get("bind", "0")),
+                    "type": _to_int(kv.get("type", "0")),
+                    "size": _to_int(kv.get("size", "0"), 16),
                 })
-
             elif line.startswith("RELOC "):
                 kv = dict(tok.split("=", 1) for tok in line.split()[1:] if "=" in tok)
                 try:
@@ -91,13 +92,23 @@ def parse_dump(path):
                     et = R_386_PC32
                 elif t.startswith("R_386_PLT32"):
                     et = R_386_PLT32
+                elif t.startswith("R_386_GOT32X"):
+                    et = R_386_GOT32X
+                elif t.startswith("R_386_RELATIVE"):
+                    et = R_386_RELATIVE
+                elif t.startswith("R_386_GOT32"):
+                    et = R_386_GOT32
+                elif t.startswith("R_386_GOTOFF"):
+                    et = R_386_GOTOFF
+                elif t.startswith("R_386_GOTPC"):
+                    et = R_386_GOTPC
                 elif t.startswith("R_386_32"):
                     et = R_386_32
                 else:
                     try:
                         et = _to_int(t)
                     except Exception:
-                        et = -1
+                        et = R_386_NONE
                 relocs.append({
                     "relsec": _to_int(kv.get("secidx", "0")),
                     "offset": _to_int(kv.get("offset", "0"), 16),
@@ -106,16 +117,14 @@ def parse_dump(path):
                     "symname": kv.get("symname", ""),
                 })
 
-    # Map relocation section -> target section via SECTION.info
     for r in relocs:
         r["target_secidx"] = sections.get(r["relsec"], {}).get("info", 0)
 
-    # DEBUG: Count relocations by type
-    got32x_in_dump = sum(1 for r in relocs if r["type"] == 43)
-    putchar_in_dump = sum(1 for r in relocs if r.get("symname") == "putchar")
-    print(f"[DUMP-DEBUG] Total relocs={len(relocs)}, GOT32X={got32x_in_dump}, putchar={putchar_in_dump}")
-
+    got32x = sum(1 for r in relocs if r["type"] == R_386_GOT32X)
+    putchar = sum(1 for r in relocs if r.get("symname") == "putchar")
+    print(f"[DUMP-DEBUG] Total relocs={len(relocs)}, GOT32X={got32x}, putchar={putchar}")
     return sections, symbols, relocs
+
 
 def read_bytes(path, off, size):
     if size == 0:
@@ -124,86 +133,33 @@ def read_bytes(path, off, size):
         f.seek(off)
         return f.read(size)
 
+
 class StrTab:
     def __init__(self):
         self.buf = bytearray(b"\x00")
         self.map = {}
-    def add(self, s: str) -> int:
+
+    def add(self, s):
         if s in self.map:
             return self.map[s]
         off = len(self.buf)
-        self.buf.extend(s.encode() + b"\x00")
+        self.buf.extend(s.encode("utf-8") + b"\x00")
         self.map[s] = off
         return off
-    def bytes(self) -> bytes:
+
+    def bytes(self):
         return bytes(self.buf)
 
-# -------------------------
-# Patch: sanitize VEX-NOPs at entry for i386
-# -------------------------
-def scrub_vex_nops_at_entry(text_buf, text_off, entry_off, verbose=False):
-    """
-    Replace VEX-encoded NOPs (C5??90 or C4????90) right at entry with 0x90 NOPs,
-    so i386 doesn’t decode them as LES and touch unmapped memory.
-    """
-    rel = entry_off - text_off
-    if rel < 0 or rel >= len(text_buf):
-        return False
 
-    i = 0
-    changed = False
-    limit = min(len(text_buf) - rel, 32)  # small window at entry
-    while i + 2 < limit:
-        b0 = text_buf[rel + i]
-        # 3-byte VEX: C5 ?? 90
-        if b0 == 0xC5 and (i + 2) < limit and text_buf[rel + i + 2] == 0x90:
-            text_buf[rel + i + 0] = 0x90
-            text_buf[rel + i + 1] = 0x90
-            text_buf[rel + i + 2] = 0x90
-            i += 3
-            changed = True
-            continue
-        # 4-byte VEX: C4 ?? ?? 90
-        if b0 == 0xC4 and (i + 3) < limit and text_buf[rel + i + 3] == 0x90:
-            text_buf[rel + i + 0] = 0x90
-            text_buf[rel + i + 1] = 0x90
-            text_buf[rel + i + 2] = 0x90
-            text_buf[rel + i + 3] = 0x90
-            i += 4
-            changed = True
-            continue
-        break
-    if verbose and changed:
-        print(f"[PATCH] Replaced VEX NOPs with classic NOPs at entry (offset 0x{entry_off:08x})")
-    return changed
+TEXT_PREFIXES = (".text", ".init", ".fini", ".plt", ".gnu.linkonce.t", ".stub")
+RO_PREFIXES = (".rodata", ".gnu.linkonce.r", ".eh_frame", ".gcc_except_table", ".note", ".comment", ".interp")
+DATA_PREFIXES = (".data", ".sdata", ".data.rel", ".data.rel.ro", ".data.rel.ro.local",
+                 ".got", ".got.plt", ".got2", ".bss.rel.ro", ".ctors", ".dtors", ".jcr",
+                 ".init_array", ".fini_array", ".tm_clone_table", ".dynamic", ".idata")
+BSS_PREFIXES = (".bss", ".sbss", ".tbss")
 
-# -------------------------
-# Section classification
-# -------------------------
-TEXT_PREFIXES = (
-    ".text", ".init", ".fini", ".plt",
-    ".gnu.linkonce.t", ".stub"
-)
-RO_PREFIXES = (
-    ".rodata", ".gnu.linkonce.r",
-    ".eh_frame", ".gcc_except_table",
-    ".note", ".comment", ".interp"  # harmless if present
-)
-DATA_PREFIXES = (
-    ".data", ".sdata",
-    ".data.rel", ".data.rel.ro", ".data.rel.ro.local",
-    ".got", ".got.plt", ".got2",
-    ".bss.rel.ro",  # some toolchains generate this
-    ".ctors", ".dtors", ".jcr",
-    ".init_array", ".fini_array",
-    ".tm_clone_table",
-    ".dynamic", ".idata"  # if ever present, treat as data
-)
-BSS_PREFIXES = (
-    ".bss", ".sbss", ".tbss"
-)
 
-def classify_section(name: str):
+def classify_section(name):
     for p in TEXT_PREFIXES:
         if name == p or name.startswith(p + "."):
             return "text"
@@ -216,33 +172,51 @@ def classify_section(name: str):
     for p in BSS_PREFIXES:
         if name == p or name.startswith(p + "."):
             return "bss"
-    # default: ignore (debug, symtabs, etc.)
     return None
 
-# -------------------------
-# Core converter
-# -------------------------
+
+def scrub_vex_nops_at_entry(text_buf, text_off, entry_off, verbose=False):
+    rel = entry_off - text_off
+    if rel < 0 or rel >= len(text_buf):
+        return
+    i = 0
+    limit = min(len(text_buf) - rel, 32)
+    changed = False
+    while i + 2 < limit:
+        b0 = text_buf[rel + i]
+        if b0 == 0xC5 and (i + 2) < limit and text_buf[rel + i + 2] == 0x90:
+            text_buf[rel + i:rel + i + 3] = b"\x90\x90\x90"
+            i += 3
+            changed = True
+            continue
+        if b0 == 0xC4 and (i + 3) < limit and text_buf[rel + i + 3] == 0x90:
+            text_buf[rel + i:rel + i + 4] = b"\x90\x90\x90\x90"
+            i += 4
+            changed = True
+            continue
+        break
+    if changed and verbose:
+        print(f"[PATCH] Replaced VEX NOPs with classic NOPs at entry (offset 0x{entry_off:08x})")
+
+
 def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbose=False):
     sections, symbols, relocs = parse_dump(dumpfile)
 
-    # Sort sections in file order for stable packing
     sec_list = sorted(sections.values(), key=lambda s: s["off"])
-
-    # Build combined buffers per category and map each secidx -> group offset
     text_buf = bytearray()
-    ro_buf   = bytearray()
-    dat_buf  = bytearray()
+    ro_buf = bytearray()
+    dat_buf = bytearray()
     bss_total = 0
-
-    # secidx -> {"group": g, "rel": offset_inside_group, "size": sz}
     secinfo = {}
 
-    # First pass: copy bytes & record group-local offsets
     for s in sec_list:
-        name, off, size, idx = s["name"], s["off"], s["size"], s["idx"]
+        name = s["name"]
         g = classify_section(name)
         if g is None:
             continue
+        off = s["off"]
+        size = s["size"]
+        idx = s["idx"]
         if g == "text":
             rel = len(text_buf)
             text_buf.extend(read_bytes(elffile, off, size))
@@ -256,16 +230,14 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
             dat_buf.extend(read_bytes(elffile, off, size))
             secinfo[idx] = {"group": "data", "rel": rel, "size": size}
         elif g == "bss":
-            # NOBITS -> bara storlek, packas efter .data i minnet
             secinfo[idx] = {"group": "bss", "rel": bss_total, "size": size}
             bss_total += size
 
-    # Layout i DEX
     text_off = 0x100
-    ro_off   = align_up(text_off + len(text_buf), FILE_ALIGN)
-    data_off = align_up(ro_off   + len(ro_buf),   FILE_ALIGN)
+    ro_off = align_up(text_off + len(text_buf), FILE_ALIGN)
+    data_off = align_up(ro_off + len(ro_buf), FILE_ALIGN)
+    bss_off = data_off + len(dat_buf)
 
-    # Hjälpare: kartlägg (secidx) -> (img_base, buf_ref, buf_offset)
     def base_for_secidx(secidx):
         inf = secinfo.get(secidx)
         if not inf:
@@ -278,19 +250,17 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
         if g == "data":
             return data_off + rel, dat_buf, rel
         if g == "bss":
-            # BSS ligger direkt efter data i minnet
-            return data_off + len(dat_buf) + rel, None, 0
+            return bss_off + rel, None, 0
         return None, None, 0
 
     strtab = StrTab()
     if default_exl:
         strtab.add(default_exl)
 
-    # Imports
-    imports = []        # (exl_off, sym_off, type, 0)
+    imports = []
     import_keys = set()
 
-    def ensure_import(symname: str, is_func=True):
+    def ensure_import(symname, is_func=True):
         exlname = default_exl or "diffc.exl"
         key = (exlname, symname, 0 if is_func else 1)
         if key in import_keys:
@@ -306,12 +276,13 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
         import_keys.add(key)
         return len(imports) - 1
 
-    # Pre-pass: undefined symbols faktiskt använda i reloc-tabellen
     used_undef = set()
     for r in relocs:
         si = r["symidx"]
-        if 0 <= si < len(symbols) and symbols[si]["shndx"] == 0 and symbols[si]["name"]:
-            used_undef.add(symbols[si]["name"])
+        if 0 <= si < len(symbols):
+            sym = symbols[si]
+            if sym["shndx"] == 0 and sym["name"]:
+                used_undef.add(sym["name"])
     for name in sorted(used_undef):
         ensure_import(name, True)
 
@@ -319,688 +290,261 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
         print(f"[FATAL] too many imports: {len(imports)} > {MAX_IMP}")
         sys.exit(1)
 
-    # DEX relocation table: (img_off, sym_or_idx, dex_type, 0)
+    dex_symbols = []
+    exported = set()
+
+    def add_symbol(name, value_off, is_func):
+        if not name or name in exported:
+            return
+        name_off = strtab.add(name)
+        dex_symbols.append((name_off, value_off & 0xFFFFFFFF, 0 if is_func else 1))
+        exported.add(name)
+
+    for sym in symbols:
+        name = sym.get("name", "")
+        shndx = sym.get("shndx", -1)
+        if not name or shndx not in secinfo:
+            continue
+        bind = sym.get("bind", STB_LOCAL)
+        if bind not in (STB_GLOBAL, STB_WEAK):
+            continue
+        stype = sym.get("type", STT_NOTYPE)
+        if stype in (STT_SECTION, STT_FILE, STT_TLS):
+            continue
+        base, _, _ = base_for_secidx(shndx)
+        if base is None:
+            continue
+        sec_group = secinfo[shndx]["group"]
+        is_func = (stype == STT_FUNC) or (stype == STT_NOTYPE and sec_group == "text")
+        value_off = (base + sym["value"]) & 0xFFFFFFFF
+        add_symbol(name, value_off, is_func)
+
     reloc_table = []
-
-    # DEBUG: Count GOT32X relocations
-    got32x_count = sum(1 for r in relocs if r["type"] == R_386_GOT32X)
-    if verbose and got32x_count > 0:
-        print(f"[DEBUG] Found {got32x_count} GOT32X relocations in input")
-
-    # Konvertera ELF relocs -> DEX relocs / patch immediates
+    processed_offsets = {}
+    skipped = []
     got32x_processed = 0
     pc32_processed = 0
-    skipped_relocs = []
 
-    putchar_seen = 0
     for r in relocs:
-        # DEBUG: Track specific problematic relocation
-        if r['offset'] == 0x29EA:
-            print(f"[DEBUG-0x29EA] Found D_QuitNetGame reloc: type={r['type']} offset=0x{r['offset']:x} target_secidx={r.get('target_secidx', 'N/A')} symname={r.get('symname', '')}")
-            print(f"[DEBUG-0x29EA] relsec={r.get('relsec', 'N/A')} symidx={r.get('symidx', 'N/A')}")
-
-        # DEBUG: Track putchar relocations
-        if r.get('symname') == 'putchar':
-            putchar_seen += 1
-            if putchar_seen <= 3:
-                print(f"[PUTCHAR-DEBUG #{putchar_seen}] Found putchar reloc: type={r['type']} offset=0x{r['offset']:x} target_secidx={r.get('target_secidx', 'N/A')}")
-
-        if r["type"] == R_386_GOT32X:
-            got32x_processed += 1
-            if verbose and (got32x_processed <= 5 or r.get('symname') in ('printf', 'doomgeneric_Create')):
-                print(f"[DEBUG] Processing GOT32X reloc #{got32x_processed}: offset=0x{r['offset']:x}, target_secidx={r['target_secidx']}, symname={r.get('symname', '')}")
-            
-            # SAFETY CHECK: Skip GOT32X relocations at problematic offsets
-            # The relocation at offset 0x5656 is causing crashes
-            if r['offset'] == 0x5656:
-                print(f"[SAFETY] Skipping problematic GOT32X relocation at offset 0x{r['offset']:x}")
-                skipped_relocs.append((r["type"], r.get('symname', ''), r['offset'], "problematic offset causing crashes"))
-                continue
-
-        if r["type"] in (R_386_PC32, R_386_PLT32):
-            pc32_processed += 1
-            if verbose and r.get('symname') == 'W_CheckNumForName':
-                print(f"[DEBUG-PC32] Processing PC32 reloc to W_CheckNumForName: offset=0x{r['offset']:x}, target_secidx={r['target_secidx']}, symidx={r['symidx']}")
-
         tgt_base, tgt_buf, buf_offset = base_for_secidx(r["target_secidx"])
         if tgt_base is None or tgt_buf is None:
-            # Vi kan få relocs som riktar mot BSS (target i .bss är ogiltigt),
-            # men själva relocations-platsen (site) måste alltid ligga i text/ro/data.
-            # Om tgt_buf är None betyder det att vi inte kan skriva tillbaka där -> hoppa.
-            skip_reason = f"target secidx={r['target_secidx']} unsupported (no buffer)"
-            skipped_relocs.append((r["type"], r.get('symname', ''), r['offset'], skip_reason))
-            if r["type"] == R_386_GOT32X:
-                print(f"[SKIP GOT32X] reloc {skip_reason}, symname={r.get('symname', '')}, offset=0x{r['offset']:x}")
-            elif r["type"] == R_386_PC32:
-                print(f"[SKIP PC32] reloc {skip_reason}, symname={r.get('symname', '')}, offset=0x{r['offset']:x}")
-            elif verbose:
-                print(f"[SKIP] reloc {skip_reason}")
+            skipped.append((r["type"], r.get("symname", ""), r["offset"], "target unsupported"))
             continue
 
+        # raw_off is the offset within the ELF section
         raw_off = r["offset"]
+
         if raw_off + 4 > len(tgt_buf):
-            skip_reason = f"offset OOR: 0x{raw_off:x} + 4 > {len(tgt_buf)}"
-            skipped_relocs.append((r["type"], r.get('symname', ''), r['offset'], skip_reason))
-            if verbose:
-                print(f"[SKIP] reloc {skip_reason}")
+            skipped.append((r["type"], r.get("symname", ""), r["offset"], "offset OOR"))
             continue
 
+        # img_off is the file offset in the DEX where this relocation applies
+        # tgt_base = (text_off/ro_off/data_off) + buf_offset (where section starts in DEX)
+        # raw_off = offset within the ELF section
+        # So img_off = tgt_base + raw_off
         img_off = tgt_base + raw_off
+
+        if img_off in processed_offsets:
+            prev_type, prev_name = processed_offsets[img_off]
+            skipped.append((r["type"], r.get("symname", ""), r["offset"], f"dup ({prev_type}:{prev_name})"))
+            continue
+        processed_offsets[img_off] = (r["type"], r.get("symname", ""))
+
         etype = r["type"]
         si = r["symidx"]
         sym = symbols[si] if 0 <= si < len(symbols) else None
-        name = (r["symname"] or (sym["name"] if sym else ""))
-        sect_name = sections.get(r["target_secidx"], {}).get("name", "")
+        name = r.get("symname") or (sym.get("name") if sym else "")
+
+        # Calculate buffer position for accessing bytes
+        # buf_pos = where in the merged buffer (text_buf/ro_buf/dat_buf) we need to read/write
+        buf_pos = buf_offset + raw_off
 
         if etype in (R_386_PC32, R_386_PLT32):
-            # Local symbol -> lös disp direkt
-            if sym and sym["shndx"] != 0:
-                # For PC32 relocations, the addend in the ELF file is relative to ELF layout
-                # We need to recalculate the displacement for DEX layout
-                # Do NOT use the embedded addend A from the ELF file
+            pc32_processed += 1
+            if sym and sym.get("shndx", 0) != 0:
                 S_base, _, _ = base_for_secidx(sym["shndx"])
                 if S_base is None:
-                    skip_reason = f"PC32 to unknown shndx={sym['shndx']}"
-                    skipped_relocs.append((r["type"], name, r['offset'], skip_reason))
-                    if verbose:
-                        print(f"[SKIP] {skip_reason}, symname={name}")
+                    skipped.append((etype, name, r["offset"], "unknown shndx"))
                     continue
-                S = (S_base + sym["value"]) & 0xffffffff
-                P = (img_off + 4) & 0xffffffff
-                # Calculate fresh displacement without using ELF's embedded addend
-                disp = (S - P) & 0xffffffff
-                struct.pack_into("<I", tgt_buf, raw_off, disp)
-                if verbose and name == 'W_CheckNumForName':
-                    print(f"[PC32 local W_CheckNumForName] sect={sect_name} site=0x{img_off:08x} "
-                          f"S=0x{S:08x} P=0x{P:08x} -> disp=0x{disp:08x}")
-                elif verbose:
-                    print(f"[PC32 local] sect={sect_name} site=0x{img_off:08x} "
-                          f"S=0x{S:08x} P=0x{P:08x} -> disp=0x{disp:08x}")
+                S = (S_base + sym["value"]) & 0xFFFFFFFF
+                P = (img_off + 4) & 0xFFFFFFFF
+                disp = (S - P) & 0xFFFFFFFF
+                struct.pack_into("<I", tgt_buf, buf_pos, disp)
             else:
-                # External symbol -> DEX_PC32 + import
                 idx = ensure_import(name or f"@{si}", True)
                 reloc_table.append((img_off, idx, DEX_PC32, 0))
-                if verbose:
-                    print(f"[PC32 ext] site_off=0x{img_off:08x} target='{name}' -> DEX_PC32 (idx={idx})")
-            continue
-
-        if etype in (R_386_32, R_386_GOT32X):
-            A = struct.unpack_from("<I", tgt_buf, raw_off)[0]
-            if sym and sym["shndx"] != 0:
-                # Local symbol
-                # Check if GOT32X with indirect call instruction
-                if etype == R_386_GOT32X:
-                    buf_pos = buf_offset + raw_off
-                    is_indirect = False
-                    if buf_pos >= 2:
-                        opcode = tgt_buf[buf_pos-2:buf_pos]
-                        if opcode == b'\xff\x15' or opcode == b'\xff\x25':
-                            is_indirect = True
-
-                    if is_indirect:
-                        # Transform indirect call to direct call for local symbol
-                        src_base, _, _ = base_for_secidx(sym["shndx"])
-                        if src_base is None:
-                            if verbose:
-                                print(f"[SKIP] GOT32X local to unknown shndx={sym['shndx']}")
-                            continue
-
-                        # Transform instruction but keep same length (6 bytes)
-                        # ff 15 XX XX XX XX (call [mem]) -> e8 XX XX XX XX 90 (call rel32; nop)
-                        # ff 25 XX XX XX XX (jmp [mem])  -> e9 XX XX XX XX 90 (jmp rel32; nop)
-                        if tgt_buf[buf_pos-1] == 0x15:  # call
-                            tgt_buf[buf_pos-2] = 0xe8
-                        elif tgt_buf[buf_pos-1] == 0x25:  # jmp
-                            tgt_buf[buf_pos-2] = 0xe9
-
-                        new_buf_pos = buf_pos - 1
-                        new_img_off = img_off - 1
-
-                        # Calculate PC32 displacement: S - P
-                        # For GOT32X transformed to direct call, we don't use the addend
-                        # P is at opcode_start + 5, i.e. new_img_off + 4
-                        S = (src_base + sym["value"]) & 0xffffffff
-                        P = (new_img_off + 4) & 0xffffffff
-                        disp = (S - P) & 0xffffffff
-                        struct.pack_into("<I", tgt_buf, new_buf_pos, disp)
-
-                        # Add NOP to keep instruction at 6 bytes
-                        if new_buf_pos + 4 < len(tgt_buf):
-                            tgt_buf[new_buf_pos + 4] = 0x90
-
-                        if verbose:
-                            print(f"[GOT32X->CALL local] sect={sect_name} site_off=0x{new_img_off:08x} "
-                                  f"S=0x{S:08x} P=0x{P:08x} disp=0x{disp:08x} -> {name}")
-                        continue
-
-                # Standard local absolute relocation
-                src_base, _, _ = base_for_secidx(sym["shndx"])
-                if src_base is None:
-                    if verbose:
-                        print(f"[SKIP] ABS32 rel to unknown shndx={sym['shndx']}")
-                    continue
-                init = (src_base + sym["value"] + A) & 0xffffffff
-                struct.pack_into("<I", tgt_buf, raw_off, init)
-                
-                # Check if this looks like an absolute address that should be relocated
-                # Look for addresses in the 0x10000-0xFFFFFF range that might be absolute
-                symbol_value = sym["value"] + A
-                if symbol_value < 0x10000:
-                    if verbose:
-                        print(f"[SKIP SMALL] sect={sect_name} site_off=0x{img_off:08x} "
-                              f"A=0x{A:08x} S=0x{sym['value']:08x} -> value=0x{symbol_value:08x} < 0x10000, NO RELOC")
-                    # Keep the absolute value as-is, no relocation needed
-                elif 0x10000 <= symbol_value < 0x400000:  # Check for absolute addresses that need relocation
-                    # This looks like an absolute address that should be relocated
-                    reloc_table.append((img_off, 0, DEX_REL, 0))
-                    if verbose:
-                        print(f"[ABS32 rel] sect={sect_name} site_off=0x{img_off:08x} "
-                              f"A=0x{A:08x} S=0x{sym['value']:08x} -> old=0x{init:08x} DEX_REL (ABSOLUTE ADDR)")
-                else:
-                    reloc_table.append((img_off, 0, DEX_REL, 0))
-                    if verbose:
-                        print(f"[ABS32 rel] sect={sect_name} site_off=0x{img_off:08x} "
-                              f"A=0x{A:08x} S=0x{sym['value']:08x} -> old=0x{init:08x} DEX_REL")
-            elif sym and sym["shndx"] == 0:
-                # External symbol
-                if etype == R_386_GOT32X:
-                    # GOT32X for external symbols: Check if it's an indirect call/jmp
-                    # Look at the instruction bytes before the relocation site
-                    # ff 15 = call [mem32], ff 25 = jmp [mem32]
-                    is_indirect = False
-                    buf_pos = buf_offset + raw_off
-                    if buf_pos >= 2:
-                        opcode = tgt_buf[buf_pos-2:buf_pos]
-                        if verbose and (name == 'printf' or img_off == 0x3015f):
-                            print(f"[DEBUG GOT32X] sect={sect_name} raw_off=0x{raw_off:x} buf_offset=0x{buf_offset:x} buf_pos=0x{buf_pos:x} img_off=0x{img_off:x} opcode={opcode.hex() if opcode else 'None'}")
-                        if name == 'putchar' or name == 'printf':
-                            print(f"[{name.upper()}-GOT32X] sect={sect_name} buf_pos=0x{buf_pos:x} img_off=0x{img_off:x} opcode={opcode.hex() if len(opcode)==2 else 'None'} raw_off=0x{raw_off:x}")
-                        if opcode == b'\xff\x15' or opcode == b'\xff\x25':
-                            is_indirect = True
-
-                    if is_indirect:
-                        if name == 'putchar':
-                            print(f"[PUTCHAR-CONVERT] Converting to direct call at img_off=0x{img_off:x}")
-
-                        # Transform indirect call/jmp to direct call/jmp but keep same length (6 bytes)
-                        # ff 15 XX XX XX XX (call [mem]) -> e8 XX XX XX XX 90 (call rel32; nop)
-                        # ff 25 XX XX XX XX (jmp [mem])  -> e9 XX XX XX XX 90 (jmp rel32; nop)
-                        if tgt_buf[buf_pos-1] == 0x15:  # call
-                            tgt_buf[buf_pos-2] = 0xe8
-                        elif tgt_buf[buf_pos-1] == 0x25:  # jmp
-                            tgt_buf[buf_pos-2] = 0xe9
-
-                        new_buf_pos = buf_pos - 1
-                        new_img_off = img_off - 1
-
-                        # Now treat as PC32 relocation (relative offset)
-                        # The displacement now starts one byte earlier
-                        idx = ensure_import(name or f"@{si}", True)
-                        if name == 'putchar':
-                            print(f"[PUTCHAR-IMPORT] Created import idx={idx}, adding PC32 reloc at off=0x{new_img_off:x}")
-                        reloc_table.append((new_img_off, idx, DEX_PC32, 0))
-                        # Clear the immediate (will be filled by PC32 relocation)
-                        struct.pack_into("<I", tgt_buf, new_buf_pos, 0)
-
-                        # Add NOP to keep instruction at 6 bytes
-                        if new_buf_pos + 4 < len(tgt_buf):
-                            tgt_buf[new_buf_pos + 4] = 0x90
-
-                        if verbose:
-                            print(f"[GOT32X->PC32] sect={sect_name} site_off=0x{new_img_off:08x} "
-                                  f"sym='{name}' -> transformed indirect to direct call (idx={idx})")
-                    else:
-                        # Not an indirect call - treat as absolute reference
-                        struct.pack_into("<I", tgt_buf, raw_off, 0)
-                        idx = ensure_import(name or f"@{si}", True)
-                        reloc_table.append((img_off, idx, DEX_ABS32, 0))
-                        if verbose:
-                            print(f"[GOT32X ext] sect={sect_name} site_off=0x{img_off:08x} "
-                                  f"A=0x{A:08x} sym='{name}' -> DEX_ABS32 (idx={idx})")
-                else:
-                    # R_386_32 - direct absolute reference
-                    struct.pack_into("<I", tgt_buf, raw_off, 0)
-                    is_func = False
-                    idx = ensure_import(name or f"@{si}", is_func)
-                    reloc_table.append((img_off, idx, DEX_ABS32, 0))
-                    if verbose:
-                        print(f"[ABS32 ext] sect={sect_name} site_off=0x{img_off:08x} "
-                              f"A=0x{A:08x} sym='{name}' -> DEX_ABS32 (idx={idx})")
-            else:
-                # Odokumenterat/immediater utan symbol – anta data_off + A
-                init = (data_off + A) & 0xffffffff
-                struct.pack_into("<I", tgt_buf, raw_off, init)
-                reloc_table.append((img_off, 0, DEX_REL, 0))
-                if verbose:
-                    print(f"[ABS32 no-sym] sect={sect_name} site_off=0x{img_off:08x} "
-                          f"A=0x{A:08x} -> old=data_off+A=0x{init:08x} DEX_REL")
             continue
 
         if etype == R_386_RELATIVE:
-            # Base-relative relocation - add image base to existing value
-            A = struct.unpack_from("<I", tgt_buf, raw_off)[0]
-            # Don't modify the value, just mark it for base relocation
             reloc_table.append((img_off, 0, DEX_REL, 0))
-            if verbose:
-                print(f"[RELATIVE] sect={sect_name} site_off=0x{img_off:08x} "
-                      f"A=0x{A:08x} -> DEX_REL")
             continue
 
         if etype in (R_386_GOT32, R_386_GOTOFF, R_386_GOTPC):
-            # These are GOT-relative relocations
-            # For non-PIC static executables, need to convert from indirect to direct reference
-            A = struct.unpack_from("<I", tgt_buf, raw_off)[0]
-            if sym and sym["shndx"] != 0:
-                # Local symbol - convert from indirect to direct reference
-                # Check for "ff 35 XX XX XX XX" (push [mem32]) or "ff 15 XX XX XX XX" (call [mem32])
-                if raw_off >= 2:
-                    opcode = tgt_buf[raw_off-2:raw_off]
-                    if opcode == b'\xff\x35':
-                        # Convert push [mem] to push imm: "68 XX XX XX XX 90"
-                        tgt_buf[raw_off-2] = 0x68  # push imm32
-                        src_base, _, _ = base_for_secidx(sym["shndx"])
-                        if src_base is None:
-                            if verbose:
-                                print(f"[SKIP] GOT reloc to unknown shndx={sym['shndx']}")
-                            continue
-                        init = (src_base + sym["value"] + A) & 0xffffffff
-                        struct.pack_into("<I", tgt_buf, raw_off-1, init)
-                        if raw_off + 3 < len(tgt_buf):
-                            tgt_buf[raw_off+3] = 0x90
-                        new_img_off = img_off - 1
-                        reloc_table.append((new_img_off, 0, DEX_REL, 0))
-                        if verbose:
-                            print(f"[GOT32->PUSH] sect={sect_name} site_off=0x{new_img_off:08x} "
-                                  f"S=0x{sym['value']:08x} A=0x{A:08x} -> old=0x{init:08x} DEX_REL")
-                        continue
-                    elif opcode == b'\xff\x15':
-                        # Convert call [mem] to call rel32: "e8 XX XX XX XX 90"
-                        tgt_buf[raw_off-2] = 0xe8  # call rel32
-                        src_base, _, _ = base_for_secidx(sym["shndx"])
-                        if src_base is None:
-                            if verbose:
-                                print(f"[SKIP] GOT reloc to unknown shndx={sym['shndx']}")
-                            continue
-                        target_addr = (src_base + sym["value"] + A) & 0xffffffff
-                        # For call rel32, displacement = target - (EIP after instruction)
-                        # EIP after instruction = (image_base + img_off + 4)
-                        # But we're converting from 6-byte to 5-byte + NOP, so EIP = image_base + img_off + 3
-                        # Actually, pack as PC32-style: target - next_instr
-                        # We'll use DEX_PC32 relocation type
-                        struct.pack_into("<I", tgt_buf, raw_off-1, target_addr)
-                        if raw_off + 3 < len(tgt_buf):
-                            tgt_buf[raw_off+3] = 0x90
-                        new_img_off = img_off - 1
-                        reloc_table.append((new_img_off, 0, DEX_PC32, 0))
-                        if verbose:
-                            print(f"[GOT32->CALL] sect={sect_name} site_off=0x{new_img_off:08x} "
-                                  f"S=0x{sym['value']:08x} A=0x{A:08x} target=0x{target_addr:08x} DEX_PC32")
-                        continue
+            etype = R_386_GOT32X
 
-                # Fallback: treat as normal absolute relocation
-                src_base, _, _ = base_for_secidx(sym["shndx"])
-                if src_base is None:
-                    if verbose:
-                        print(f"[SKIP] GOT reloc to unknown shndx={sym['shndx']}")
-                    continue
-                init = (src_base + sym["value"] + A) & 0xffffffff
-                struct.pack_into("<I", tgt_buf, raw_off, init)
-                reloc_table.append((img_off, 0, DEX_REL, 0))
-                if verbose:
-                    print(f"[GOT32 local fallback] sect={sect_name} site_off=0x{img_off:08x} -> DEX_REL")
-            elif sym and sym["shndx"] == 0:
-                # External symbol - GOT relocations are typically for functions
-                struct.pack_into("<I", tgt_buf, raw_off, 0)
-                idx = ensure_import(name or f"@{si}", True)
-                reloc_table.append((img_off, idx, DEX_ABS32, 0))
+        if etype not in (R_386_32, R_386_GOT32X):
+            skipped.append((etype, name, r["offset"], "unhandled"))
             continue
 
-        if verbose:
-            print(f"[WARN] Unknown ELF reloc type {etype} at off=0x{raw_off:08x}")
+        if sym and sym.get("shndx", 0) != 0:
+            if etype == R_386_GOT32X:
+                patched = False
+                if buf_pos >= 2:
+                    opcode = tgt_buf[buf_pos-2:buf_pos]
+                    if opcode in (b"\xff\x15", b"\xff\x25"):
+                        src_base, _, _ = base_for_secidx(sym["shndx"])
+                        if src_base is None:
+                            skipped.append((etype, name, r["offset"], "unknown shndx"))
+                            continue
+                        target = (src_base + sym["value"]) & 0xFFFFFFFF
+                        tgt_buf[buf_pos-2] = 0xe8 if opcode == b"\xff\x15" else 0xe9
+                        new_img_off = img_off - 1
+                        P = (new_img_off + 4) & 0xFFFFFFFF
+                        disp = (target - P) & 0xFFFFFFFF
+                        struct.pack_into("<I", tgt_buf, buf_pos - 1, disp)
+                        if buf_pos + 3 < len(tgt_buf):
+                            tgt_buf[buf_pos + 3] = 0x90
+                        patched = True
+                        got32x_processed += 1
+                        continue
+                    else:
+                        op = tgt_buf[buf_pos-2]
+                        modrm = tgt_buf[buf_pos-1]
+                        if op == 0x8B and (modrm & 0xC7) == 0x05:
+                            reg = (modrm >> 3) & 0x7
+                            src_base, _, _ = base_for_secidx(sym["shndx"])
+                            if src_base is None:
+                                skipped.append((etype, name, r["offset"], "unknown shndx"))
+                                continue
+                            if buf_pos + 3 >= len(tgt_buf):
+                                skipped.append((etype, name, r["offset"], "short mov"))
+                                continue
+                            init = (src_base + sym["value"]) & 0xFFFFFFFF
+                            new_op = 0xB8 + reg
+                            struct.pack_into("<B", tgt_buf, buf_pos-2, new_op)
+                            struct.pack_into("<I", tgt_buf, buf_pos-1, init)
+                            if buf_pos + 3 < len(tgt_buf):
+                                tgt_buf[buf_pos+3] = 0x90
+                            new_img_off = img_off - 1
+                            reloc_table.append((new_img_off, 0, DEX_REL, 0))
+                            patched = True
+                            got32x_processed += 1
+                            continue
 
-    # Print relocation processing summary
-    print(f"\n=== Relocation Processing Summary ===")
-    print(f"Total relocations in ELF: {len(relocs)}")
+            src_base, _, _ = base_for_secidx(sym["shndx"])
+            if src_base is None:
+                skipped.append((etype, name, r["offset"], "unknown shndx"))
+                continue
+            if etype == R_386_GOT32X:
+                init = (src_base + sym["value"]) & 0xFFFFFFFF
+            else:
+                A = struct.unpack_from("<I", tgt_buf, buf_pos)[0]
+                init = (src_base + sym["value"] + A) & 0xFFFFFFFF
+            struct.pack_into("<I", tgt_buf, buf_pos, init & 0xFFFFFFFF)
+            reloc_table.append((img_off, 0, DEX_REL, 0))
+            if etype == R_386_GOT32X:
+                got32x_processed += 1
+            continue
+
+        # Symbol undefined or none.
+        if etype == R_386_GOT32X:
+            opcode = tgt_buf[buf_pos-2:buf_pos] if buf_pos >= 2 else b""
+            idx = ensure_import(name or f"@{si}", True)
+            if opcode in (b"\xff\x15", b"\xff\x25"):
+                tgt_buf[buf_pos-2] = 0xe8 if opcode == b"\xff\x15" else 0xe9
+                struct.pack_into("<I", tgt_buf, buf_pos - 1, 0)
+                if buf_pos + 3 < len(tgt_buf):
+                    tgt_buf[buf_pos + 3] = 0x90
+                reloc_table.append((img_off - 1, idx, DEX_PC32, 0))
+            else:
+                struct.pack_into("<I", tgt_buf, buf_pos, 0)
+                reloc_table.append((img_off, idx, DEX_ABS32, 0))
+            got32x_processed += 1
+            continue
+
+        # Plain ABS32 without symbol -> assume data reference.
+        A = struct.unpack_from("<I", tgt_buf, buf_pos)[0]
+        init = (data_off + A) & 0xFFFFFFFF
+        struct.pack_into("<I", tgt_buf, buf_pos, init)
+        reloc_table.append((img_off, 0, DEX_REL, 0))
+
     print(f"PC32/PLT32 relocations processed: {pc32_processed}")
     print(f"GOT32X relocations processed: {got32x_processed}")
-    print(f"DEX relocations generated: {len(reloc_table)}")
-    print(f"Relocations skipped: {len(skipped_relocs)}")
-    if len(skipped_relocs) > 0:
-        print(f"\nSkipped relocation details:")
-        skip_by_reason = {}
-        for rtype, symname, offset, reason in skipped_relocs:
-            key = reason
-            if key not in skip_by_reason:
-                skip_by_reason[key] = []
-            skip_by_reason[key].append((rtype, symname, offset))
-        for reason, items in skip_by_reason.items():
-            print(f"  {reason}: {len(items)} relocations")
-            if verbose:
-                for rtype, symname, offset in items[:5]:
-                    print(f"    type={rtype} symname={symname} offset=0x{offset:x}")
-                if len(items) > 5:
-                    print(f"    ... and {len(items) - 5} more")
+    if skipped:
+        print(f"Relocations skipped: {len(skipped)}")
+        for t, name, off, reason in skipped[:20]:
+            print(f"  type={t} sym='{name}' off=0x{off:x} -> {reason}")
 
-    # -------------------------
-    # Entry: use DEX bases (not ELF offsets)
-    # -------------------------
+    entry_off = text_off
+
     def entry_for_symbol(sym):
         base, _, _ = base_for_secidx(sym["shndx"])
-        return None if base is None else (base + (sym["value"] or 0))
+        if base is None:
+            return None
+        return base + sym["value"]
 
-    entry_off = text_off  # fallback
     picked = None
-
     if forced_entry:
-        cands = [s for s in symbols if s["name"] == forced_entry and s["shndx"] in sections]
-        if cands:
-            eo = entry_for_symbol(cands[0])
+        matches = [s for s in symbols if s["name"] == forced_entry and s["shndx"] in secinfo]
+        if matches:
+            eo = entry_for_symbol(matches[0])
             if eo is not None:
                 entry_off = eo
                 picked = forced_entry
-
     if picked is None:
         for cand in ("main", "_dex_entry", "_start"):
-            cands = [s for s in symbols if s["name"] == cand and s["shndx"] in sections]
-            if cands:
-                eo = entry_for_symbol(cands[0])
+            matches = [s for s in symbols if s["name"] == cand and s["shndx"] in secinfo]
+            if matches:
+                eo = entry_for_symbol(matches[0])
                 if eo is not None:
                     entry_off = eo
                     picked = cand
                     break
-
     if verbose:
         print(f"[ENTRY] picked={picked or 'fallback'} entry_off=0x{entry_off:08x}")
 
-    # Patch away VEX-NOPs at entry (for i386)
     scrub_vex_nops_at_entry(text_buf, text_off, entry_off, verbose)
 
-    # Final bytes
-    text = bytes(text_buf)
-    ro   = bytes(ro_buf)
-    dat  = bytes(dat_buf)
+    text = bytearray(text_buf)
+    ro = bytearray(ro_buf)
+    dat = bytearray(dat_buf)
     bss_size = bss_total
 
-    # --- EXTRA PASS: sweep .rodata/.data för råa "filoff"-pekare utan reloc ---
-    def _dex_end_span():
-        max_end = entry_off + 16
-        max_end = max(max_end, text_off + len(text))
-        max_end = max(max_end, ro_off   + len(ro))
-        max_end = max(max_end, data_off + len(dat))
-        return align_up(max_end, FILE_ALIGN)
-
-    def _in_file_sections(file_off):
-        return ((text_off <= file_off < text_off + len(text)) or
-                (ro_off   <= file_off < ro_off   + len(ro)) or
-                (data_off <= file_off < data_off + len(dat)))
-
-    existing_sites = set([img_off for (img_off, _, _, _) in reloc_table])
-    added_ptrs = 0
-    end_span = _dex_end_span()
-    mins = [x for x in [text_off if len(text) else None,
-                        ro_off   if len(ro)   else None,
-                        data_off if len(dat)  else None] if x is not None]
-    min_ptr = min(mins) if mins else 0
-
-    for (sec_name, base_off, buf) in ((".rodata*", ro_off, ro), (".data*", data_off, dat)):
-        for off in range(0, max(0, len(buf) - 3), 4):
-            img_off = base_off + off
-            if img_off in existing_sites:
-                continue
-            word = struct.unpack_from("<I", buf, off)[0]
-            
-            # SAFETY CHECK 1: Filter out x86 instruction patterns
-            # Common x86 instruction opcodes that shouldn't be treated as pointers
-            x86_opcodes = [
-                0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,  # PUSH reg
-                0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F,  # POP reg
-                0x8B, 0x89,  # MOV r/m, r / MOV r, r/m
-                0x83, 0x81,  # ADD/OR/ADC/SBB/AND/SUB/XOR/CMP imm
-                0x85, 0x84,  # TEST r/m, r / CMP r/m, r
-                0x31, 0x33,  # XOR r/m, r / XOR r, r/m
-                0x29, 0x2B,  # SUB r/m, r / SUB r, r/m
-            ]
-            
-            # Check if low byte matches common x86 opcodes
-            if (word & 0xFF) in x86_opcodes:
-                continue
-            
-            # SAFETY CHECK 2: Filter out common data constants
-            # Values that are clearly data constants, not pointers
-            data_constants = [
-                0x00000000,  # NULL
-                0x00000001,  # TRUE/1
-                0xFFFFFFFF,  # -1/TRUE
-                0x56565656,  # Repeated pattern (like our 0x5656 case)
-                0x41414141,  # 'AAAA' pattern
-                0x00005656,  # Our specific problematic value
-            ]
-            
-            # Check for repeated byte patterns (0x56565656, 0x41414141, etc.)
-            if (word & 0xFF) == ((word >> 8) & 0xFF) == ((word >> 16) & 0xFF) == ((word >> 24) & 0xFF):
-                continue
-            
-            # Check specific problematic constants
-            if word in data_constants:
-                continue
-            
-            # SAFETY CHECK 3: Filter out values that are too small to be valid pointers
-            # In our DEX address space (0x40000000+), values < 0x1000 are clearly not pointers
-            # Also filter out values that look like small offsets or indices
-            if word < 0x1000:
-                continue
-            
-            # SAFETY CHECK 4: Be much more restrictive about what constitutes a valid pointer
-            # The problem is that we're finding small file offsets and treating them as pointers
-            # When the DEX loader adds 0x40000000 to these small offsets, they become invalid
-            # Let's only allow values that are reasonably large to be actual pointers
-            # Small values (< 0x100000) are almost certainly data constants, not pointers
-            if word < 0x100000:
-                continue
-            
-            if word >= min_ptr and word < end_span and _in_file_sections(word):
-                reloc_table.append((img_off, 0, DEX_REL, 0))
-                existing_sites.add(img_off)
-                added_ptrs += 1
-                if verbose:
-                    print(f"[SWEEP {sec_name}] add DEX_REL at +0x{img_off:08x} for word=0x{word:08x}")
-
-    if verbose:
-        print(f"[SWEEP] total added pointer relocs: {added_ptrs}")
-
-    # EXTRA PASS: Scan .text for absolute addresses in instructions that need relocation
-    # This handles cases where the compiler generated absolute addresses that should be position-independent
-    # but lack corresponding ELF relocations
-    added_text_relocs = 0
-    if verbose:
-        print(f"[TEXT SCAN] Starting scan of .text section, length={len(text)}")
-    if len(text) > 0:
-        for off in range(0, len(text) - 5):  # Need at least 6 bytes for most patterns
-            img_off = text_off + off
-            if img_off in existing_sites:
-                continue
-            
-            # Pattern 1: mov %eax, [imm32] (bytes: a1 imm32) - read from absolute address
-            if text[off] == 0xA1:
-                imm32 = struct.unpack_from("<I", text, off + 1)[0]
-                if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
-                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
-                    existing_sites.add(img_off + 1)
-                    added_text_relocs += 1
-                    if verbose:
-                        print(f"[TEXT ABS ADDR] mov eax,[0x{imm32:08x}] at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 1:08x}")
-                elif imm32 == 0x41FF7:
-                    print(f"[CRITICAL] Found target address 0x{imm32:08x} in mov eax,[addr] at +0x{img_off:08x} but outside range!")
-                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
-                    existing_sites.add(img_off + 1)
-                    added_text_relocs += 1
-                elif (imm32 & 0xFF000000) == 0x80000000:  # Addresses with high byte 0x80 that should be 0x40
-                    print(f"[HIGH BYTE FIX] Found address 0x{imm32:08x} with wrong high byte in mov eax,[addr] at +0x{img_off:08x}")
-                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
-                    existing_sites.add(img_off + 1)
-                    added_text_relocs += 1
-            
-            # Pattern 2: mov [imm32], %eax (bytes: a3 imm32) - write to absolute address
-            elif text[off] == 0xA3:
-                imm32 = struct.unpack_from("<I", text, off + 1)[0]
-                if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
-                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
-                    existing_sites.add(img_off + 1)
-                    added_text_relocs += 1
-                    if verbose:
-                        print(f"[TEXT ABS ADDR] mov [0x{imm32:08x}],eax at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 1:08x}")
-                elif imm32 == 0x41FF7:
-                    print(f"[CRITICAL] Found target address 0x{imm32:08x} in mov [addr],eax at +0x{img_off:08x} but outside range!")
-                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
-                    existing_sites.add(img_off + 1)
-                    added_text_relocs += 1
-                elif (imm32 & 0xFF000000) == 0x80000000:  # Addresses with high byte 0x80 that should be 0x40
-                    print(f"[HIGH BYTE FIX] Found address 0x{imm32:08x} with wrong high byte in mov [addr],eax at +0x{img_off:08x}")
-                    reloc_table.append((img_off + 1, 0, DEX_REL, 0))
-                    existing_sites.add(img_off + 1)
-                    added_text_relocs += 1
-            
-            # Pattern 3: mov reg, [imm32] (bytes: 8b modrm imm32) - various forms
-            elif text[off] == 0x8B and off + 5 < len(text):
-                modrm = text[off + 1]
-                if (modrm & 0xC7) == 0x05:  # mod=00, rm=101 -> [disp32]
-                    imm32 = struct.unpack_from("<I", text, off + 2)[0]
-                    if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
-                        reloc_table.append((img_off + 2, 0, DEX_REL, 0))
-                        existing_sites.add(img_off + 2)
-                        added_text_relocs += 1
-                        if verbose:
-                            print(f"[TEXT ABS ADDR] mov reg,[0x{imm32:08x}] at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 2:08x}")
-            
-            # Pattern 4: mov [imm32], reg (bytes: 89 modrm imm32) - various forms
-            elif text[off] == 0x89 and off + 5 < len(text):
-                modrm = text[off + 1]
-                if (modrm & 0xC7) == 0x05:  # mod=00, rm=101 -> [disp32]
-                    imm32 = struct.unpack_from("<I", text, off + 2)[0]
-                    if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
-                        reloc_table.append((img_off + 2, 0, DEX_REL, 0))
-                        existing_sites.add(img_off + 2)
-                        added_text_relocs += 1
-                        if verbose:
-                            print(f"[TEXT ABS ADDR] mov [0x{imm32:08x}],reg at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 2:08x}")
-            
-            # Pattern 5: mov [mem32], imm32 (bytes: c7 modrm imm32 imm32)
-            elif text[off] == 0xC7 and off + 7 < len(text):
-                modrm = text[off + 1]
-                if (modrm & 0xC7) == 0x05:  # mod=00, rm=101 -> [disp32]
-                    imm32 = struct.unpack_from("<I", text, off + 2)[0]
-                    if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
-                        reloc_table.append((img_off + 2, 0, DEX_REL, 0))
-                        existing_sites.add(img_off + 2)
-                        added_text_relocs += 1
-                        if verbose:
-                            print(f"[TEXT ABS ADDR] mov [0x{imm32:08x}],imm32 at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 2:08x}")
-                    elif imm32 == 0x41FF7:
-                        print(f"[CRITICAL] Found target address 0x{imm32:08x} at +0x{img_off:08x} but outside range!")
-                        reloc_table.append((img_off + 2, 0, DEX_REL, 0))
-                        existing_sites.add(img_off + 2)
-                        added_text_relocs += 1
-                    elif (imm32 & 0xFF000000) == 0x80000000:  # Addresses with high byte 0x80 that should be 0x40
-                        print(f"[HIGH BYTE FIX] Found address 0x{imm32:08x} with wrong high byte in mov [addr],imm32 at +0x{img_off:08x}")
-                        reloc_table.append((img_off + 2, 0, DEX_REL, 0))
-                        existing_sites.add(img_off + 2)
-                        added_text_relocs += 1
-                # Pattern 6: mov [reg], imm32 where reg uses SIB byte (like [esp])
-                elif (modrm & 0xC0) == 0x00 and (modrm & 0x07) == 0x04:  # mod=00, rm=100 -> SIB follows
-                    if off + 8 < len(text):  # Need SIB + imm32
-                        sib = text[off + 2]
-                        if sib == 0x24:  # SIB for [esp] (no displacement)
-                            imm32 = struct.unpack_from("<I", text, off + 3)[0]
-                            if 0x1000 <= imm32 < 0x10000000:  # Expanded range to catch smaller addresses like 0x41FF7
-                                reloc_table.append((img_off + 3, 0, DEX_REL, 0))
-                                existing_sites.add(img_off + 3)
-                                added_text_relocs += 1
-                                if verbose:
-                                    print(f"[TEXT ABS ADDR] mov [esp],0x{imm32:08x} at +0x{img_off:08x} -> add DEX_REL at +0x{img_off + 3:08x}")
-                            elif imm32 == 0x41FF7:
-                                print(f"[CRITICAL] Found target address 0x{imm32:08x} in mov [esp],imm32 at +0x{img_off:08x}!")
-                                reloc_table.append((img_off + 3, 0, DEX_REL, 0))
-                                existing_sites.add(img_off + 3)
-                                added_text_relocs += 1
-                            elif (imm32 & 0xFF000000) == 0x80000000:  # Addresses with high byte 0x80 that should be 0x40
-                                print(f"[HIGH BYTE FIX] Found address 0x{imm32:08x} with wrong high byte in mov [esp],imm32 at +0x{img_off:08x}")
-                                reloc_table.append((img_off + 3, 0, DEX_REL, 0))
-                                existing_sites.add(img_off + 3)
-                                added_text_relocs += 1
-                            elif imm32 == 0x80095028:  # Specific target address
-                                print(f"[CRITICAL] Found target address 0x{imm32:08x} in mov [esp],imm32 at +0x{img_off:08x}")
-                                reloc_table.append((img_off + 3, 0, DEX_REL, 0))
-                                existing_sites.add(img_off + 3)
-                                added_text_relocs += 1
-    
-    # Special search for problematic addresses
-    target_found = False
-    target_addresses = [0x41FF7, 0x80095028]
-    
-    # DISABLED: Global fix was adding too many false positives
-    # Only use targeted pattern matching above
-    
-    if verbose:
-        print(f"[TEXT SCAN] total added text absolute address relocs: {added_text_relocs}")
-    if added_text_relocs > 0:
-        print(f"[TEXT SCAN] Found {added_text_relocs} absolute addresses needing relocation")
-    # Also search in data sections for problematic addresses
-    for sec_name, sec_data, sec_off in [('data', dat, data_off), ('ro', ro, ro_off)]:
-        if len(sec_data) >= 4:
-            for off in range(len(sec_data) - 3):
-                val = struct.unpack_from("<I", sec_data, off)[0]
-                if val == 0x80095028:
-                    print(f"[CRITICAL] Found 0x{val:08x} in {sec_name} section at offset +0x{sec_off + off:08x}")
-                    reloc_table.append((sec_off + off, 0, DEX_REL, 0))
-                    existing_sites.add(sec_off + off)
-                    added_text_relocs += 1
-                    target_found = True
-                # Also search for any address with high byte 0x80 that should be 0x40
-                elif (val & 0xFF000000) == 0x80000000 and 0x40000000 <= val < 0x50000000:
-                    print(f"[HIGH BYTE FIX] Found address 0x{val:08x} with wrong high byte in {sec_name} at +0x{sec_off + off:08x}")
-                    reloc_table.append((sec_off + off, 0, DEX_REL, 0))
-                    existing_sites.add(sec_off + off)
-                    added_text_relocs += 1
-    
-    # DISABLED: Comprehensive search was too aggressive
-    # Only use pattern-based detection above
-    
-    # DISABLED: Aggressive searches were adding too many false positives
-    # Only use pattern-based detection above
-    
-    if target_found:
-        print(f"[TEXT SCAN] *** TARGET ADDRESSES FOUND AND FIXED ***")
-
-    # Tabell-offsets (efter data)
     cur = align_up(data_off + len(dat), FILE_ALIGN)
-    import_off = cur; cur += 16 * len(imports)
-    reloc_off  = cur; cur += 16 * len(reloc_table)
-    symtab_off = cur; cur += 0  # no symbols are written out
-    strtab_b   = strtab.bytes()
-    strtab_off = cur; cur += len(strtab_b)
+    import_off = cur
+    cur += 16 * len(imports)
+    reloc_off = cur
+    cur += 16 * len(reloc_table)
+    symtab_off = cur
+    cur += 12 * len(dex_symbols)
+    strtab_b = strtab.bytes()
+    strtab_off = cur
+    cur += len(strtab_b)
 
-    # Header
     hdr = bytearray(HDR_SIZE)
-    def w32(o, v): struct.pack_into("<I", hdr, o, v & 0xFFFFFFFF)
+
+    def w32(off, val):
+        struct.pack_into("<I", hdr, off, val & 0xFFFFFFFF)
+
     w32(0x00, DEX_MAGIC)
     w32(0x04, DEX_MAJ)
     w32(0x08, DEX_MIN)
     w32(0x0C, entry_off)
-    w32(0x10, text_off); w32(0x14, len(text))
-    w32(0x18, ro_off);   w32(0x1C, len(ro))
-    w32(0x20, data_off); w32(0x24, len(dat))
+    w32(0x10, text_off)
+    w32(0x14, len(text))
+    w32(0x18, ro_off)
+    w32(0x1C, len(ro))
+    w32(0x20, data_off)
+    w32(0x24, len(dat))
     w32(0x28, bss_size)
-    w32(0x2C, import_off); w32(0x30, len(imports))
-    w32(0x34, reloc_off);  w32(0x38, len(reloc_table))
-    
-    # DEBUG: Print relocation table statistics
-    print(f"[DEBUG] Final relocation table size: {len(reloc_table)}")
-    print(f"[DEBUG] Import table size: {len(imports)}")
-    if len(reloc_table) > 100:
-        print(f"[DEBUG] First 5 relocations: {reloc_table[:5]}")
-        print(f"[DEBUG] Last 5 relocations: {reloc_table[-5:]}")
-    w32(0x3C, symtab_off); w32(0x40, 0)
-    w32(0x44, strtab_off); w32(0x48, len(strtab_b))
+    w32(0x2C, import_off)
+    w32(0x30, len(imports))
+    w32(0x34, reloc_off)
+    w32(0x38, len(reloc_table))
+    w32(0x3C, symtab_off)
+    w32(0x40, len(dex_symbols))
+    w32(0x44, strtab_off)
+    w32(0x48, len(strtab_b))
 
     def pad_to(f, ofs):
         curpos = f.tell()
@@ -1012,17 +556,19 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
     with open(outfile, "wb") as f:
         f.write(hdr)
         f.write(text)
-        pad_to(f, ro_off);   f.write(ro)
-        pad_to(f, data_off); f.write(dat)
-        # Import table
+        pad_to(f, ro_off)
+        f.write(ro)
+        pad_to(f, data_off)
+        f.write(dat)
         pad_to(f, import_off)
-        for (e_off, s_off, t, z) in imports:
+        for e_off, s_off, t, z in imports:
             f.write(struct.pack("<IIII", e_off, s_off, t, z))
-        # Relocation table
         pad_to(f, reloc_off)
-        for (off, symi, t, z) in reloc_table:
+        for off, symi, t, z in reloc_table:
             f.write(struct.pack("<IIII", off, symi, t, z))
-        # String table
+        pad_to(f, symtab_off)
+        for name_off, value_off, stype in dex_symbols:
+            f.write(struct.pack("<III", name_off, value_off, stype))
         pad_to(f, strtab_off)
         f.write(strtab_b)
 
@@ -1034,35 +580,23 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
         print(f"bss_size       = 0x{bss_size:08x} ({bss_size})")
         print(f"import_off     = 0x{import_off:08x} (cnt={len(imports)})")
         print(f"reloc_off      = 0x{reloc_off:08x} (cnt={len(reloc_table)})")
+        print(f"symtab_off     = 0x{symtab_off:08x} (cnt={len(dex_symbols)})")
         print(f"strtab_off     = 0x{strtab_off:08x} (sz={len(strtab_b)})")
         print(f"entry_offset   = 0x{entry_off:08x}")
-        print("Imports:")
-        inv = {v: k for (k, v) in strtab.map.items()}
-        for i, (e_off, s_off, t, _) in enumerate(imports):
-            print(f"[{i}] exl='{inv.get(e_off, '?')}' off=0x{e_off:x}  sym='{inv.get(s_off, '?')}' off=0x{s_off:x}  type={t}")
-        print("Relocations (DEX):")
-        for (off, symi, t, _) in reloc_table:
-            symtxt = ""
-            if t in (DEX_ABS32, DEX_PC32) and 0 <= symi < len(imports):
-                so = imports[symi][1]
-                symtxt = inv.get(so, "")
-            print(f"off=0x{off:08x} type={t} sym='{symtxt}'")
 
-# -------------------------
-# CLI
-# -------------------------
+
 def main():
     ap = argparse.ArgumentParser(description="Convert elfdump output to a DEX file (i386).")
     ap.add_argument("dumpfile", help="elfdump text output")
-    ap.add_argument("elffile", help="source ELF file to read section bytes from")
+    ap.add_argument("elffile", help="source ELF file")
     ap.add_argument("outfile", help="output .dex file")
     ap.add_argument("--default-exl", default="diffc.exl",
                     help="EXL name to bind unresolved imports to (default: diffc.exl)")
-    ap.add_argument("--entry", dest="entry", default=None,
-                    help="force entry-symbol (ex. --entry main)")
+    ap.add_argument("--entry", dest="entry", default=None, help="force entry symbol")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
     build_dex(args.dumpfile, args.elffile, args.outfile, args.default_exl, args.entry, args.verbose)
+
 
 if __name__ == "__main__":
     main()
