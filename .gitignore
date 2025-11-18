@@ -13,6 +13,7 @@
 *.log
 AGENT_OS_PROGRAMMING.md
 AGENTS.md
+CLAUDE.md
 build/
 cross/
 1token

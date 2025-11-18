@@ -82,9 +82,12 @@ void DG_Finish(void)
 
 int main(int argc, char **argv)
 {
+    printf("[DOOM-MAIN] Entry point reached! argc=%d\n", argc);
     printf("Starting Doom...\n");
 
+    printf("[DOOM-MAIN] About to call doomgeneric_Create\n");
     doomgeneric_Create(argc, argv);
+    printf("[DOOM-MAIN] doomgeneric_Create returned\n");
 
     for (int i = 0;; i++)
     {

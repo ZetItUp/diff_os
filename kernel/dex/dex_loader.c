@@ -880,7 +880,8 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
 
     
     uintptr_t image_end = PAGE_ALIGN_UP((uintptr_t)dex.image_base + dex.image_size);
-    uintptr_t heap_base = image_end;
+    const uintptr_t GUARD_GAP = 4 * 1024 * 1024;
+    uintptr_t heap_base = image_end + GUARD_GAP;
     uintptr_t heap_size  = 64u << 20;  // 64 MB window
 
     system_brk_init_window(heap_base, heap_size);
@@ -1025,7 +1026,8 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     }
 
     uintptr_t image_end = PAGE_ALIGN_UP((uintptr_t)dex.image_base + dex.image_size);
-    uintptr_t heap_base = image_end;
+    const uintptr_t GUARD_GAP = 4 * 1024 * 1024;
+    uintptr_t heap_base = image_end + GUARD_GAP;
     uintptr_t heap_size = 64u << 20;
 
     system_brk_init_window(heap_base, heap_size);
