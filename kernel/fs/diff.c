@@ -1626,3 +1626,568 @@ int filesystem_fstat(int fd, filesystem_stat_t* st)
 
     return 0;
 }
+
+// ---------------------------------------------------------------------------
+// File creation and writing
+// ---------------------------------------------------------------------------
+
+// Helper to split a path into parent directory and filename
+static int split_path(const char* path, char* parent_buf, size_t parent_sz,
+                      char* name_buf, size_t name_sz)
+{
+    if (!path || !parent_buf || !name_buf || parent_sz == 0 || name_sz == 0)
+    {
+        return -1;
+    }
+
+    // Find last '/' in path
+    const char* last_slash = NULL;
+    const char* p = path;
+
+    while (*p)
+    {
+        if (*p == '/')
+        {
+            last_slash = p;
+        }
+        p++;
+    }
+
+    // No slash found - file is in current directory
+    if (!last_slash)
+    {
+        parent_buf[0] = '/';
+        parent_buf[1] = '\0';
+        (void)strlcpy(name_buf, path, name_sz);
+        return 0;
+    }
+
+    // Copy parent path
+    size_t parent_len = (size_t)(last_slash - path);
+    if (parent_len == 0)
+    {
+        // Path starts with '/' - parent is root
+        parent_buf[0] = '/';
+        parent_buf[1] = '\0';
+    }
+    else
+    {
+        if (parent_len >= parent_sz)
+        {
+            parent_len = parent_sz - 1;
+        }
+        memcpy(parent_buf, path, parent_len);
+        parent_buf[parent_len] = '\0';
+    }
+
+    // Copy filename
+    (void)strlcpy(name_buf, last_slash + 1, name_sz);
+
+    return 0;
+}
+
+int filesystem_create(const char* path, uint32_t initial_size)
+{
+    char parent_path[512];
+    char filename[MAX_FILENAME_LEN];
+    int parent_idx;
+    uint32_t parent_id;
+    int entry_idx;
+    uint32_t sectors_needed;
+    uint32_t first_sector;
+    FileEntry* entry;
+
+    if (!path || !path[0] || !file_table)
+    {
+        return -1;
+    }
+
+    // Split path into parent directory and filename
+    if (split_path(path, parent_path, sizeof(parent_path),
+                   filename, sizeof(filename)) != 0)
+    {
+        DDBG("[Diff FS] filesystem_create: failed to split path '%s'\n", path);
+        return -1;
+    }
+
+    // Find parent directory
+    spin_lock(&file_table_lock);
+
+    if (parent_path[0] == '/' && parent_path[1] == '\0')
+    {
+        // Root directory
+        parent_id = detect_root_id(file_table);
+    }
+    else
+    {
+        parent_idx = find_entry_by_path_nolock(file_table, parent_path);
+        if (parent_idx < 0)
+        {
+            spin_unlock(&file_table_lock);
+            DDBG("[Diff FS] filesystem_create: parent dir '%s' not found\n", parent_path);
+            return -1;
+        }
+
+        if (file_table->entries[parent_idx].type != ENTRY_TYPE_DIR)
+        {
+            spin_unlock(&file_table_lock);
+            DDBG("[Diff FS] filesystem_create: parent '%s' is not a directory\n", parent_path);
+            return -1;
+        }
+
+        parent_id = file_table->entries[parent_idx].entry_id;
+    }
+
+    // Check if file already exists
+    if (find_entry_in_dir(file_table, parent_id, filename) >= 0)
+    {
+        spin_unlock(&file_table_lock);
+        DDBG("[Diff FS] filesystem_create: file '%s' already exists\n", path);
+        return -2; // Already exists
+    }
+
+    // Allocate file entry
+    entry_idx = find_free_entry(file_bitmap, MAX_FILES);
+    if (entry_idx < 0)
+    {
+        spin_unlock(&file_table_lock);
+        DDBG("[Diff FS] filesystem_create: no free file entries\n");
+        return -1;
+    }
+
+    spin_unlock(&file_table_lock);
+
+    // Allocate sectors if needed
+    sectors_needed = (initial_size + SECTOR_SIZE - 1) / SECTOR_SIZE;
+    first_sector = 0;
+
+    if (sectors_needed > 0)
+    {
+        if (allocate_sectors(sectors_needed, &first_sector, &superblock) != 0)
+        {
+            DDBG("[Diff FS] filesystem_create: failed to allocate %u sectors\n", sectors_needed);
+            return -1;
+        }
+    }
+
+    // Create the file entry
+    spin_lock(&file_table_lock);
+
+    set_bitmap_bit(file_bitmap, entry_idx);
+    entry = &file_table->entries[entry_idx];
+    memset(entry, 0, sizeof(FileEntry));
+
+    entry->entry_id = (uint32_t)(entry_idx + 1);
+    entry->parent_id = parent_id;
+    entry->type = ENTRY_TYPE_FILE;
+    (void)strlcpy(entry->filename, filename, MAX_FILENAME_LEN);
+    entry->start_sector = first_sector;
+    entry->sector_count = sectors_needed;
+    entry->file_size_bytes = 0; // Start with 0, will grow as data is written
+    entry->created_timestamp = 0;  // TODO: Add timestamp support
+    entry->modified_timestamp = 0;
+
+    file_table->count++;
+
+    spin_unlock(&file_table_lock);
+
+    // Write file table and sector bitmap to disk
+    if (write_file_table(&superblock) != 0)
+    {
+        DDBG("[Diff FS] filesystem_create: failed to write file table\n");
+        return -1;
+    }
+
+    if (sectors_needed > 0)
+    {
+        if (write_sector_bitmap(&superblock) != 0)
+        {
+            DDBG("[Diff FS] filesystem_create: failed to write sector bitmap\n");
+            return -1;
+        }
+    }
+
+    DDBG("[Diff FS] filesystem_create: created '%s' (idx=%d, sectors=%u)\n",
+         path, entry_idx, sectors_needed);
+
+    return 0;
+}
+
+// Write data to a file at current offset
+static int write_at_entry(FileEntry* fe, uint32_t offset, const void* buffer, uint32_t count)
+{
+    uint8_t temp[SECTOR_SIZE];
+    const uint8_t* in;
+    uint32_t sector_index_in_file;
+    uint32_t sector_byte_offset;
+    uint32_t first_sector_lba;
+    uint32_t bytes_left;
+    uint32_t bytes_written;
+
+    if (!fe || !buffer || count == 0)
+    {
+        return 0;
+    }
+
+    // Check if we need to expand the file
+    uint32_t end_offset = offset + count;
+    uint64_t needed_bytes = (uint64_t)end_offset;
+    uint64_t capacity_bytes = (uint64_t)fe->sector_count * (uint64_t)SECTOR_SIZE;
+
+    if (needed_bytes > capacity_bytes)
+    {
+        // Need to allocate more sectors
+        uint32_t needed_sectors = (uint32_t)((needed_bytes + SECTOR_SIZE - 1) / SECTOR_SIZE);
+        uint32_t additional_sectors = needed_sectors - fe->sector_count;
+
+        if (additional_sectors > 0)
+        {
+            DDBG("[Diff FS] write_at_entry: file needs expansion from %u to %u sectors\n",
+                 fe->sector_count, needed_sectors);
+
+            // Try to allocate contiguous sectors right after the current file
+            uint32_t expected_sector = fe->start_sector + fe->sector_count;
+            uint32_t new_start;
+
+            // Check if the next sectors are free
+            int can_extend_contiguous = 1;
+            for (uint32_t i = 0; i < additional_sectors; i++)
+            {
+                uint32_t check_sector = expected_sector + i;
+                if (check_sector >= superblock.total_sectors ||
+                    is_bitmap_bit_set(sector_bitmap, check_sector))
+                {
+                    can_extend_contiguous = 0;
+                    break;
+                }
+            }
+
+            if (can_extend_contiguous)
+            {
+                // Mark the additional sectors as used
+                for (uint32_t i = 0; i < additional_sectors; i++)
+                {
+                    set_bitmap_bit(sector_bitmap, expected_sector + i);
+                }
+
+                // Update file entry
+                fe->sector_count = needed_sectors;
+
+                DDBG("[Diff FS] write_at_entry: expanded file to %u sectors\n", needed_sectors);
+
+                // Write updated sector bitmap
+                if (write_sector_bitmap(&superblock) != 0)
+                {
+                    DDBG("[Diff FS] write_at_entry: failed to write sector bitmap\n");
+                    return -1;
+                }
+            }
+            else
+            {
+                // Cannot expand contiguously - would need to relocate file
+                DDBG("[Diff FS] write_at_entry: cannot expand file contiguously\n");
+                return -1;
+            }
+        }
+    }
+
+    sector_index_in_file = offset / SECTOR_SIZE;
+    sector_byte_offset = offset % SECTOR_SIZE;
+
+    if (sector_index_in_file >= fe->sector_count)
+    {
+        return 0;
+    }
+
+    first_sector_lba = fe->start_sector + sector_index_in_file;
+
+    // Bounds check
+    if (superblock.total_sectors && (first_sector_lba >= superblock.total_sectors))
+    {
+        return -2;
+    }
+
+    in = (const uint8_t*)buffer;
+    bytes_left = count;
+    bytes_written = 0;
+
+    while (bytes_left > 0)
+    {
+        if (superblock.total_sectors && (first_sector_lba >= superblock.total_sectors))
+        {
+            break;
+        }
+
+        uint32_t start_in_sector = sector_byte_offset;
+        uint32_t available_in_sector = SECTOR_SIZE - start_in_sector;
+        uint32_t to_write = (bytes_left < available_in_sector) ? bytes_left : available_in_sector;
+
+        // If we're doing a partial sector write, we need to read-modify-write
+        if (to_write < SECTOR_SIZE || start_in_sector > 0)
+        {
+            // Read existing sector
+            int rr = ata_read(first_sector_lba, 1, temp);
+            if (rr < 0)
+            {
+                return -2;
+            }
+
+            // Modify the relevant bytes
+            if (safe_copy_in(temp + start_in_sector, in, to_write) < 0)
+            {
+                return -3;
+            }
+
+            // Write back
+            int wr = ata_write(first_sector_lba, 1, temp);
+            if (wr < 0)
+            {
+                return -2;
+            }
+        }
+        else
+        {
+            // Full sector write - copy from user and write directly
+            if (safe_copy_in(temp, in, SECTOR_SIZE) < 0)
+            {
+                return -3;
+            }
+
+            int wr = ata_write(first_sector_lba, 1, temp);
+            if (wr < 0)
+            {
+                return -2;
+            }
+        }
+
+        in += to_write;
+        bytes_left -= to_write;
+        bytes_written += to_write;
+
+        sector_byte_offset = 0;
+        first_sector_lba++;
+
+        if ((first_sector_lba - fe->start_sector) >= fe->sector_count)
+        {
+            break;
+        }
+    }
+
+    // Update file size if we extended it
+    if (end_offset > fe->file_size_bytes)
+    {
+        fe->file_size_bytes = end_offset;
+    }
+
+    return (int)bytes_written;
+}
+
+int filesystem_write(int fd, const void* buffer, uint32_t count)
+{
+    FileEntry* fe;
+    uint32_t off;
+    int r;
+
+    if (!buffer || count == 0 || !filesystem_fd_is_valid(fd))
+    {
+        DDBG("[Diff FS] filesystem_write: invalid params fd=%d buf=%p count=%u\n", fd, buffer, count);
+        return -1;
+    }
+
+    // Get the file entry (non-const because we may modify it)
+    if (fd < 0 || fd >= FILESYSTEM_MAX_OPEN)
+    {
+        DDBG("[Diff FS] filesystem_write: fd out of range %d\n", fd);
+        return -1;
+    }
+
+    if (!s_fd_table[fd].in_use)
+    {
+        DDBG("[Diff FS] filesystem_write: fd %d not in use\n", fd);
+        return -1;
+    }
+
+    int idx = s_fd_table[fd].entry_index;
+
+    if (!file_table || idx < 0 || idx >= MAX_FILES)
+    {
+        DDBG("[Diff FS] filesystem_write: invalid idx=%d (count=%d)\n", idx, file_table ? file_table->count : -1);
+        return -1;
+    }
+
+    spin_lock(&file_table_lock);
+    fe = &file_table->entries[idx];
+    off = filesystem_get_offset_for_fd(fd);
+
+    DDBG("[Diff FS] filesystem_write: fd=%d idx=%d off=%u count=%u sectors=%u\n",
+         fd, idx, off, count, fe->sector_count);
+
+    r = write_at_entry(fe, off, buffer, count);
+
+    DDBG("[Diff FS] filesystem_write: wrote %d bytes\n", r);
+
+    if (r > 0)
+    {
+        filesystem_set_offset_for_fd(fd, off + (uint32_t)r);
+    }
+
+    spin_unlock(&file_table_lock);
+
+    // Write back the updated file table to persist size changes (outside the lock)
+    if (r > 0)
+    {
+        write_file_table(&superblock);
+    }
+
+    return r;
+}
+
+int filesystem_delete(const char* path)
+{
+    int idx;
+    FileEntry* entry;
+
+    if (!path || !path[0] || !file_table)
+    {
+        return -1;
+    }
+
+    spin_lock(&file_table_lock);
+
+    idx = find_entry_by_path_nolock(file_table, path);
+    if (idx < 0)
+    {
+        spin_unlock(&file_table_lock);
+        DDBG("[Diff FS] filesystem_delete: file '%s' not found\n", path);
+        return -1;
+    }
+
+    entry = &file_table->entries[idx];
+
+    // Don't allow deleting directories (for now)
+    if (entry->type == ENTRY_TYPE_DIR)
+    {
+        spin_unlock(&file_table_lock);
+        DDBG("[Diff FS] filesystem_delete: cannot delete directory '%s'\n", path);
+        return -1;
+    }
+
+    // Free the sectors
+    uint32_t start_sector = entry->start_sector;
+    uint32_t sector_count = entry->sector_count;
+
+    // Clear the file entry
+    memset(entry, 0, sizeof(FileEntry));
+    clear_bitmap_bit(file_bitmap, idx);
+
+    file_table->count--;
+
+    spin_unlock(&file_table_lock);
+
+    // Free sectors
+    if (sector_count > 0)
+    {
+        free_sectors(start_sector, sector_count);
+
+        if (write_sector_bitmap(&superblock) != 0)
+        {
+            DDBG("[Diff FS] filesystem_delete: failed to write sector bitmap\n");
+            return -1;
+        }
+    }
+
+    // Write updated file table
+    if (write_file_table(&superblock) != 0)
+    {
+        DDBG("[Diff FS] filesystem_delete: failed to write file table\n");
+        return -1;
+    }
+
+    DDBG("[Diff FS] filesystem_delete: deleted '%s'\n", path);
+
+    return 0;
+}
+
+int filesystem_rename(const char* old_path, const char* new_path)
+{
+    char old_parent[512];
+    char old_name[MAX_FILENAME_LEN];
+    char new_parent[512];
+    char new_name[MAX_FILENAME_LEN];
+    int idx;
+    FileEntry* entry;
+    uint32_t new_parent_id;
+
+    if (!old_path || !old_path[0] || !new_path || !new_path[0] || !file_table)
+    {
+        return -1;
+    }
+
+    // Split both paths
+    if (split_path(old_path, old_parent, sizeof(old_parent),
+                   old_name, sizeof(old_name)) != 0)
+    {
+        return -1;
+    }
+
+    if (split_path(new_path, new_parent, sizeof(new_parent),
+                   new_name, sizeof(new_name)) != 0)
+    {
+        return -1;
+    }
+
+    spin_lock(&file_table_lock);
+
+    // Find the old file
+    idx = find_entry_by_path_nolock(file_table, old_path);
+    if (idx < 0)
+    {
+        spin_unlock(&file_table_lock);
+        DDBG("[Diff FS] filesystem_rename: source '%s' not found\n", old_path);
+        return -1;
+    }
+
+    entry = &file_table->entries[idx];
+
+    // Check if destination already exists
+    if (find_entry_by_path_nolock(file_table, new_path) >= 0)
+    {
+        spin_unlock(&file_table_lock);
+        DDBG("[Diff FS] filesystem_rename: destination '%s' already exists\n", new_path);
+        return -1;
+    }
+
+    // Find new parent directory
+    if (new_parent[0] == '/' && new_parent[1] == '\0')
+    {
+        new_parent_id = detect_root_id(file_table);
+    }
+    else
+    {
+        int parent_idx = find_entry_by_path_nolock(file_table, new_parent);
+        if (parent_idx < 0 || file_table->entries[parent_idx].type != ENTRY_TYPE_DIR)
+        {
+            spin_unlock(&file_table_lock);
+            DDBG("[Diff FS] filesystem_rename: new parent '%s' not found or not a directory\n", new_parent);
+            return -1;
+        }
+        new_parent_id = file_table->entries[parent_idx].entry_id;
+    }
+
+    // Update the entry
+    entry->parent_id = new_parent_id;
+    (void)strlcpy(entry->filename, new_name, MAX_FILENAME_LEN);
+
+    spin_unlock(&file_table_lock);
+
+    // Write updated file table
+    if (write_file_table(&superblock) != 0)
+    {
+        DDBG("[Diff FS] filesystem_rename: failed to write file table\n");
+        return -1;
+    }
+
+    DDBG("[Diff FS] filesystem_rename: renamed '%s' to '%s'\n", old_path, new_path);
+
+    return 0;
+}

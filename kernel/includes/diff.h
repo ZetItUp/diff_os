@@ -103,9 +103,15 @@ int read_file(const FileTable* table, const char* path, void* buffer); // return
 int filesystem_close(int fd);
 int filesystem_open(const char *path);
 int filesystem_read(int fd, void *buffer, uint32_t count);
+int filesystem_write(int fd, const void *buffer, uint32_t count);
 int32_t filesystem_lseek(int fd, int32_t off, int whence);
 int filesystem_stat(const char *path, filesystem_stat_t *st);
 int filesystem_fstat(int fd, filesystem_stat_t *st);
+
+// File creation and deletion
+int filesystem_create(const char *path, uint32_t initial_size);
+int filesystem_delete(const char *path);
+int filesystem_rename(const char *old_path, const char *new_path);
 
 // Bitmaps
 

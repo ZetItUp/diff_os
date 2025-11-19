@@ -46,6 +46,8 @@ enum
     SYSTEM_GETEXECROOT = 34,
     SYSTEM_KEYBOARD_EVENT_GET = 35,
     SYSTEM_KEYBOARD_EVENT_TRY = 36,
+    SYSTEM_FILE_DELETE = 37,
+    SYSTEM_FILE_RENAME = 38,
 };
 
 struct syscall_frame 
@@ -92,6 +94,8 @@ long system_file_write(int file, const void *buf, unsigned long count);
 
 int system_file_stat(const char *abs_path, filesystem_stat_t *user_st);
 int system_file_fstat(int file, filesystem_stat_t *user_st);
+int system_file_delete(const char *abs_path);
+int system_file_rename(const char *old_path, const char *new_path);
 
 int system_brk_set(void *new_break);
 void system_brk_init_window(uintptr_t image_base, uintptr_t image_size);

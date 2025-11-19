@@ -89,11 +89,30 @@ int system_file_open(const char *abs_path, int oflags, int mode)
     if (path_normalize(base, upath, norm, sizeof(norm)) != 0)
         return -1;
 
-    // Read-only filesystem: tillåt bara läsning.
-    // (När skrivning implementeras: hedra O_WRONLY/O_RDWR/O_TRUNC/O_APPEND m.m.)
+    // Try to open the file
     int fsfd = filesystem_open(norm);
+
+    // If file doesn't exist and O_CREAT is set, create it
+    if (fsfd < 0 && (oflags & O_CREAT))
+    {
+        // Create the file with initial size of 4KB
+        if (filesystem_create(norm, 4096) == 0)
+        {
+            // Try to open again after creation
+            fsfd = filesystem_open(norm);
+        }
+    }
+
     if (fsfd < 0)
         return -1;
+
+    // Handle O_TRUNC flag - truncate file to 0 bytes
+    if (oflags & O_TRUNC)
+    {
+        // For now, we don't support truncation
+        // In a full implementation, you would reset file_size_bytes to 0
+        // and optionally free sectors
+    }
 
     // Allokera en kernel-fd och lås den mot underliggande fs_fd
     for (int i = 0; i < KERNEL_FILE_DESCRIPTOR_MAX; i++)
@@ -104,8 +123,7 @@ int system_file_open(const char *abs_path, int oflags, int mode)
             s_kfd[i].fs_fd = fsfd;
             s_kfd[i].flags = oflags;
 
-            // O_APPEND (om vi i framtiden skriver) – för läsning gör detta inget,
-            // men om flaggan råkar komma med, positionera enligt flaggan.
+            // O_APPEND - seek to end of file
             if (oflags & O_APPEND)
                 (void)filesystem_lseek(fsfd, 0, SEEK_END);
 
@@ -246,7 +264,7 @@ long system_file_seek(int file, long offset, int whence)
     return (long)np;
 }
 
-// Write to file or stdout/stderr. For files: not supported yet (return -1).
+// Write to file or stdout/stderr.
 long system_file_write(int file, const void *buf, unsigned long count)
 {
     // stdout/stderr
@@ -266,8 +284,66 @@ long system_file_write(int file, const void *buf, unsigned long count)
     if (file == 0)
         return -1;
 
-    // (Read-only fs ännu)
-    return -1;
+    // File write
+    int i = file - KERNEL_FILE_DESCRIPTOR_BASE;
+    if (i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !s_kfd[i].used)
+        return -1;
+
+    // Check if file was opened with write permissions
+    int flags = s_kfd[i].flags;
+    if ((flags & O_WRONLY) == 0 && (flags & O_RDWR) == 0)
+        return -1; // File not opened for writing
+
+    if (count == 0)
+        return 0;
+
+    // Write in chunks similar to read
+    unsigned long total = 0;
+
+    // Allocate bounce buffer for copying from user
+    size_t bounce_sz = (count < FILE_READ_CHUNK_BYTES) ? (size_t)count : (size_t)FILE_READ_CHUNK_BYTES;
+    if (bounce_sz == 0)
+        bounce_sz = 1;
+
+    uint8_t *kbuf = (uint8_t*)kmalloc(bounce_sz);
+    if (!kbuf)
+        return -1;
+
+    while (total < count)
+    {
+        unsigned long want = count - total;
+        if (want > FILE_READ_CHUNK_BYTES)
+            want = FILE_READ_CHUNK_BYTES;
+
+        // Copy from user buffer to kernel buffer
+        if (copy_from_user(kbuf, (const uint8_t*)buf + total, (size_t)want) != 0)
+        {
+            kfree(kbuf);
+            return (total > 0) ? (long)total : -1;
+        }
+
+        // Write to filesystem
+        int r = filesystem_write(s_kfd[i].fs_fd, kbuf, (uint32_t)want);
+        if (r <= 0)
+        {
+            // Error or no space
+            if (total == 0)
+            {
+                kfree(kbuf);
+                return (long)r;
+            }
+            break; // Return what we managed to write
+        }
+
+        total += (unsigned long)r;
+
+        // If we wrote less than we asked for, stop
+        if ((unsigned long)r < want)
+            break;
+    }
+
+    kfree(kbuf);
+    return (long)total;
 }
 
 // Stat by path. Returns 0 on success, -1 on error.
@@ -320,4 +396,50 @@ int system_file_fstat(int file, filesystem_stat_t *user_st)
         return -1;
 
     return 0;
+}
+
+// Delete a file. Returns 0 on success, -1 on error.
+int system_file_delete(const char *abs_path)
+{
+    if (verify_fs_ready() != 0)
+        return -1;
+
+    char upath[KERNEL_MAX_PATH];
+    if (copy_string_from_user(upath, abs_path, sizeof(upath)) == -1)
+        return -1;
+
+    process_t *proc = process_current();
+    const char *base = process_cwd_path(proc);
+    char norm[KERNEL_MAX_PATH];
+    if (path_normalize(base, upath, norm, sizeof(norm)) != 0)
+        return -1;
+
+    return filesystem_delete(norm);
+}
+
+// Rename a file. Returns 0 on success, -1 on error.
+int system_file_rename(const char *old_path, const char *new_path)
+{
+    // For now, we'll implement this as a copy + delete
+    // A more efficient implementation would update the file table entry directly
+    if (verify_fs_ready() != 0)
+        return -1;
+
+    char uold[KERNEL_MAX_PATH];
+    char unew[KERNEL_MAX_PATH];
+    if (copy_string_from_user(uold, old_path, sizeof(uold)) == -1)
+        return -1;
+    if (copy_string_from_user(unew, new_path, sizeof(unew)) == -1)
+        return -1;
+
+    process_t *proc = process_current();
+    const char *base = process_cwd_path(proc);
+    char norm_old[KERNEL_MAX_PATH];
+    char norm_new[KERNEL_MAX_PATH];
+    if (path_normalize(base, uold, norm_old, sizeof(norm_old)) != 0)
+        return -1;
+    if (path_normalize(base, unew, norm_new, sizeof(norm_new)) != 0)
+        return -1;
+
+    return filesystem_rename(norm_old, norm_new);
 }

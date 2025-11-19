@@ -664,19 +664,36 @@ int fflush(FILE *file)
 
 int remove(const char *path)
 {
-    // TODO: Implement
-    (void)path;
+    if (!is_valid_userspace_ptr(path, 1))
+        return -1;
 
-    return 0;
+    // Call syscall 37 (SYSTEM_FILE_DELETE)
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a" (ret)
+        : "a" (37), "b" (path)
+        : "memory"
+    );
+
+    return ret;
 }
 
 int rename(const char *oldpath, const char *newpath)
 {
-    // TODO: Implement
-    (void)oldpath;
-    (void)newpath;
+    if (!is_valid_userspace_ptr(oldpath, 1) || !is_valid_userspace_ptr(newpath, 1))
+        return -1;
 
-    return 0;
+    // Call syscall 38 (SYSTEM_FILE_RENAME)
+    int ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a" (ret)
+        : "a" (38), "b" (oldpath), "c" (newpath)
+        : "memory"
+    );
+
+    return ret;
 }
 
 

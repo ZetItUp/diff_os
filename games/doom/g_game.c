@@ -1607,60 +1607,83 @@ G_SaveGame
     sendsave = true;
 }
 
-void G_DoSaveGame (void) 
-{ 
+void G_DoSaveGame (void)
+{
     char *savegame_file;
     char *temp_savegame_file;
     char *recovery_savegame_file;
+
+    printf("DEBUG: G_DoSaveGame() started\n");
 
     recovery_savegame_file = NULL;
     temp_savegame_file = P_TempSaveGameFile();
     savegame_file = P_SaveGameFile(savegameslot);
 
+    printf("DEBUG: temp_savegame_file = %s\n", temp_savegame_file);
+    printf("DEBUG: savegame_file = %s\n", savegame_file);
+    printf("DEBUG: Calling fopen() for temp file...\n");
+
     // Open the savegame file for writing.  We write to a temporary file
     // and then rename it at the end if it was successfully written.
-    // This prevents an existing savegame from being overwritten by 
+    // This prevents an existing savegame from being overwritten by
     // a corrupted one, or if a savegame buffer overrun occurs.
     save_stream = fopen(temp_savegame_file, "wb");
 
+    printf("DEBUG: fopen() returned %p\n", save_stream);
+
     if (save_stream == NULL)
     {
+        printf("DEBUG: fopen() failed! Trying recovery file...\n");
         // Failed to save the game, so we're going to have to abort. But
         // to be nice, save to somewhere else before we call I_Error().
         recovery_savegame_file = M_TempFile("recovery.dsg");
+        printf("DEBUG: recovery_savegame_file = %s\n", recovery_savegame_file);
         save_stream = fopen(recovery_savegame_file, "wb");
+        printf("DEBUG: recovery fopen() returned %p\n", save_stream);
         if (save_stream == NULL)
         {
+            printf("DEBUG: Both fopen() calls failed! Calling I_Error()...\n");
             I_Error("Failed to open either '%s' or '%s' to write savegame.",
                     temp_savegame_file, recovery_savegame_file);
         }
     }
 
+    printf("DEBUG: File opened successfully, starting save...\n");
     savegame_error = false;
 
+    printf("DEBUG: Writing save game header...\n");
     P_WriteSaveGameHeader(savedescription);
- 
-    P_ArchivePlayers (); 
-    P_ArchiveWorld (); 
-    P_ArchiveThinkers (); 
-    P_ArchiveSpecials (); 
-	 
+
+    printf("DEBUG: Archiving players...\n");
+    P_ArchivePlayers ();
+    printf("DEBUG: Archiving world...\n");
+    P_ArchiveWorld ();
+    printf("DEBUG: Archiving thinkers...\n");
+    P_ArchiveThinkers ();
+    printf("DEBUG: Archiving specials...\n");
+    P_ArchiveSpecials ();
+
+    printf("DEBUG: Writing EOF marker...\n");
     P_WriteSaveGameEOF();
-	 
-    // Enforce the same savegame size limit as in Vanilla Doom, 
+
+    // Enforce the same savegame size limit as in Vanilla Doom,
     // except if the vanilla_savegame_limit setting is turned off.
 
+    printf("DEBUG: Checking savegame size...\n");
     if (vanilla_savegame_limit && ftell(save_stream) > SAVEGAMESIZE)
     {
+        printf("DEBUG: Savegame buffer overrun!\n");
         I_Error ("Savegame buffer overrun");
     }
-    
+
     // Finish up, close the savegame file.
 
+    printf("DEBUG: Closing save file...\n");
     fclose(save_stream);
 
     if (recovery_savegame_file != NULL)
     {
+        printf("DEBUG: Used recovery file, calling I_Error()...\n");
         // We failed to save to the normal location, but we wrote a
         // recovery file to the temp directory. Now we can bomb out
         // with an error.
@@ -1672,9 +1695,12 @@ void G_DoSaveGame (void)
     // Now rename the temporary savegame file to the actual savegame
     // file, overwriting the old savegame if there was one there.
 
+    printf("DEBUG: Removing old savegame file...\n");
     remove(savegame_file);
+    printf("DEBUG: Renaming temp file to final name...\n");
     rename(temp_savegame_file, savegame_file);
-    
+
+    printf("DEBUG: Save complete!\n");
     gameaction = ga_nothing;
     M_StringCopy(savedescription, "", sizeof(savedescription));
 

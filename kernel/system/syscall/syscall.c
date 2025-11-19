@@ -651,6 +651,18 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_FILE_DELETE:
+        {
+            ret = system_file_delete((const char*)arg0);
+
+            break;
+        }
+        case SYSTEM_FILE_RENAME:
+        {
+            ret = system_file_rename((const char*)arg0, (const char*)arg1);
+
+            break;
+        }
         default:
         {
             puts("[System Call] Unknown number: ");
