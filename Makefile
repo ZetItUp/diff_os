@@ -59,6 +59,7 @@ KERNEL_SRC = \
 	kernel/system/process.c \
 	kernel/system/scheduler.c \
 	kernel/system/spinlock.c \
+	kernel/system/pci.c \
 	kernel/dex/dex_loader.c \
 	kernel/dex/exl_loader.c \
 	kernel/kernel.c \
@@ -75,6 +76,7 @@ KERNEL_SRC += \
 	kernel/interfaces/intf_keyboard.c \
 	kernel/interfaces/intf_memory.c \
 	kernel/interfaces/intf_vbe.c \
+	kernel/interfaces/intf_pci.c \
 	kernel/interfaces/intf_console.c
 
 PROGRAMS_LIST = dterm \

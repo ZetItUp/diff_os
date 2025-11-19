@@ -38,6 +38,8 @@ static uint32_t g_req_height = 768;
 static uint32_t g_req_bpp    = 32;
 
 static kernel_exports_t *kernel = 0;
+static pci_device_t g_vga_device;
+static int g_vga_found = 0;
 
 // This driver does not use interrupts, set IRQ to 0
 __attribute__((section(".ddf_meta"), used))
@@ -78,103 +80,47 @@ static inline uint16_t vbe_read_reg(uint16_t index)
     return kernel->inw(VBE_DISPI_IOPORT_DATA);
 }
 
-// Read 32-bit PCI config space using type 1 mechanism (CF8/CFC).
-static inline uint32_t pci_cfg_read32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t off)
+static void vbe_pci_enum_cb(const pci_device_t *dev, void *context)
 {
-    uint32_t addr = 0x80000000u
-                  | ((uint32_t)bus  << 16)
-                  | ((uint32_t)dev  << 11)
-                  | ((uint32_t)func << 8)
-                  | (off & 0xFC);
+    (void)context;
 
-    kernel->outl(0xCF8, addr);
-    return kernel->inl(0xCFC);
-}
-
-// Scan all PCI buses and look for a device with class=0x03 (Display Controller) and subclass=0x00 (VGA).
-static int pci_find_vga(uint8_t *out_bus, uint8_t *out_dev, uint8_t *out_func)
-{
-    for (uint16_t bus = 0; bus < 256; bus++)
+    if (g_vga_found)
     {
-        for (uint8_t dev = 0; dev < 32; dev++)
-        {
-            for (uint8_t func = 0; func < 8; func++)
-            {
-                // Read Vendor ID and Device ID
-                // If 0xFFFF there is no device here
-                uint32_t id0 = pci_cfg_read32((uint8_t)bus, dev, func, 0x00);
-                if ((id0 & 0xFFFF) == 0xFFFF)
-                {
-                    // Function 0 absent means whole device slot is empty
-                    if (func == 0)
-                    {
-                        break;
-                    }
-                    else
-                    {
-                        continue;
-                    }
-                }
-
-                // Read code register: (31-24)=base class, (23-16)=subclass
-                uint32_t class_reg = pci_cfg_read32((uint8_t)bus, dev, func, 0x08);
-                uint8_t base_class = (uint8_t)((class_reg >> 24) & 0xFF);
-                uint8_t sub_class  = (uint8_t)((class_reg >> 16) & 0xFF);
-
-                // Found VGA device
-                if (base_class == 0x03 && sub_class == 0x00)
-                {
-                    *out_bus  = (uint8_t)bus;
-                    *out_dev  = dev;
-                    *out_func = func;
-                    return 0;
-                }
-
-                // If function 0 is not multifunction, skip other funcs
-                uint32_t head = pci_cfg_read32((uint8_t)bus, dev, func, 0x0C);
-                if (func == 0 && ((head >> 16) & 0x80) == 0)
-                {
-                    break;
-                }
-            }
-        }
+        return;
     }
 
-    return -1;
+    if (dev->class_code == 0x03 && dev->subclass == 0x00)
+    {
+        g_vga_device = *dev;
+        g_vga_found = 1;
+    }
 }
 
 // Read PCI BAR0 of VGA device, which should point to the linear framebuffer physical base
 static uint32_t vga_get_bar0_phys_base(void)
 {
-    uint8_t bus;
-    uint8_t dev;
-    uint8_t func;
+    if (!g_vga_found)
+    {
+        kernel->pci_enum_devices(vbe_pci_enum_cb, NULL);
+    }
 
-    if (pci_find_vga(&bus, &dev, &func) != 0)
+    if (!g_vga_found)
     {
         kernel->printf("[VBE] VGA device was not found on PCI\n");
         return 0;
     }
 
-    uint32_t bar0 = pci_cfg_read32(bus, dev, func, 0x10);
+    kernel->pci_enable_device(&g_vga_device);
 
-    // BAR0 should be memory space, not IO space.
-    if ((bar0 & 0x1u) != 0)
+    uint32_t base = 0;
+    int is_mmio = 0;
+    if (kernel->pci_get_bar(&g_vga_device, 0, &base, NULL, &is_mmio) != 0 || !is_mmio)
     {
-        kernel->printf("[VBE] BAR0 is I O space but memory BAR was expected\n");
+        kernel->printf("[VBE] BAR0 is not a MMIO region\n");
         return 0;
     }
 
-    // Mask out lower bits that are flags.
-    uint32_t phys = bar0 & ~0xFu;
-
-    if (phys == 0)
-    {
-        kernel->printf("[VBE] BAR0 returned zero which is unexpected\n");
-        return 0;
-    }
-
-    return phys;
+    return base;
 }
 
 // Check if the Bochs/QEMU dispi interface exists by reading its ID register.
@@ -358,7 +304,7 @@ void ddf_driver_init(kernel_exports_t *exports)
                               g_mode.pitch_bytes);
     }
 
-    exports->printf("[DRIVER] VBE Graphics driver installed\n");
+    exports->printf("[DRIVER] VBE Graphics Driver Installed\n");
 }
 
 // This driver does not use interrupts
@@ -371,7 +317,7 @@ void ddf_driver_irq(unsigned irq, void *context)
 void ddf_driver_exit(void)
 {
     vbe_write_reg(VBE_DISPI_INDEX_ENABLE, 0);
-    kernel->printf("[DRIVER] VBE Graphics driver uninstalled\n");
+    kernel->printf("[DRIVER] VBE Graphics Driver Uninstalled\n");
 }
 
 void *ddf_find_symbol(void *module_base, ddf_header_t *header, const char *name)
@@ -396,4 +342,3 @@ void *ddf_find_symbol(void *module_base, ddf_header_t *header, const char *name)
 
     return NULL;
 }
-
