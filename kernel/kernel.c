@@ -6,6 +6,7 @@
 #include "serial.h"
 #include "irq.h"
 #include "pic.h"
+#include "pci.h"
 #include "io.h"
 #include "timer.h"
 #include "stdint.h"
@@ -70,7 +71,9 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
     
     init_paging(ram_mb);
     init_heap(&__heap_start, &__heap_end);
-
+    
+    display_banner();
+    pci_init();
     process_init();
     idt_init();
     system_call_init();
@@ -97,7 +100,6 @@ static void init_thread(void* argument)
     vga_cursor_enable(0, h - 1);
     
     init_filesystem();
-    display_banner();
     display_sys_info();
 
     char* system_config_file = "system/sys.cfg";
@@ -149,12 +151,12 @@ void display_banner(void)
     set_color(MAKE_COLOR(FG_CYAN, BG_BLACK));
     printf("ifferent ");
     set_color(MAKE_COLOR(FG_LIGHTCYAN, BG_BLACK));
-    printf("OS");
+    printf("OS\n\n");
     set_color(MAKE_COLOR(FG_GRAY, BG_BLACK));
     set_pos(x, y);
 }
 
 void display_sys_info(void)
 {
-    printf("\n[RAM] Available Memory: %u MB\n", system.ram_mb);
+    printf("[RAM] Available Memory: %u MB\n", system.ram_mb);
 }

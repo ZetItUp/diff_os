@@ -358,7 +358,7 @@ void ddf_driver_init(kernel_exports_t *exports)
                               g_mode.pitch_bytes);
     }
 
-    exports->printf("[DRIVER] VBE Graphics driver installed\n");
+    exports->printf("[DRIVER] VBE Graphics Driver Installed\n");
 }
 
 // This driver does not use interrupts
@@ -371,7 +371,7 @@ void ddf_driver_irq(unsigned irq, void *context)
 void ddf_driver_exit(void)
 {
     vbe_write_reg(VBE_DISPI_INDEX_ENABLE, 0);
-    kernel->printf("[DRIVER] VBE Graphics driver uninstalled\n");
+    kernel->printf("[DRIVER] VBE Graphics Driver Uninstalled\n");
 }
 
 void *ddf_find_symbol(void *module_base, ddf_header_t *header, const char *name)
