@@ -24,10 +24,6 @@
 extern FileTable *file_table;
 extern kernel_exports_t g_exports;
 
-// NOTE: Addend is an extra value added to the symbol address during relocation
-
-// Basic helpers
-
 static inline uint32_t max_u32(uint32_t a, uint32_t b)
 {
     return (a > b) ? a : b;
@@ -256,7 +252,6 @@ static void debug_dump_header(const ddf_header_t *h, uint32_t file_bytes)
 }
 
 // Relocations
-
 static int apply_relocations(void *base, const ddf_header_t *h, uint32_t total_bytes)
 {
     if (!h || !base)
