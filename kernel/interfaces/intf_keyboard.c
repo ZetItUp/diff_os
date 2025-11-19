@@ -208,7 +208,7 @@ static void keyboard_process_scancode(uint8_t sc)
     if (sc == 0x1D && !e0)  // Left Ctrl
     {
         ctrl = !release;
-
+        push_key_event(!release, 0x01);
         return;
     }
 
@@ -330,6 +330,12 @@ static void keyboard_process_scancode(uint8_t sc)
         if (sc == 0x1C)  // Keypad Enter
         {
             push_key_event(!release, 13);
+            return;
+        }
+
+        if (sc == 0x1D) // Right Ctrl
+        {
+            push_key_event(!release, 0x01);
             return;
         }
 
