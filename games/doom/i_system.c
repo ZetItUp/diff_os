@@ -73,20 +73,13 @@ static atexit_listentry_t *exit_funcs = NULL;
 void I_AtExit(atexit_func_t func, boolean run_on_error)
 {
     atexit_listentry_t *entry;
-    void *caller = __builtin_return_address(0);
 
     entry = malloc(sizeof(*entry));
-
-    printf("[I_AtExit] Registered func=%p run_on_error=%d entry=%p caller=%p\n",
-           (void*)func, run_on_error, (void*)entry, caller);
 
     entry->func = func;
     entry->run_on_error = run_on_error;
     entry->next = exit_funcs;
     exit_funcs = entry;
-
-    printf("[I_AtExit] Set entry->func=%p entry->next=%p\n",
-           (void*)entry->func, (void*)entry->next);
 }
 
 // Tactile feedback function, probably used for the Logitech Cyberman
@@ -398,17 +391,12 @@ void I_Error (char *error, ...)
 
     // Shutdown. Here might be other errors.
 
-    printf("[I_Error] Walking exit handler list, exit_funcs=%p\n", (void*)exit_funcs);
     entry = exit_funcs;
 
     while (entry != NULL)
     {
-        printf("[I_Error] entry=%p func=%p run_on_error=%d next=%p\n",
-               (void*)entry, (void*)entry->func, entry->run_on_error, (void*)entry->next);
-
         if (entry->run_on_error)
         {
-            printf("[I_Error] Calling func=%p\n", (void*)entry->func);
             entry->func();
         }
 

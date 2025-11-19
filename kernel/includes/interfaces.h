@@ -75,4 +75,5 @@ void console_get_colors_kernel(uint8_t *out_fg, uint8_t *out_bg);
 extern vbe_exports_t g_vbe;
 void vbe_register(uint32_t phys_base, uint32_t width, uint32_t height, uint32_t bpp, uint32_t pitch);
 int  vbe_restore_default_mode(void);
+int  vbe_is_default_mode(void);
 void vbe_clear(uint32_t argb);

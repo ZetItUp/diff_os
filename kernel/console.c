@@ -772,10 +772,22 @@ int console_get_graphics_mode(void)
 
 void console_restore_text_mode(void)
 {
-    if (vbe_restore_default_mode() == 0)
+    int console_off = !console_is_vbe_active();
+    int mode_changed = !vbe_is_default_mode();
+
+    if (!console_off && !mode_changed)
+    {
+        return;
+    }
+
+    if (mode_changed && vbe_restore_default_mode() == 0)
     {
         vbe_clear(0xFF000000u);
     }
-    console_use_vbe(1);
+
+    if (console_off)
+    {
+        console_use_vbe(1);
+    }
     console_flush_log();
 }
