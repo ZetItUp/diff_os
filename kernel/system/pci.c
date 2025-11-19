@@ -2,11 +2,13 @@
 #include "io.h"
 #include "stdio.h"
 
+// We snapshot every present function we find at boot.
 #define PCI_MAX_ENTRIES (PCI_MAX_BUS * PCI_MAX_DEV * PCI_MAX_FUNC)
 
 static pci_device_t g_pci_devices[PCI_MAX_ENTRIES];
 static unsigned g_pci_count = 0;
 
+// Legacy Type-1 config space address builder
 static uint32_t pci_make_addr(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset)
 {
     return (uint32_t)(0x80000000u
@@ -52,6 +54,7 @@ static void pci_config_write16(uint8_t bus, uint8_t dev, uint8_t func, uint8_t o
     pci_config_write32(bus, dev, func, offset & 0xFC, orig);
 }
 
+// Stash the function info into our global list
 static void pci_record_device(uint8_t bus, uint8_t dev, uint8_t func)
 {
     if (g_pci_count >= PCI_MAX_ENTRIES)
@@ -73,6 +76,7 @@ static void pci_record_device(uint8_t bus, uint8_t dev, uint8_t func)
     entry->header_type = pci_config_read8(bus, dev, func, PCI_HEADER_TYPE);
 }
 
+// Scan a function
 static void pci_scan_function(uint8_t bus, uint8_t dev, uint8_t func)
 {
     uint16_t vendor = pci_config_read16(bus, dev, func, PCI_VENDOR_ID);
@@ -82,6 +86,7 @@ static void pci_scan_function(uint8_t bus, uint8_t dev, uint8_t func)
     pci_record_device(bus, dev, func);
 }
 
+// Scan a device for functions
 static void pci_scan_device(uint8_t bus, uint8_t dev)
 {
     pci_scan_function(bus, dev, 0);
@@ -96,6 +101,7 @@ static void pci_scan_device(uint8_t bus, uint8_t dev)
     }
 }
 
+// Step across all 32 devices on a bus
 static void pci_scan_bus(uint8_t bus)
 {
     for (uint8_t dev = 0; dev < PCI_MAX_DEV; ++dev)
@@ -120,6 +126,7 @@ void pci_init(void)
     printf("[PCI] Found %u device(s)\n", g_pci_count);
 }
 
+// Simple enumerator so drivers can look at what we found
 void pci_enum_devices(pci_enum_callback_t callback, void *context)
 {
     if (!callback)
@@ -137,10 +144,11 @@ void pci_enable_device(const pci_device_t *dev)
         return;
 
     uint16_t command = pci_config_read16(dev->bus, dev->device, dev->function, PCI_COMMAND);
-    command |= 0x0007; // I/O space, MEM space, bus master
+    command |= 0x0007;
     pci_config_write16(dev->bus, dev->device, dev->function, PCI_COMMAND, command);
 }
 
+// Get BAR from PCI device
 int pci_get_bar(const pci_device_t *dev, uint8_t bar_index, uint32_t *out_base, uint32_t *out_size, int *is_mmio)
 {
     if (!dev || bar_index >= 6)
