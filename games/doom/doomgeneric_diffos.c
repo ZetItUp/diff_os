@@ -6,6 +6,9 @@
 #include "doomkeys.h"
 #include "m_argv.h"
 #include "doomgeneric.h"
+#include "i_system.h"
+
+static void DG_Finish(void);
 
 void DG_Init(void)
 {
@@ -25,6 +28,7 @@ void DG_Init(void)
 
     // Hide text console overlay while the game runs
     vbe_toggle_graphics_mode();
+    I_AtExit(DG_Finish, true);
 }
 
 void DG_DrawFrame(void)
@@ -72,12 +76,6 @@ void DG_SetWindowTitle(const char *title)
     // No window title in bare-metal mode
 }
 
-void DG_Finish(void)
-{
-    // Restore text console overlay when leaving the game
-    vbe_toggle_graphics_mode();
-}
-
 int main(int argc, char **argv)
 {
     printf("[DOOM-MAIN] Entry point reached! argc=%d\n", argc);
@@ -87,10 +85,16 @@ int main(int argc, char **argv)
     doomgeneric_Create(argc, argv);
     printf("[DOOM-MAIN] doomgeneric_Create returned\n");
 
-    for (int i = 0;; i++)
+    for (;;)
     {
         doomgeneric_Tick();
     }
 
     return 0;
+}
+
+static void DG_Finish(void)
+{
+    // Restore text console overlay when leaving the game
+    vbe_toggle_graphics_mode();
 }

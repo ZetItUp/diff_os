@@ -4,6 +4,7 @@
 #include "stdio.h"
 #include "serial.h"
 #include "graphics/vbe_text.h"
+#include "interfaces.h"
 
 #define SCREEN_WIDTH 80
 #define SCREEN_HEIGHT 25
@@ -767,4 +768,14 @@ int console_toggle_graphics_mode(void)
 int console_get_graphics_mode(void)
 {
     return s_vbe_console_active;
+}
+
+void console_restore_text_mode(void)
+{
+    if (vbe_restore_default_mode() == 0)
+    {
+        vbe_clear(0xFF000000u);
+    }
+    console_use_vbe(1);
+    console_flush_log();
 }

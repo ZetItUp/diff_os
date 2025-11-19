@@ -208,17 +208,7 @@ static int system_exit(struct syscall_frame *f, int code)
     {
         *f = s_parent_stack[--s_parent_sp];
 
-        // Restore VBE and console to text mode when returning from a program
-        // This ensures that if a program (like doom) used graphics mode,
-        // the VBE is restored to text mode and the console is re-rendered
-        vbe_restore_text_mode();  // Restore VBE to 1024x768x32 text mode
-
-        // If console was switched off, re-enable it and replay the log
-        if (!console_is_vbe_active())
-        {
-            console_use_vbe(1);  // Re-enable VBE text console
-            console_flush_log(); // Replay buffered output
-        }
+        console_restore_text_mode();
 
         return 0;
     }
