@@ -2,6 +2,7 @@
 
 #include "stdint.h"
 #include "stdarg.h"
+#include "pci.h"
 
 // Exposed kernel function hooks (used by drivers)
 typedef struct kernel_exports
@@ -24,6 +25,11 @@ typedef struct kernel_exports
     void (*keyboard_register)(int (*read_fn)(uint8_t*), uint8_t (*block_fn)(void));  // Plug keyboard backend
 
     void (*vbe_register)(uint32_t phys_base, uint32_t width, uint32_t height, uint32_t bpp, uint32_t pitch);  // Register VBE mode
+    void (*pci_enum_devices)(pci_enum_callback_t cb, void *ctx);
+    uint32_t (*pci_config_read32)(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
+    void (*pci_config_write32)(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t value);
+    void (*pci_enable_device)(const pci_device_t *dev);
+    int (*pci_get_bar)(const pci_device_t *dev, uint8_t bar_index, uint32_t *out_base, uint32_t *out_size, int *is_mmio);
 } __attribute__((packed)) kernel_exports_t;
 
 // Keyboard-facing exports
@@ -77,3 +83,10 @@ void vbe_register(uint32_t phys_base, uint32_t width, uint32_t height, uint32_t 
 int  vbe_restore_default_mode(void);
 int  vbe_is_default_mode(void);
 void vbe_clear(uint32_t argb);
+
+// PCI interface wrappers
+void pci_interface_enum_devices(pci_enum_callback_t cb, void *ctx);
+uint32_t pci_interface_config_read32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
+void pci_interface_config_write32(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t value);
+void pci_interface_enable_device(const pci_device_t *dev);
+int pci_interface_get_bar(const pci_device_t *dev, uint8_t bar_index, uint32_t *out_base, uint32_t *out_size, int *is_mmio);

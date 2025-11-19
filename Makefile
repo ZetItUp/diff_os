@@ -76,6 +76,7 @@ KERNEL_SRC += \
 	kernel/interfaces/intf_keyboard.c \
 	kernel/interfaces/intf_memory.c \
 	kernel/interfaces/intf_vbe.c \
+	kernel/interfaces/intf_pci.c \
 	kernel/interfaces/intf_console.c
 
 PROGRAMS_LIST = dterm \
