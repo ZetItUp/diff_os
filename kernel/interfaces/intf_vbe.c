@@ -362,3 +362,15 @@ int vbe_restore_default_mode(void)
                           g_vbe_default_mode.height,
                           g_vbe_default_mode.bpp);
 }
+
+int vbe_is_default_mode(void)
+{
+    if (!g_vbe_default_mode.valid)
+    {
+        return 1;
+    }
+
+    return g_vbe.width  == g_vbe_default_mode.width  &&
+           g_vbe.height == g_vbe_default_mode.height &&
+           g_vbe.bpp    == g_vbe_default_mode.bpp;
+}

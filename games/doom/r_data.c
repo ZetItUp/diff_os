@@ -478,9 +478,6 @@ void R_InitTextures (void)
 
     int*		directory;
     
-    int			temp1;
-    int			temp2;
-    int			temp3;
 
     
     // Load the patch names from pnames.lmp.
@@ -530,24 +527,10 @@ void R_InitTextures (void)
     totalwidth = 0;
     
     //	Really complex printing shit...
-    temp1 = W_GetNumForName (DEH_String("S_START"));  // P_???????
-    temp2 = W_GetNumForName (DEH_String("S_END")) - 1;
-    temp3 = ((temp2-temp1+63)/64) + ((numtextures+63)/64);
-
     // If stdout is a real console, use the classic vanilla "filling
     // up the box" effect, which uses backspace to "step back" inside
     // the box.  If stdout is a file, don't draw the box.
 
-    if (I_ConsoleStdout())
-    {
-        printf("[");
-        for (i = 0; i < temp3 + 9; i++)
-            printf(" ");
-        printf("]");
-        for (i = 0; i < temp3 + 10; i++)
-            printf("\b");
-    }
-	
     for (i=0 ; i<numtextures ; i++, directory++)
     {
 	if (!(i&63))
@@ -906,7 +889,3 @@ void R_PrecacheLevel (void)
 
     Z_Free(spritepresent);
 }
-
-
-
-
