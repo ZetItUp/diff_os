@@ -430,6 +430,21 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
                             patched = True
                             got32x_processed += 1
                             continue
+                        if op == 0xFF and (modrm & 0x38) == 0x30 and (modrm & 0xC7) == 0x05:
+                            # push dword ptr [disp32] -> push imm32
+                            src_base, _, _ = base_for_secidx(sym["shndx"])
+                            if src_base is None:
+                                skipped.append((etype, name, r["offset"], "unknown shndx"))
+                                continue
+                            init = (src_base + sym["value"]) & 0xFFFFFFFF
+                            tgt_buf[buf_pos-2] = 0x68  # push imm32
+                            struct.pack_into("<I", tgt_buf, buf_pos-1, init)
+                            if buf_pos + 3 < len(tgt_buf):
+                                tgt_buf[buf_pos+3] = 0x90
+                            reloc_table.append((img_off - 1, 0, DEX_REL, 0))
+                            patched = True
+                            got32x_processed += 1
+                            continue
 
             src_base, _, _ = base_for_secidx(sym["shndx"])
             if src_base is None:

@@ -59,8 +59,8 @@ int console_is_vbe_active(void);
 void console_set_background_color(uint32_t bg_argb);
 int console_toggle_graphics_mode();
 int console_get_graphics_mode();
+void console_restore_text_mode(void);
 
 unsigned short get_cursor_pos(void);
 unsigned short get_row(void);
 unsigned short get_col(void);
-

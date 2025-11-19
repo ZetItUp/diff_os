@@ -15,6 +15,7 @@
 #include "dex/dex.h"
 #include "dex/exl.h"
 #include "diff.h"
+#include "console.h"
 
 extern void enter_user_mode(uint32_t entry_eip, uint32_t user_stack_top) __attribute__((noreturn));
 
@@ -372,6 +373,9 @@ void process_exit_current(int exit_code)
         // Store exit code for wait()
         p->exit_code = exit_code;
     }
+
+    // Restore console/video to default state before ending the process
+    console_restore_text_mode();
 
     // End current thread, scheduler will handle process state
     thread_exit();

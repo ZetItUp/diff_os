@@ -31,6 +31,17 @@
 
 vbe_exports_t g_vbe = {0};
 
+typedef struct
+{
+    uint32_t width;
+    uint32_t height;
+    uint32_t bpp;
+    uint32_t pitch;
+    int      valid;
+} vbe_mode_snapshot_t;
+
+static vbe_mode_snapshot_t g_vbe_default_mode = {0};
+
 static inline void vbe_write_reg(uint16_t idx, uint16_t val) 
 {
     outw(VBE_DISPI_IOPORT_INDEX, idx);
@@ -124,6 +135,15 @@ void vbe_register(uint32_t phys_base, uint32_t width, uint32_t height, uint32_t 
     g_vbe.height = height;
     g_vbe.bpp = bpp;
     g_vbe.pitch = pitch;
+
+    if (!g_vbe_default_mode.valid)
+    {
+        g_vbe_default_mode.width = width;
+        g_vbe_default_mode.height = height;
+        g_vbe_default_mode.bpp = bpp;
+        g_vbe_default_mode.pitch = pitch;
+        g_vbe_default_mode.valid = 1;
+    }
 
     // Switch console to VBE and replay old text
     if (!console_is_vbe_active())
@@ -290,7 +310,7 @@ int vbe_set_mode(uint32_t w, uint32_t h, uint32_t bpp)
     return 0;
 }
 
-int system_video_mode_set(int w, int h, int bpp)
+static int vbe_apply_mode(uint32_t w, uint32_t h, uint32_t bpp)
 {
     if (!(bpp == 8 || bpp == 15 || bpp == 16 || bpp == 24 || bpp == 32))
         return -1;
@@ -302,7 +322,9 @@ int system_video_mode_set(int w, int h, int bpp)
         return -1;
 
     if (vbe_set_mode(w, h, bpp) != 0)
+    {
         return -1;
+    }
 
     uint16_t rx = vbe_read_reg(VBE_DISPI_INDEX_XRES);
     uint16_t ry = vbe_read_reg(VBE_DISPI_INDEX_YRES);
@@ -324,13 +346,19 @@ int system_video_mode_set(int w, int h, int bpp)
     return 0;
 }
 
-// Restore VBE to default text mode (1024x768x32)
-// Called when returning from a program that used custom graphics mode
-void vbe_restore_text_mode(void)
+int system_video_mode_set(int w, int h, int bpp)
 {
-    if (g_vbe.phys_base == 0)
-        return;
+    return vbe_apply_mode((uint32_t)w, (uint32_t)h, (uint32_t)bpp);
+}
 
-    // Restore to default VBE text mode resolution
-    system_video_mode_set(1024, 768, 32);
+int vbe_restore_default_mode(void)
+{
+    if (!g_vbe_default_mode.valid)
+    {
+        return -1;
+    }
+
+    return vbe_apply_mode(g_vbe_default_mode.width,
+                          g_vbe_default_mode.height,
+                          g_vbe_default_mode.bpp);
 }
