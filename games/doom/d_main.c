@@ -423,14 +423,6 @@ void doomgeneric_Tick()
 //
 void D_DoomLoop (void)
 {
-    static boolean printed = false;
-
-    if (!printed)
-    {
-        printf("[D_DoomLoop] Entering main loop\n");
-        printed = true;
-    }
-
     if (bfgedition &&
         (demorecording || (gameaction == ga_playdemo) || netgame))
     {
@@ -1176,9 +1168,6 @@ void D_DoomMain (void)
 #if ORIGCODE
     int numiwadlumps;
 #endif
-
-    printf("[D_DoomMain] Starting main initialization\n");
-
     I_AtExit(D_Endoom, false);
 
     // print banner
@@ -1852,6 +1841,5 @@ void D_DoomMain (void)
 			D_StartTitle ();                // start up intro loop
     }
 
-    printf("[D_DoomMain] Initialization complete, entering D_DoomLoop\n");
     D_DoomLoop ();
 }
