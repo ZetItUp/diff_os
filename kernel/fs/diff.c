@@ -45,6 +45,7 @@ static uint8_t* sector_bitmap;
 static spinlock_t file_table_lock;
 static spinlock_t sector_bitmap_lock;
 static FileHandle s_fd_table[FILESYSTEM_MAX_OPEN];
+static int sector_bitmap_dirty;
 
 extern volatile int g_in_irq;
 
@@ -763,6 +764,15 @@ int read_file_table(const SuperBlock* sb)
 
     new_table->count = count;
 
+    // Rebuild file bitmap from the entries we just loaded.
+    for (int i = 0; i < MAX_FILES; i++)
+    {
+        if (new_table->entries[i].entry_id != 0)
+        {
+            set_bitmap_bit(new_bitmap, i);
+        }
+    }
+
     spin_lock(&file_table_lock);
     file_table = new_table;
     file_bitmap = new_bitmap;
@@ -1380,6 +1390,7 @@ int allocate_sectors(uint32_t count, uint32_t* first_sector, const SuperBlock* s
         }
     }
 
+    sector_bitmap_dirty = 1;
     spin_unlock(&sector_bitmap_lock);
 
     return (allocated == count) ? 0 : -1;
@@ -1401,6 +1412,7 @@ void free_sectors(uint32_t start, uint32_t count)
         clear_bitmap_bit(sector_bitmap, (int)(start + i));
     }
 
+    sector_bitmap_dirty = 1;
     spin_unlock(&sector_bitmap_lock);
 }
 
@@ -1445,6 +1457,10 @@ int write_sector_bitmap(const SuperBlock* sb)
 
     spin_lock(&sector_bitmap_lock);
     bytes = disk_write(sb->sector_bitmap_sector, sb->sector_bitmap_size, sector_bitmap);
+    if (bytes > 0)
+    {
+        sector_bitmap_dirty = 0;
+    }
     spin_unlock(&sector_bitmap_lock);
 
     return (bytes <= 0) ? -1 : 0;
@@ -1495,6 +1511,11 @@ int filesystem_close(int fd)
 
     // Write back the file table to persist any size changes made during writes
     write_file_table(&superblock);
+
+    if (sector_bitmap_dirty)
+    {
+        (void)write_sector_bitmap(&superblock);
+    }
 
     s_fd_table[fd].entry_index = (uint32_t)-1;
     s_fd_table[fd].offset = 0;
@@ -1959,15 +1980,9 @@ static int write_at_entry(FileEntry* fe, uint32_t offset, const void* buffer, ui
 
                 // Update file entry
                 fe->sector_count = needed_sectors;
+                sector_bitmap_dirty = 1;
 
                 DDBG("[Diff FS] write_at_entry: expanded file to %u sectors\n", needed_sectors);
-
-                // Write updated sector bitmap
-                if (write_sector_bitmap(&superblock) != 0)
-                {
-                    DDBG("[Diff FS] write_at_entry: failed to write sector bitmap\n");
-                    return -1;
-                }
             }
             else
             {
