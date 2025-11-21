@@ -112,6 +112,8 @@ int filesystem_fstat(int fd, filesystem_stat_t *st);
 int filesystem_create(const char *path, uint32_t initial_size);
 int filesystem_delete(const char *path);
 int filesystem_rename(const char *old_path, const char *new_path);
+int filesystem_mkdir(const char *path);
+int filesystem_rmdir(const char *path);
 
 // Bitmaps
 
@@ -131,4 +133,3 @@ void free_sectors(uint32_t start, uint32_t count);
 
 int write_file_table(const SuperBlock* sb);
 int write_sector_bitmap(const SuperBlock* sb);
-

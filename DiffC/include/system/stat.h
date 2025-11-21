@@ -10,6 +10,7 @@ typedef unsigned int mode_t;
 #define _MODE_T_DEFINED
 #endif
 int mkdir(const char *path, mode_t mode);
+int rmdir(const char *path);
 #endif
 
 typedef struct 
@@ -19,6 +20,5 @@ typedef struct
 
 int stat(const char *path, fs_stat_t *stat);
 int fstat(int fd, fs_stat_t *stat);
-
 
 

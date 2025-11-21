@@ -1493,6 +1493,9 @@ int filesystem_close(int fd)
         return -1;
     }
 
+    // Write back the file table to persist any size changes made during writes
+    write_file_table(&superblock);
+
     s_fd_table[fd].entry_index = (uint32_t)-1;
     s_fd_table[fd].offset = 0;
     s_fd_table[fd].in_use = 0;
@@ -1813,6 +1816,90 @@ int filesystem_create(const char* path, uint32_t initial_size)
     return 0;
 }
 
+int filesystem_mkdir(const char *path)
+{
+    char parent_path[512];
+    char dirname[MAX_FILENAME_LEN];
+    uint32_t parent_id;
+    int entry_idx;
+    FileEntry *entry;
+
+    if (!path || !path[0] || !file_table)
+    {
+        return -1;
+    }
+
+    if (split_path(path, parent_path, sizeof(parent_path),
+                   dirname, sizeof(dirname)) != 0)
+    {
+        return -1;
+    }
+
+    if (dirname[0] == '\0' ||
+        strcmp(dirname, ".") == 0 ||
+        strcmp(dirname, "..") == 0)
+    {
+        return -1;
+    }
+
+    spin_lock(&file_table_lock);
+
+    if (parent_path[0] == '/' && parent_path[1] == '\0')
+    {
+        parent_id = detect_root_id(file_table);
+    }
+    else
+    {
+        int parent_idx = find_entry_by_path_nolock(file_table, parent_path);
+        if (parent_idx < 0)
+        {
+            spin_unlock(&file_table_lock);
+            return -1;
+        }
+
+        if (file_table->entries[parent_idx].type != ENTRY_TYPE_DIR)
+        {
+            spin_unlock(&file_table_lock);
+            return -1;
+        }
+
+        parent_id = file_table->entries[parent_idx].entry_id;
+    }
+
+    if (find_entry_in_dir(file_table, parent_id, dirname) >= 0)
+    {
+        spin_unlock(&file_table_lock);
+        return -2;
+    }
+
+    entry_idx = find_free_entry(file_bitmap, MAX_FILES);
+    if (entry_idx < 0)
+    {
+        spin_unlock(&file_table_lock);
+        return -1;
+    }
+
+    set_bitmap_bit(file_bitmap, entry_idx);
+    entry = &file_table->entries[entry_idx];
+    memset(entry, 0, sizeof(FileEntry));
+    entry->entry_id = (uint32_t)(entry_idx + 1);
+    entry->parent_id = parent_id;
+    entry->type = ENTRY_TYPE_DIR;
+    (void)strlcpy(entry->filename, dirname, MAX_FILENAME_LEN);
+    entry->created_timestamp = 0;
+    entry->modified_timestamp = 0;
+    file_table->count++;
+
+    spin_unlock(&file_table_lock);
+
+    if (write_file_table(&superblock) != 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
 // Write data to a file at current offset
 static int write_at_entry(FileEntry* fe, uint32_t offset, const void* buffer, uint32_t count)
 {
@@ -2033,11 +2120,8 @@ int filesystem_write(int fd, const void* buffer, uint32_t count)
 
     spin_unlock(&file_table_lock);
 
-    // Write back the updated file table to persist size changes (outside the lock)
-    if (r > 0)
-    {
-        write_file_table(&superblock);
-    }
+    // Don't write file table on every write - defer until file close for performance
+    // The file size is updated in memory, will be persisted when file is closed
 
     return r;
 }
@@ -2104,6 +2188,62 @@ int filesystem_delete(const char* path)
     }
 
     DDBG("[Diff FS] filesystem_delete: deleted '%s'\n", path);
+
+    return 0;
+}
+
+int filesystem_rmdir(const char *path)
+{
+    int idx;
+    FileEntry *entry;
+
+    if (!path || !path[0] || !file_table)
+    {
+        return -1;
+    }
+
+    spin_lock(&file_table_lock);
+
+    idx = find_entry_by_path_nolock(file_table, path);
+    if (idx < 0)
+    {
+        spin_unlock(&file_table_lock);
+        return -1;
+    }
+
+    entry = &file_table->entries[idx];
+    if (entry->type != ENTRY_TYPE_DIR)
+    {
+        spin_unlock(&file_table_lock);
+        return -3;
+    }
+
+    if (entry->entry_id == detect_root_id(file_table))
+    {
+        spin_unlock(&file_table_lock);
+        return -1;
+    }
+
+    for (int i = 0; i < MAX_FILES; i++)
+    {
+        const FileEntry *child = &file_table->entries[i];
+        if (child->entry_id != 0 && child->parent_id == entry->entry_id)
+        {
+            spin_unlock(&file_table_lock);
+            return -2;
+        }
+    }
+
+    memset(entry, 0, sizeof(FileEntry));
+    clear_bitmap_bit(file_bitmap, idx);
+    file_table->count--;
+
+    spin_unlock(&file_table_lock);
+
+    if (write_file_table(&superblock) != 0)
+    {
+        return -1;
+    }
 
     return 0;
 }

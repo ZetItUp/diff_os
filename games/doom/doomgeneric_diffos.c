@@ -59,7 +59,7 @@ static unsigned char dg_translate_key(unsigned char raw)
         case 0x01:       return KEY_FIRE;
         case ' ':        return KEY_USE;
         case '\b':
-        case 0x7f:      return KEY_BACKSPACE;
+        case 0x7f:       return KEY_BACKSPACE;
         case '\t':       return KEY_TAB;
         case '\r':
         case '\n':       return KEY_ENTER;
@@ -158,12 +158,9 @@ void DG_SetWindowTitle(const char *title)
 
 int main(int argc, char **argv)
 {
-    printf("[DOOM-MAIN] Entry point reached! argc=%d\n", argc);
     printf("Starting Doom...\n");
 
-    printf("[DOOM-MAIN] About to call doomgeneric_Create\n");
     doomgeneric_Create(argc, argv);
-    printf("[DOOM-MAIN] doomgeneric_Create returned\n");
 
     for (;;)
     {

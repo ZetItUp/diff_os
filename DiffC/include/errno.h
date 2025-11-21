@@ -23,3 +23,4 @@ int *__errno_location(void);
 #define ENOSPC      28
 #define ERANGE      34
 #define ENOSYS      38
+#define ENOTEMPTY   39

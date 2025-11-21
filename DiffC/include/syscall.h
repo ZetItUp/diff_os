@@ -47,6 +47,10 @@ enum
     SYSTEM_GETEXECROOT = 34,
     SYSTEM_KEYBOARD_EVENT_GET = 35,
     SYSTEM_KEYBOARD_EVENT_TRY = 36,
+    SYSTEM_FILE_DELETE = 37,
+    SYSTEM_FILE_RENAME = 38,
+    SYSTEM_DIR_CREATE = 39,
+    SYSTEM_DIR_REMOVE = 40,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -238,6 +242,16 @@ static inline int system_read_dir(int handle, struct dirent *entry)
 static inline int system_close_dir(int handle)
 {
     return do_sys(SYSTEM_DIR_CLOSE, handle, 0, 0, 0);
+}
+
+static inline int system_mkdir(const char *path)
+{
+    return do_sys(SYSTEM_DIR_CREATE, (int)(uintptr_t)path, 0, 0, 0);
+}
+
+static inline int system_rmdir(const char *path)
+{
+    return do_sys(SYSTEM_DIR_REMOVE, (int)(uintptr_t)path, 0, 0, 0);
 }
 
 static inline int system_console_set_color(uint32_t fg, uint32_t bg)

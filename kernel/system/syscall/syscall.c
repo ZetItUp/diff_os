@@ -663,6 +663,18 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_DIR_CREATE:
+        {
+            ret = system_mkdir((const char*)arg0);
+
+            break;
+        }
+        case SYSTEM_DIR_REMOVE:
+        {
+            ret = system_rmdir((const char*)arg0);
+
+            break;
+        }
         default:
         {
             puts("[System Call] Unknown number: ");

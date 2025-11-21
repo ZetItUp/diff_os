@@ -264,3 +264,75 @@ int system_close_dir(int handle)
     dir_handle_free(handle);
     return 0;
 }
+
+int system_mkdir(const char *path)
+{
+    if (!file_table)
+    {
+        if (init_filesystem() != 0)
+        {
+            return -1;
+        }
+    }
+
+    char kpath[256];
+
+    if (path)
+    {
+        if (copy_string_from_user(kpath, path, sizeof(kpath)) < 0)
+        {
+            return -1;
+        }
+    }
+    else
+    {
+        kpath[0] = '\0';
+    }
+
+    process_t *proc = process_current();
+    const char *base = process_cwd_path(proc);
+    char abs_path[256];
+
+    if (path_normalize(base, kpath, abs_path, sizeof(abs_path)) != 0)
+    {
+        return -1;
+    }
+
+    return filesystem_mkdir(abs_path);
+}
+
+int system_rmdir(const char *path)
+{
+    if (!file_table)
+    {
+        if (init_filesystem() != 0)
+        {
+            return -1;
+        }
+    }
+
+    char kpath[256];
+
+    if (path)
+    {
+        if (copy_string_from_user(kpath, path, sizeof(kpath)) < 0)
+        {
+            return -1;
+        }
+    }
+    else
+    {
+        kpath[0] = '\0';
+    }
+
+    process_t *proc = process_current();
+    const char *base = process_cwd_path(proc);
+    char abs_path[256];
+
+    if (path_normalize(base, kpath, abs_path, sizeof(abs_path)) != 0)
+    {
+        return -1;
+    }
+
+    return filesystem_rmdir(abs_path);
+}

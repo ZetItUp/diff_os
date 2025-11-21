@@ -98,14 +98,6 @@ static byte saveg_read8(void)
 
 static void saveg_write8(byte value)
 {
-    static int write_count = 0;
-    write_count++;
-
-    if (write_count % 100 == 0)
-    {
-        printf("DEBUG: saveg_write8 call #%d, value=%u\n", write_count, value);
-    }
-
     if (fwrite(&value, 1, 1, save_stream) < 1)
     {
         if (!savegame_error)
@@ -177,19 +169,13 @@ static void saveg_write_pad(void)
     int padding;
     int i;
 
-    printf("DEBUG: saveg_write_pad calling ftell...\n");
     pos = ftell(save_stream);
-    printf("DEBUG: ftell returned %lu\n", pos);
-
     padding = (4 - (pos & 3)) & 3;
-    printf("DEBUG: padding = %d\n", padding);
 
     for (i=0; i<padding; ++i)
     {
-        printf("DEBUG: writing pad byte %d/%d\n", i+1, padding);
         saveg_write8(0);
     }
-    printf("DEBUG: saveg_write_pad done\n");
 }
 
 
@@ -786,12 +772,8 @@ static void saveg_write_player_t(player_t *str)
 {
     int i;
 
-    printf("DEBUG: saveg_write_player_t started\n");
-
     // mobj_t* mo;
-    printf("DEBUG: writing mo pointer %p\n", str->mo);
     saveg_writep(str->mo);
-    printf("DEBUG: wrote mo pointer\n");
 
     // playerstate_t playerstate;
     saveg_write_enum(str->playerstate);

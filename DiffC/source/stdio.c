@@ -670,7 +670,7 @@ int remove(const char *path)
     // Call syscall 37 (SYSTEM_FILE_DELETE)
     int ret;
     __asm__ volatile (
-        "int $0x80"
+        "int $0x66"
         : "=a" (ret)
         : "a" (37), "b" (path)
         : "memory"
@@ -687,7 +687,7 @@ int rename(const char *oldpath, const char *newpath)
     // Call syscall 38 (SYSTEM_FILE_RENAME)
     int ret;
     __asm__ volatile (
-        "int $0x80"
+        "int $0x66"
         : "=a" (ret)
         : "a" (38), "b" (oldpath), "c" (newpath)
         : "memory"

@@ -48,6 +48,8 @@ enum
     SYSTEM_KEYBOARD_EVENT_TRY = 36,
     SYSTEM_FILE_DELETE = 37,
     SYSTEM_FILE_RENAME = 38,
+    SYSTEM_DIR_CREATE = 39,
+    SYSTEM_DIR_REMOVE = 40,
 };
 
 struct syscall_frame 
@@ -96,6 +98,8 @@ int system_file_stat(const char *abs_path, filesystem_stat_t *user_st);
 int system_file_fstat(int file, filesystem_stat_t *user_st);
 int system_file_delete(const char *abs_path);
 int system_file_rename(const char *old_path, const char *new_path);
+int system_mkdir(const char *path);
+int system_rmdir(const char *path);
 
 int system_brk_set(void *new_break);
 void system_brk_init_window(uintptr_t image_base, uintptr_t image_size);
