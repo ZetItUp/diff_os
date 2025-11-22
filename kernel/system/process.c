@@ -16,6 +16,9 @@
 #include "dex/exl.h"
 #include "diff.h"
 #include "console.h"
+#include "system/messaging.h"
+#include "system/shared_mem.h"
+#include "interfaces.h"
 
 extern void enter_user_mode(uint32_t entry_eip, uint32_t user_stack_top) __attribute__((noreturn));
 
@@ -372,6 +375,11 @@ void process_exit_current(int exit_code)
     {
         // Store exit code for wait()
         p->exit_code = exit_code;
+
+        int pid = p->pid;
+        messaging_cleanup_process(pid);
+        shared_memory_cleanup_process(pid);
+        vbe_release_owner(pid);
     }
 
     // Restore console/video to default state before ending the process

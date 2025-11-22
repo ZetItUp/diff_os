@@ -3,6 +3,7 @@
 #include "system/usercopy.h"
 #include "system/syscall.h"
 #include "interfaces.h"
+#include "system/process.h"
 #include "stdint.h"
 #include "paging.h"
 #include "stdio.h"
@@ -31,6 +32,7 @@
 #endif
 
 vbe_exports_t g_vbe = {0};
+static int g_video_owner_pid = 0;
 
 typedef struct
 {
@@ -63,6 +65,17 @@ static inline void vbe_enable(uint16_t flags)
 int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_wh)
 {
     if (g_vbe.frame_buffer == NULL || g_vbe.bpp != 32)
+    {
+        return -1;
+    }
+
+    // Only allow the owning process to present
+    int pid = process_pid(process_current());
+    if (g_video_owner_pid == 0)
+    {
+        g_video_owner_pid = pid;
+    }
+    else if (pid != g_video_owner_pid)
     {
         return -1;
     }
@@ -156,6 +169,14 @@ void vbe_register(uint32_t phys_base, uint32_t width, uint32_t height, uint32_t 
     vbe_text_set_colors(0xFFAAAAAA, 0xFF000000);
     vbe_text_clear(0xFF000000);
     console_flush_log();
+}
+
+void vbe_release_owner(int pid)
+{
+    if (g_video_owner_pid == pid)
+    {
+        g_video_owner_pid = 0;
+    }
 }
 
 static inline uint32_t min_u32(uint32_t a, uint32_t b)

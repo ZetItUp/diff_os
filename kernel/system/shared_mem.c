@@ -434,3 +434,61 @@ int shared_memory_release(int handle)
     
     return 0;
 }
+
+void shared_memory_cleanup_process(int pid)
+{
+    shared_memory_lazy_init();
+
+    for (int i = 0; i < SHARED_MEMORY_MAX_OBJECTS; i++)
+    {
+        shared_memory_object_t *obj = &g_shared_memory[i];
+        if (!obj->used)
+        {
+            continue;
+        }
+
+        uint32_t flags;
+        spin_lock_irqsave(&obj->lock, &flags);
+
+        // Unmap mappings owned by pid
+        for (int m = 0; m < SHARED_MEMORY_MAX_ALLOWED_PIDS; m++)
+        {
+            if (obj->mappings[m].active && obj->mappings[m].pid == pid)
+            {
+                uintptr_t va = obj->mappings[m].va;
+                for (uint32_t p = 0; p < obj->page_count; p++)
+                {
+                    unmap_4kb_page((uint32_t)(va + p * PAGE_SIZE_4KB));
+                }
+                paging_flush_tlb();
+
+                obj->mappings[m].active = 0;
+                obj->mappings[m].pid = 0;
+                obj->mappings[m].va = 0;
+                if (obj->mapping_count > 0)
+                {
+                    obj->mapping_count--;
+                }
+                if (obj->refcount > 0)
+                {
+                    obj->refcount--;
+                }
+            }
+        }
+
+        // If owner died or refcount is zero, free the object
+        if (obj->owner_pid == pid || obj->refcount <= 0)
+        {
+            for (uint32_t p = 0; p < obj->page_count; p++)
+            {
+                if (obj->phys_pages[p])
+                {
+                    free_phys_page(obj->phys_pages[p]);
+                }
+            }
+            memset(obj, 0, sizeof(*obj));
+        }
+
+        spin_unlock_irqrestore(&obj->lock, flags);
+    }
+}

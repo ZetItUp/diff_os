@@ -38,3 +38,4 @@ int shared_memory_grant(int handle, int pid);
 int shared_memory_map(int handle);
 int shared_memory_unmap(int handle);
 int shared_memory_release(int handle);
+void shared_memory_cleanup_process(int pid);

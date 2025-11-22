@@ -189,3 +189,25 @@ int system_msg_recv(int channel_id, void *buffer, uint32_t buf_len)
         return (int)msg_len;
     }
 }
+
+void messaging_cleanup_process(int pid)
+{
+    for (int i = 0; i < MESSAGES_MAX_CHANNELS; i++)
+    {
+        msg_channel_t *channel = &g_channels[i];
+        if (!channel->used)
+        {
+            continue;
+        }
+
+        uint32_t flags;
+        spin_lock_irqsave(&channel->lock, &flags);
+
+        if (channel->owner_pid == pid)
+        {
+            memset(channel, 0, sizeof(*channel));
+        }
+
+        spin_unlock_irqrestore(&channel->lock, flags);
+    }
+}

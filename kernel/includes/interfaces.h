@@ -83,6 +83,7 @@ void vbe_register(uint32_t phys_base, uint32_t width, uint32_t height, uint32_t 
 int  vbe_restore_default_mode(void);
 int  vbe_is_default_mode(void);
 void vbe_clear(uint32_t argb);
+void vbe_release_owner(int pid);
 
 // PCI interface wrappers
 void pci_interface_enum_devices(pci_enum_callback_t cb, void *ctx);
