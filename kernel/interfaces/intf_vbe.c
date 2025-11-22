@@ -1,6 +1,7 @@
 #include "graphics/vbe_graphics.h"
 #include "graphics/vbe_text.h"
 #include "system/usercopy.h"
+#include "system/syscall.h"
 #include "interfaces.h"
 #include "stdint.h"
 #include "paging.h"
@@ -373,4 +374,22 @@ int vbe_is_default_mode(void)
     return g_vbe.width  == g_vbe_default_mode.width  &&
            g_vbe.height == g_vbe_default_mode.height &&
            g_vbe.bpp    == g_vbe_default_mode.bpp;
+}
+
+int system_video_mode_get(video_mode_info_t *video_out)
+{
+    if(!video_out || g_vbe.frame_buffer == NULL)
+    {
+        return -1;
+    }
+
+    video_mode_info_t info =
+    {
+        .width = g_vbe.width,
+        .height = g_vbe.height,
+        .bpp = g_vbe.bpp,
+        .pitch = g_vbe.pitch,
+    };
+
+    return copy_to_user(video_out, &info, sizeof(info));
 }

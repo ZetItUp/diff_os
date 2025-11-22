@@ -675,6 +675,12 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_VIDEO_MODE_GET:
+        {
+            ret = system_video_mode_get((video_mode_info_t*)arg0);
+
+            break;
+        }
         default:
         {
             puts("[System Call] Unknown number: ");

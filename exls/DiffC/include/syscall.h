@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <dirent.h>
 #include <system/stat.h>
+#include <video.h>
 
 #define SYSCALL_VECTOR      0x66        // Different OS Specific
                                         
@@ -51,6 +52,7 @@ enum
     SYSTEM_FILE_RENAME = 38,
     SYSTEM_DIR_CREATE = 39,
     SYSTEM_DIR_REMOVE = 40,
+    SYSTEM_VIDEO_MODE_GET = 41,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -344,4 +346,9 @@ static inline int system_video_toggle_graphics_mode(void)
 static inline int system_video_get_graphics_mode(void)
 {
     return do_sys(SYSTEM_VIDEO_GET_GRAPHICS_MODE, 0, 0, 0, 0);
+}
+
+static inline int system_video_mode_get(video_mode_info_t *video_out)
+{
+    return do_sys(SYSTEM_VIDEO_MODE_GET, (int)video_out, 0, 0, 0);
 }

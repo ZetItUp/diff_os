@@ -1,5 +1,5 @@
 {
-  "diffc": [
+  "diffc.exl": [
     "printf",
     "puts",
     "putchar",
@@ -12,5 +12,8 @@
     "fseek",
     "ftell",
     "fgets"
+  ],
+  "diffwm.exl": [
+    "diffwm_lib_present"
   ]
 }

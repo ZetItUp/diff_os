@@ -7,6 +7,14 @@ from pathlib import Path
 
 USAGE = "Usage: gen_imports.py <elf_path> <out_dir> [libmap_json] [default_exl=diffc.exl]"
 
+def normalize_exl(name):
+    if not name:
+        return "diffc.exl"
+    name = str(name).strip()
+    if not name.endswith(".exl"):
+        name += ".exl"
+    return name
+
 def load_libmap(path):
     if not path or not os.path.exists(path):
         return {}
@@ -16,10 +24,10 @@ def load_libmap(path):
     if all(isinstance(v, list) for v in data.values()):
         for exl, syms in data.items():
             for s in syms:
-                sym_to_exl[str(s)] = exl
+                sym_to_exl[str(s)] = normalize_exl(exl)
     else:
         for s, exl in data.items():
-            sym_to_exl[str(s)] = str(exl)
+            sym_to_exl[str(s)] = normalize_exl(exl)
     return sym_to_exl
 
 def get_undefined_symbols(elf_path):
@@ -59,8 +67,10 @@ def main():
     sym_to_exl_map = load_libmap(libmap_json)
 
     sym2lib = {}
+    default_exl = normalize_exl(default_exl)
+
     for s in syms:
-        exl = sym_to_exl_map.get(s, default_exl)
+        exl = normalize_exl(sym_to_exl_map.get(s, default_exl))
         sym2lib[s] = exl
 
     libs = sorted(set(sym2lib.values())) if sym2lib else []
@@ -80,4 +90,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -50,6 +50,7 @@ enum
     SYSTEM_FILE_RENAME = 38,
     SYSTEM_DIR_CREATE = 39,
     SYSTEM_DIR_REMOVE = 40,
+    SYSTEM_VIDEO_MODE_GET = 41,
 };
 
 struct syscall_frame 
@@ -74,6 +75,14 @@ struct syscall_frame
     uint32_t useresp;
     uint32_t ss;
 };
+
+typedef struct
+{
+    uint32_t width;
+    uint32_t height;
+    uint32_t bpp;
+    uint32_t pitch;
+} video_mode_info_t;
 
 int system_call_dispatch(struct syscall_frame *f);
 void system_call_init(void);
@@ -111,3 +120,5 @@ int system_video_mode_set(int w, int h, int bpp);
 int system_chdir(const char *path);
 int system_getcwd(char *out, size_t out_sz);
 int system_getexecroot(char *out, size_t out_sz);
+
+int system_video_mode_get(video_mode_info_t *video_out);

@@ -199,7 +199,27 @@ def scrub_vex_nops_at_entry(text_buf, text_off, entry_off, verbose=False):
         print(f"[PATCH] Replaced VEX NOPs with classic NOPs at entry (offset 0x{entry_off:08x})")
 
 
-def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbose=False):
+def load_import_map(path):
+    if not path:
+        return {}
+    mapping = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or "->" not in line:
+                    continue
+                sym, exl = line.split("->", 1)
+                sym = sym.strip()
+                exl = exl.strip()
+                if sym:
+                    mapping[sym] = exl if exl.endswith(".exl") else f"{exl}.exl"
+    except FileNotFoundError:
+        pass
+    return mapping
+
+
+def build_dex(dumpfile, elffile, outfile, default_exl, import_map_path=None, forced_entry=None, verbose=False):
     sections, symbols, relocs = parse_dump(dumpfile)
 
     sec_list = sorted(sections.values(), key=lambda s: s["off"])
@@ -254,22 +274,27 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
         return None, None, 0
 
     strtab = StrTab()
-    if default_exl:
-        strtab.add(default_exl)
+    import_map = load_import_map(import_map_path)
+    default_exl = default_exl or "diffc.exl"
+    if not default_exl.endswith(".exl"):
+        default_exl += ".exl"
+    strtab.add(default_exl)
 
     imports = []
     import_keys = set()
 
-    def ensure_import(symname, is_func=True):
-        exlname = default_exl or "diffc.exl"
-        key = (exlname, symname, 0 if is_func else 1)
+    def ensure_import(symname, exlname, is_func=True):
+        libname = exlname or default_exl
+        if not libname.endswith(".exl"):
+            libname += ".exl"
+        key = (libname, symname, 0 if is_func else 1)
         if key in import_keys:
-            e = strtab.add(exlname)
+            e = strtab.add(libname)
             s = strtab.add(symname)
             for i, (E, S, t, _) in enumerate(imports):
                 if E == e and S == s and t == (0 if is_func else 1):
                     return i
-        e_off = strtab.add(exlname)
+        e_off = strtab.add(libname)
         s_off = strtab.add(symname)
         t = 0 if is_func else 1
         imports.append((e_off, s_off, t, 0))
@@ -284,7 +309,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
             if sym["shndx"] == 0 and sym["name"]:
                 used_undef.add(sym["name"])
     for name in sorted(used_undef):
-        ensure_import(name, True)
+        ensure_import(name, import_map.get(name, default_exl), True)
 
     if len(imports) > MAX_IMP:
         print(f"[FATAL] too many imports: {len(imports)} > {MAX_IMP}")
@@ -371,7 +396,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
                 disp = (S - P) & 0xFFFFFFFF
                 struct.pack_into("<I", tgt_buf, buf_pos, disp)
             else:
-                idx = ensure_import(name or f"@{si}", True)
+                idx = ensure_import(name or f"@{si}", import_map.get(name, default_exl), True)
                 reloc_table.append((img_off, idx, DEX_PC32, 0))
             continue
 
@@ -464,7 +489,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, forced_entry=None, verbos
         # Symbol undefined or none.
         if etype == R_386_GOT32X:
             opcode = tgt_buf[buf_pos-2:buf_pos] if buf_pos >= 2 else b""
-            idx = ensure_import(name or f"@{si}", True)
+            idx = ensure_import(name or f"@{si}", import_map.get(name, default_exl), True)
             if opcode in (b"\xff\x15", b"\xff\x25"):
                 tgt_buf[buf_pos-2] = 0xe8 if opcode == b"\xff\x15" else 0xe9
                 struct.pack_into("<I", tgt_buf, buf_pos - 1, 0)
@@ -607,10 +632,13 @@ def main():
     ap.add_argument("outfile", help="output .dex file")
     ap.add_argument("--default-exl", default="diffc.exl",
                     help="EXL name to bind unresolved imports to (default: diffc.exl)")
+    ap.add_argument("--imports-map", default=None,
+                    help="Optional imports_map.txt produced by gen_imports.py for per-symbol EXL mapping")
     ap.add_argument("--entry", dest="entry", default=None, help="force entry symbol")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
-    build_dex(args.dumpfile, args.elffile, args.outfile, args.default_exl, args.entry, args.verbose)
+    build_dex(args.dumpfile, args.elffile, args.outfile, args.default_exl,
+              import_map_path=args.imports_map, forced_entry=args.entry, verbose=args.verbose)
 
 
 if __name__ == "__main__":

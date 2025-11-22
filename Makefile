@@ -19,6 +19,8 @@ MKDIFFOS = $(BUILD)/mkdiffos
 TOOLS_DIR = tools
 DRIVERS_DIR = drivers
 IMAGE = $(TARGET)
+EXLS_DIR = exls
+EXL_SUBDIRS := $(patsubst %/,%,$(dir $(wildcard $(EXLS_DIR)/*/Makefile)))
 
 DEBUG ?=0
 ifeq ($(DEBUG),1)
@@ -95,7 +97,7 @@ KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))
 # Targets
 TARGET = $(BUILD)/diffos.img
 
-.PHONY: all clean run games debug tools drivers
+.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean
 
 all: tools drivers $(TARGET)
 
@@ -108,7 +110,7 @@ drivers:
 	@$(MAKE) -C $(DRIVERS_DIR) all --no-print-directory
 
 # Main OS image
-$(TARGET): tools $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
+$(TARGET): tools exls $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] Creating OS image"
 	@cp $(BUILD)/kernel.bin image/system/kernel.bin
 	@$(MKDIFFOS) $(TARGET) 64 $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
@@ -229,9 +231,29 @@ debug: all
 	@echo "[GDB] Starting debugger"
 	@gdb -x 1kernel.gdb
 
-diffc:
-	@echo "[DiffC] Compiling library!"
-	@$(MAKE) -C DiffC/
+exls:
+	@dirs="$(EXL_SUBDIRS)"; \
+	if [ -z "$$dirs" ]; then \
+		echo "[EXLS] No libraries to build"; \
+	else \
+		for d in $$dirs; do \
+			name=$$(basename $$d); \
+			echo "[EXLS] Building $$name"; \
+			$(MAKE) -C $$d --no-print-directory || exit $$?; \
+		done; \
+	fi
+
+exls-clean:
+	@dirs="$(EXL_SUBDIRS)"; \
+	if [ -z "$$dirs" ]; then \
+		echo "[EXLS] No libraries to clean"; \
+	else \
+		for d in $$dirs; do \
+			name=$$(basename $$d); \
+			echo "[EXLS] Cleaning $$name"; \
+			$(MAKE) -C $$d clean --no-print-directory || exit $$?; \
+		done; \
+	fi
 
 progs:
 	@echo "[Programs] Compiling all programs"
@@ -244,8 +266,8 @@ games:
 
 allclean: clean
 	@echo "[CLEAN] Cleaning everything!"
-	@$(MAKE) -C DiffC/ clean
-	@$(MAKE) -C programs/ clean
+	@$(MAKE) exls-clean --no-print-directory
+	@$(MAKE) -C programs/ clean --no-print-directory
 
 # Clean build
 clean:

@@ -8,6 +8,97 @@
 static pci_device_t g_pci_devices[PCI_MAX_ENTRIES];
 static unsigned g_pci_count = 0;
 
+static const char *pci_class_description(uint8_t class_code, uint8_t subclass, uint8_t prog_if)
+{
+    switch (class_code)
+    {
+        case 0x00: return "Unclassified device";
+        case 0x01:
+            switch (subclass)
+            {
+                case 0x00: return "SCSI storage controller";
+                case 0x01: return (prog_if == 0x80) ? "IDE (legacy)" : "IDE storage controller";
+                case 0x02: return "Floppy disk controller";
+                case 0x03: return "IPI storage controller";
+                case 0x04: return "RAID controller";
+                case 0x05: return "ATA controller";
+                case 0x06: return "Serial ATA controller";
+                default: return "Mass storage controller";
+            }
+        case 0x02:
+            switch (subclass)
+            {
+                case 0x00: return "Ethernet controller";
+                case 0x01: return "Token Ring controller";
+                case 0x02: return "FDDI controller";
+                case 0x03: return "ATM controller";
+                default: return "Network controller";
+            }
+        case 0x03:
+            switch (subclass)
+            {
+                case 0x00: return "VGA compatible controller";
+                case 0x01: return "XGA controller";
+                case 0x02: return "3D controller";
+                default: return "Display controller";
+            }
+        case 0x04: return "Multimedia controller";
+        case 0x05: return "Memory controller";
+        case 0x06:
+            switch (subclass)
+            {
+                case 0x00: return "Host bridge";
+                case 0x01: return "ISA bridge";
+                case 0x02: return "EISA bridge";
+                case 0x04: return "PCI-to-PCI bridge";
+                case 0x80: return "Other bridge device";
+                default: return "Bridge device";
+            }
+        case 0x07: return "Simple communication controller";
+        case 0x08: return "System peripheral";
+        case 0x09: return "Input device controller";
+        case 0x0A: return "Docking station";
+        case 0x0B: return "Processor";
+        case 0x0C:
+            switch (subclass)
+            {
+                case 0x00: return "FireWire controller";
+                case 0x01: return "ACCESS bus";
+                case 0x02: return "SSA";
+                case 0x03:
+                    switch (prog_if)
+                    {
+                        case 0x00: return "USB UHCI controller";
+                        case 0x10: return "USB OHCI controller";
+                        case 0x20: return "USB EHCI controller";
+                        case 0x30: return "USB xHCI controller";
+                        default: return "USB controller";
+                    }
+                default: return "Serial bus controller";
+            }
+        default: return "Unknown class";
+    }
+}
+
+static void pci_dump_device_list(void)
+{
+    for (unsigned i = 0; i < g_pci_count; ++i)
+    {
+        const pci_device_t *dev = &g_pci_devices[i];
+        printf("  bus %02u dev %02u func %u | vendor=%04x device=%04x | class=%s (%02x/%02x/%02x) hdr=%02x\n",
+               dev->bus,
+               dev->device,
+               dev->function,
+               dev->vendor_id,
+               dev->device_id,
+               pci_class_description(dev->class_code, dev->subclass, dev->prog_if),
+               dev->class_code,
+               dev->subclass,
+               dev->prog_if,
+               dev->header_type);
+    }
+}
+
 // Legacy Type-1 config space address builder
 static uint32_t pci_make_addr(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset)
 {
@@ -124,6 +215,10 @@ void pci_init(void)
     }
 
     printf("[PCI] Found %u device(s)\n", g_pci_count);
+    if (g_pci_count > 0)
+    {
+        pci_dump_device_list();
+    }
 }
 
 // Simple enumerator so drivers can look at what we found
