@@ -53,6 +53,10 @@ enum
     SYSTEM_DIR_CREATE = 39,
     SYSTEM_DIR_REMOVE = 40,
     SYSTEM_VIDEO_MODE_GET = 41,
+    SYSTEM_MESSAGE_CREATE_CHANNEL = 42,
+    SYSTEM_MESSAGE_CONNECT_CHANNEL = 43,
+    SYSTEM_MESSAGE_SEND = 44,
+    SYSTEM_MESSAGE_RECEIVE = 45,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -352,3 +356,24 @@ static inline int system_video_mode_get(video_mode_info_t *video_out)
 {
     return do_sys(SYSTEM_VIDEO_MODE_GET, (int)video_out, 0, 0, 0);
 }
+
+static inline int system_message_create_channel(int id)
+{
+    return do_sys(SYSTEM_MESSAGE_CREATE_CHANNEL, id, 0, 0, 0);
+}
+
+static inline int system_message_connect_channel(int id)
+{
+    return do_sys(SYSTEM_MESSAGE_CONNECT_CHANNEL, id, 0, 0, 0);
+}
+
+static inline int system_message_send(int channel_id, const void *buffer, uint32_t len)
+{
+    return do_sys(SYSTEM_MESSAGE_SEND, channel_id, (int)(uintptr_t)buffer, (int)len, 0); 
+}
+
+static inline int system_message_receive(int channel_id, void *buffer, uint32_t buf_len)
+{
+    return do_sys(SYSTEM_MESSAGE_RECEIVE, channel_id, (int)(uintptr_t)buffer, (int)buf_len, 0);
+}
+

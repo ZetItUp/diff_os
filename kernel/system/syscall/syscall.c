@@ -7,6 +7,7 @@
 #include "system/scheduler.h"
 #include "system/threads.h"
 #include "system/process.h"
+#include "system/messaging.h"
 #include "console.h"
 #include "stdio.h"
 #include "paging.h"
@@ -678,6 +679,30 @@ int system_call_dispatch(struct syscall_frame *f)
         case SYSTEM_VIDEO_MODE_GET:
         {
             ret = system_video_mode_get((video_mode_info_t*)arg0);
+
+            break;
+        }
+        case SYSTEM_MESSAGE_CREATE_CHANNEL:
+        {
+            ret = system_msg_create_channel(arg0);
+
+            break;
+        }
+        case SYSTEM_MESSAGE_CONNECT_CHANNEL:
+        {
+            ret = system_msg_connect_channel(arg0);
+
+            break;
+        }
+        case SYSTEM_MESSAGE_SEND:
+        {
+            ret = system_msg_send(arg0, (const void*)arg1, (uint32_t)arg2);
+
+            break;
+        }
+        case SYSTEM_MESSAGE_RECEIVE:
+        {
+            ret = system_msg_recv(arg0, (void*)arg1, (uint32_t)arg2);
 
             break;
         }

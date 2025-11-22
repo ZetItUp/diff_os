@@ -1,0 +1,131 @@
+#include "string.h"
+#include "system/usercopy.h"
+#include "system/process.h"
+#include "system/messaging.h"
+
+static msg_channel_t g_channels[MESSAGES_MAX_CHANNELS];
+
+static int find_channel_by_id(int id)
+{
+    for(int i = 0; i < MESSAGES_MAX_CHANNELS; i++)
+    {
+        if(g_channels[i].used && g_channels[i].id == id)
+        {
+            return i;
+        }
+    }  
+
+    return -1;
+}
+
+// Create a message channel
+int system_msg_create_channel(int id)
+{
+    int existing = find_channel_by_id(id);
+
+    if(existing >= 0)
+    {
+        return existing;
+    }
+
+    for(int i = 0; i < MESSAGES_MAX_CHANNELS; i++)
+    {
+        if(!g_channels[i].used)
+        {
+            memset(&g_channels[i], 0, sizeof(g_channels[i]));
+            g_channels[i].used = 1;
+            g_channels[i].id = id;
+            g_channels[i].owner_pid = process_pid(process_current());
+            
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+int system_msg_connect_channel(int id)
+{
+    return find_channel_by_id(id);
+}
+
+int system_msg_send(int channel_id, const void *buffer, uint32_t len)
+{
+    if(channel_id < 0 || channel_id >= MESSAGES_MAX_CHANNELS)
+    {
+        return -1;
+    }
+
+    msg_channel_t *channel = &g_channels[channel_id];
+
+    if(!channel->used)
+    {
+        return -1;
+    }
+
+    if(len == 0 || len > MESSAGES_MAX)
+    {
+        return -2;
+    }
+
+    if(channel->count >= MESSAGES_QUEUE_LEN)
+    {
+        // Full
+        return -3;
+    }
+
+    uint16_t slot = channel->tail;
+    channel->sizes[slot] = (uint16_t)len;
+
+    if(copy_from_user(channel->messages[slot], buffer, len) != 0)
+    {
+        // Bad user buffer
+        return -4;
+    }
+
+    channel->tail = (uint16_t)((channel->tail + 1) % MESSAGES_QUEUE_LEN);
+    channel->count++;
+
+    return (int)len;
+}
+
+int system_msg_recv(int channel_id, void *buffer, uint32_t buf_len)
+{
+    if(channel_id < 0 || channel_id >= MESSAGES_MAX_CHANNELS)
+    {
+        return -1;
+    }
+
+    msg_channel_t *channel = &g_channels[channel_id];
+
+    if(!channel->used)
+    {
+        return -1;
+    }
+
+    if(channel->count == 0)
+    {
+        // Empty
+        return -2;
+    }
+
+    uint16_t slot = channel->head;
+    uint16_t msg_len = channel->sizes[slot];
+
+    if(buf_len < msg_len)
+    {
+        // Caller buffer too small
+        return -3;
+    }
+
+    if(copy_to_user(buffer, channel->messages[slot], msg_len) != 0)
+    {
+        // Bad user buffer
+        return -4;
+    }
+
+    channel->head = (uint16_t)((channel->head + 1) % MESSAGES_QUEUE_LEN);
+    channel->count--;
+
+    return (int)msg_len;
+}
