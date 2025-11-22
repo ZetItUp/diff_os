@@ -62,6 +62,7 @@ KERNEL_SRC = \
 	kernel/system/scheduler.c \
 	kernel/system/spinlock.c \
 	kernel/system/messaging.c \
+	kernel/system/shared_mem.c \
 	kernel/system/pci.c \
 	kernel/dex/dex_loader.c \
 	kernel/dex/exl_loader.c \

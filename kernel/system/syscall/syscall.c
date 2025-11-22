@@ -15,6 +15,7 @@
 #include "dex/dex.h"
 #include "diff.h"
 #include "timer.h"
+#include "system/shared_mem.h"
 
 struct dirent;
 
@@ -703,6 +704,36 @@ int system_call_dispatch(struct syscall_frame *f)
         case SYSTEM_MESSAGE_RECEIVE:
         {
             ret = system_msg_recv(arg0, (void*)arg1, (uint32_t)arg2);
+
+            break;
+        }
+        case SYSTEM_SHARED_MEMORY_CREATE:
+        {
+            ret = shared_memory_create((uint32_t)arg0);
+
+            break;
+        }
+        case SYSTEM_SHARED_MEMORY_GRANT:
+        {
+            ret = shared_memory_grant(arg0, arg1);
+
+            break;
+        }
+        case SYSTEM_SHARED_MEMORY_MAP:
+        {
+            ret = shared_memory_map(arg0);
+
+            break;
+        }
+        case SYSTEM_SHARED_MEMORY_UNMAP:
+        {
+            ret = shared_memory_unmap(arg0);
+
+            break;
+        }
+        case SYSTEM_SHARED_MEMORY_RELEASE:
+        {
+            ret = shared_memory_release(arg0);
 
             break;
         }

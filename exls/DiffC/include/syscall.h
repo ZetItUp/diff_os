@@ -57,6 +57,11 @@ enum
     SYSTEM_MESSAGE_CONNECT_CHANNEL = 43,
     SYSTEM_MESSAGE_SEND = 44,
     SYSTEM_MESSAGE_RECEIVE = 45,
+    SYSTEM_SHARED_MEMORY_CREATE = 46,
+    SYSTEM_SHARED_MEMORY_GRANT = 47,
+    SYSTEM_SHARED_MEMORY_MAP = 48,
+    SYSTEM_SHARED_MEMORY_UNMAP = 49,
+    SYSTEM_SHARED_MEMORY_RELEASE = 50,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -377,3 +382,27 @@ static inline int system_message_receive(int channel_id, void *buffer, uint32_t 
     return do_sys(SYSTEM_MESSAGE_RECEIVE, channel_id, (int)(uintptr_t)buffer, (int)buf_len, 0);
 }
 
+static inline int system_shared_memory_create(uint32_t size_bytes)
+{
+    return do_sys(SYSTEM_SHARED_MEMORY_CREATE, (int)size_bytes, 0, 0, 0);
+}
+
+static inline int system_shared_memory_grant(int handle, int pid)
+{
+    return do_sys(SYSTEM_SHARED_MEMORY_GRANT, handle, pid, 0, 0);
+}
+
+static inline int system_shared_memory_map(int handle)
+{
+    return do_sys(SYSTEM_SHARED_MEMORY_MAP, handle, 0, 0, 0);
+}
+
+static inline int system_shared_memory_unmap(int handle)
+{
+    return do_sys(SYSTEM_SHARED_MEMORY_UNMAP, handle, 0, 0, 0);
+}
+
+static inline int system_shared_memory_release(int handle)
+{
+    return do_sys(SYSTEM_SHARED_MEMORY_RELEASE, handle, 0, 0, 0);
+}
