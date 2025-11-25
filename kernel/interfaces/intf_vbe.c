@@ -34,6 +34,18 @@
 vbe_exports_t g_vbe = {0};
 static int g_video_owner_pid = 0;
 
+static int vbe_ensure_owner(void)
+{
+    int pid = process_pid(process_current());
+
+    if (g_video_owner_pid == 0)
+    {
+        g_video_owner_pid = pid;
+    }
+
+    return (pid == g_video_owner_pid) ? 0 : -1;
+}
+
 typedef struct
 {
     uint32_t width;
@@ -70,12 +82,7 @@ int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_
     }
 
     // Only allow the owning process to present
-    int pid = process_pid(process_current());
-    if (g_video_owner_pid == 0)
-    {
-        g_video_owner_pid = pid;
-    }
-    else if (pid != g_video_owner_pid)
+    if (vbe_ensure_owner() != 0)
     {
         return -1;
     }
@@ -370,6 +377,11 @@ static int vbe_apply_mode(uint32_t w, uint32_t h, uint32_t bpp)
 
 int system_video_mode_set(int w, int h, int bpp)
 {
+    if (vbe_ensure_owner() != 0)
+    {
+        return -1;
+    }
+
     return vbe_apply_mode((uint32_t)w, (uint32_t)h, (uint32_t)bpp);
 }
 

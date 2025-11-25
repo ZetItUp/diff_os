@@ -20,6 +20,7 @@ typedef struct
     int16_t mouse_y;
     uint8_t mouse_buttons;
 } diffwm_event_t;
+ // already allowed
 
 diff_window_t* diff_window_create(int x, int y, int width, int height, uint32_t flags);
 void diff_window_destroy(diff_window_t *window);
