@@ -390,7 +390,7 @@ def build_exl(input_path: Path, output_path: Path, libname: str,
             return data_buf, base - data_off
         return None, -1
 
-    # Helpers för EXL-namn och importmål
+    # Helpers för EXL-namn
     def norm_exl(name: str) -> str:
         if not name:
             return "diffc.exl"
@@ -400,12 +400,6 @@ def build_exl(input_path: Path, output_path: Path, libname: str,
 
     libname = norm_exl(libname)
     default_exl = norm_exl(default_exl)
-    sym_import_overrides = load_import_map(imports_map)
-
-    def import_target(sym_nm: str) -> str:
-        if sym_nm in sym_import_overrides:
-            return norm_exl(sym_import_overrides[sym_nm])
-        return default_exl
 
     # Strtab
     strtab = bytearray(b"\x00")
@@ -458,6 +452,13 @@ def build_exl(input_path: Path, output_path: Path, libname: str,
     # Imports
     exl_imports = []
     import_map = {}
+    sym_import_overrides = load_import_map(imports_map)
+
+    def import_target(sym_nm: str) -> str:
+        if sym_nm in sym_import_overrides:
+            return norm_exl(sym_import_overrides[sym_nm])
+        return default_exl
+
     def add_import(exl_nm: str, sym_nm: str, is_func: bool) -> int:
         if not sym_nm:
             fail("Försök att skapa import med tomt symbolnamn")
@@ -733,8 +734,7 @@ def main() -> None:
     ap.add_argument("input_elf")
     ap.add_argument("output_exl")
     ap.add_argument("libname", help="EXL-namn, t.ex. diffc.exl")
-    ap.add_argument("--import-exl", "--default-exl", dest="default_exl",
-                    default="diffc.exl",
+    ap.add_argument("--default-exl", default="diffc.exl",
                     help="Default EXL för odefinierade symboler (default: diffc.exl)")
     ap.add_argument("--imports-map", default=None,
                     help="Optional imports_map.txt (sym -> exl)")

@@ -2,8 +2,11 @@
 #include <protocol.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <system/messaging.h>
+#include <system/shared_mem.h>
 
-static int dmw_mailbox(void)
+static int dwm_mailbox(void)
 {
     static int channel = -1;
 
@@ -52,7 +55,7 @@ window_t* window_create(int x, int y, int width, int height, uint32_t flags)
     }
 
     dwm_msg_t reply;
-    if(receive_message(ch, &reply, sizeof(reply)) != 0)
+    if(receive_message(channel, &reply, sizeof(reply)) != 0)
     {
         return NULL;
     }
@@ -97,10 +100,10 @@ void window_draw(window_t *window, const void *pixels)
         memcpy((uint8_t*)window->pixels + y * window->pitch, (const uint8_t*)pixels + y * pitch, pitch);
     }
 
-    dwm_msg_t msg = 
+    dwm_msg_t msg =
     {
         .type = DWM_MSG_DRAW,
-        .id = window->id,
+        .window_id = window->id,
     };
 
     send_message(window->mailbox, &msg, sizeof(msg));
@@ -115,7 +118,7 @@ int window_poll_event(window_t *window, diffwm_event_t *event)
         return 0;
     }
 
-    if(msg.type != DWM_MSG_EVENT || msg.window_id != win->id)
+    if(msg.type != DWM_MSG_EVENT || msg.window_id != window->id)
     {
         return 0;
     }
@@ -135,7 +138,7 @@ void window_destroy(window_t *window)
     dwm_msg_t msg =
     {
         .type = DWM_MSG_DESTROY_WINDOW,
-        .id = window->id,
+        .window_id = window->id,
     };
 
     send_message(window->mailbox, &msg, sizeof(msg));

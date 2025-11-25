@@ -14,6 +14,7 @@ IMAGE_EXL := ../../image/system/exls
 LIBNAME   := diffc.exl
 VERBOSE   = 1
 IMPORT_EXL ?=
+IMPORTS_MAP ?=
 
 # --- Rekursiv wildcard för alla .c under source/
 rwildcard = $(foreach d,$(wildcard $(1)/*),$(call rwildcard,$(d),$(2))) $(wildcard $(1)/$(2))
@@ -43,7 +44,10 @@ exldir:
 # Bygg EXL från ELF
 $(EXLDIR)/$(LIBNAME): $(OBJDIR)/libdiffc.elf exldir $(ELF2DEX)
 	@rm -f $@
-	$(PYTHON) $(ELF2DEX) $< $@ $(LIBNAME) $(if $(IMPORT_EXL),--import-exl $(IMPORT_EXL)) $(if $(VERBOSE),--verbose)
+	$(PYTHON) $(ELF2DEX) $< $@ $(LIBNAME) \
+		$(if $(IMPORT_EXL),--import-exl $(IMPORT_EXL)) \
+		$(if $(IMPORTS_MAP),--imports-map $(IMPORTS_MAP)) \
+		$(if $(VERBOSE),--verbose)
 
 image_exl: $(EXLDIR)/$(LIBNAME)
 	@mkdir -p $(IMAGE_EXL)
@@ -51,4 +55,3 @@ image_exl: $(EXLDIR)/$(LIBNAME)
 
 clean:
 	rm -rf $(OBJDIR) $(EXLDIR) $(IMAGE_EXL)/$(LIBNAME)
-

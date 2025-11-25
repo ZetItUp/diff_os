@@ -1042,7 +1042,7 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     
     paging_switch_address_space(cr3_parent);
 
-    p = process_create_user_with_cr3((uint32_t)stub, user_sp, cr3_child, 16384);
+    p = process_create_user_with_cr3((uint32_t)stub, user_sp, cr3_child, 65536);
     if (!p)
     {
         paging_switch_address_space(cr3_child);
