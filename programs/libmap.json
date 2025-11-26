@@ -14,6 +14,10 @@
     "fgets"
   ],
   "diffwm.exl": [
-    "diffwm_lib_present"
+    "diffwm_lib_present",
+    "window_create",
+    "window_destroy",
+    "window_draw",
+    "window_poll_event"
   ]
 }

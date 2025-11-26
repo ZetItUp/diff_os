@@ -46,6 +46,7 @@ extern char __heap_end;
 // Bitmaps och refcounts
 static uint32_t *block_bitmap;
 static uint32_t max_blocks;
+static uint32_t max_phys_pages;
 static uint32_t phys_page_bitmap[(MAX_PHYS_PAGES + 31) / 32];
 static uint16_t phys_page_refcnt[MAX_PHYS_PAGES];
 
@@ -525,7 +526,16 @@ static void init_phys_bitmap(void)
 {
     for (int i = 0; i < (int)((MAX_PHYS_PAGES + 31) / 32); i++) phys_page_bitmap[i] = 0;
 
-    // Första 4MB reserveras
+    /* Mark pages beyond detected RAM as "used" so they are never handed out. */
+    if (max_phys_pages == 0 || max_phys_pages > MAX_PHYS_PAGES)
+        max_phys_pages = MAX_PHYS_PAGES;
+    for (uint32_t i = max_phys_pages; i < MAX_PHYS_PAGES; ++i)
+    {
+        set_phys_page((int)i);
+        phys_page_refcnt[i] = 1;
+    }
+
+    /* Reserve first 4MB (loader/BIOS etc) */
     for (int i = 0; i < (BLOCK_SIZE / PAGE_SIZE_4KB); i++)
     {
         set_phys_page(i);
@@ -539,6 +549,7 @@ void init_paging(uint32_t ram_mb)
 {
     max_blocks = ram_mb / 4;
     if (max_blocks > MAX_BLOCKS) max_blocks = MAX_BLOCKS;
+    max_phys_pages = max_blocks * (BLOCK_SIZE / PAGE_SIZE_4KB);
 
     static uint32_t bitmap_storage[(MAX_BLOCKS + 31) / 32];
     block_bitmap = bitmap_storage;
@@ -549,7 +560,7 @@ void init_paging(uint32_t ram_mb)
 
     for (int i = 0; i < 1024; i++) page_directory[i] = 0;
     for (int i = 0; i < (int)((max_blocks + 31) / 32); i++) block_bitmap[i] = 0;
-    for (int i = (BLOCK_SIZE / PAGE_SIZE_4KB); i < (int)MAX_PHYS_PAGES; i++) phys_page_refcnt[i] = 0;
+    for (int i = (BLOCK_SIZE / PAGE_SIZE_4KB); i < (int)max_phys_pages; i++) phys_page_refcnt[i] = 0;
 
     init_phys_bitmap();
     alloc_page_table(0, kernel_page_tables[0]);
@@ -935,7 +946,10 @@ int free_region(uint32_t virt_start, uint32_t size_mb)
 
 uint32_t alloc_phys_page(void)
 {
-    for (int i = 0; i < MAX_PHYS_PAGES; i++)
+    int limit = (max_phys_pages > 0 && max_phys_pages <= MAX_PHYS_PAGES)
+                    ? (int)max_phys_pages
+                    : MAX_PHYS_PAGES;
+    for (int i = 0; i < limit; i++)
     {
         if (!test_phys_page(i))
         {
@@ -950,7 +964,10 @@ uint32_t alloc_phys_page(void)
 void free_phys_page(uint32_t addr)
 {
     int index = (int)(addr / PAGE_SIZE_4KB);
-    if (index < MAX_PHYS_PAGES) phys_ref_dec_idx(index);
+    int limit = (max_phys_pages > 0 && max_phys_pages <= MAX_PHYS_PAGES)
+                    ? (int)max_phys_pages
+                    : MAX_PHYS_PAGES;
+    if (index < limit) phys_ref_dec_idx(index);
 }
 
 // ====== Flag helpers ======
@@ -998,6 +1015,11 @@ void paging_set_user(uint32_t addr, uint32_t size)
 
 void paging_update_flags(uint32_t addr, uint32_t size, uint32_t set_mask, uint32_t clear_mask)
 {
+    /* Never mark kernel addresses as PAGE_USER. */
+    if ((set_mask & PAGE_USER) && addr < USER_MIN)
+    {
+        set_mask &= ~PAGE_USER;
+    }
     uint32_t start = addr & ~((uint32_t)PAGE_SIZE_4KB - 1);
     uint32_t end   = ALIGN_UP(addr + size, PAGE_SIZE_4KB);
 
@@ -1114,13 +1136,33 @@ void ufree(void *ptr, size_t size)
         if (!(page_directory[dir_index] & PAGE_PRESENT)) continue;
         if (page_directory[dir_index] & PAGE_PS) continue;
 
-        uint32_t *table = (uint32_t*)(page_directory[dir_index] & 0xFFFFF000u);
+        uint32_t pt_phys = page_directory[dir_index] & 0xFFFFF000u;
+        uint32_t *table;
+        int need_kunmap = 0;
+
+        /* If PT is outside the static pool, temporarily map it */
+        if (pt_phys >= kpt_start && pt_phys < kpt_end)
+        {
+            table = (uint32_t*)pt_phys;
+        }
+        else
+        {
+            table = (uint32_t*)kmap_phys(pt_phys, 0);
+            need_kunmap = 1;
+        }
+
         uint32_t pte = table[table_index];
-        if (!(pte & PAGE_PRESENT)) continue;
+        if (!(pte & PAGE_PRESENT))
+        {
+            if (need_kunmap) kunmap_phys(0);
+            continue;
+        }
 
         free_phys_page(pte & 0xFFFFF000u);
         table[table_index] = 0;
         invlpg(va);
+
+        if (need_kunmap) kunmap_phys(0);
     }
 
     flush_tlb();
@@ -1595,8 +1637,15 @@ void dump_pde_pte(uint32_t lin)
         return;
     }
 
-    uint32_t *pt = (uint32_t*)(pde & 0xFFFFF000u);
+    uint32_t pt_phys = pde & 0xFFFFF000u;
+    uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 0);
+    if (!pt)
+    {
+        printf("[PTE] cannot map PT phys=%08x\n", pt_phys);
+        return;
+    }
     uint32_t pte = pt[ti];
+    kunmap_phys(0);
 
     printf("[PTE] idx=%u val=%08x  P=%u RW=%u U=%u\n",
            ti, pte, !!(pte & 0x001), !!(pte & 0x002), !!(pte & 0x004));

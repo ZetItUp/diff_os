@@ -1,7 +1,23 @@
 #pragma once
 
 #include <stdint.h>
-#include <diffgfx/graphics.h>
+#include <stdint.h>
+
+typedef enum
+{
+    DIFF_EVENT_NONE = 0,
+    DIFF_EVENT_KEY,
+    DIFF_EVENT_MOUSE
+} diff_event_type_t;
+
+typedef struct
+{
+    diff_event_type_t type;
+    uint8_t key;
+    int16_t mouse_x;
+    int16_t mouse_y;
+    uint8_t mouse_buttons;
+} diff_event_t;
 
 #define DWM_MAILBOX_ID  0x44574D31      // DWM1
 
@@ -36,8 +52,6 @@ typedef struct
         {
             uint32_t seq;
         } draw;
-        diffwm_event_t event;
+        diff_event_t event;
     };
 } dwm_msg_t;
-
-

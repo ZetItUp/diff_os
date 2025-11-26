@@ -656,7 +656,8 @@ def build_exl(input_path: Path, output_path: Path, libname: str,
     def W32(o,v): struct.pack_into("<I", hdr, o, u32(v, f"hdr@{o:#x}"))
     W32(0x00, DEX_MAGIC)
     W32(0x04, DEX_VER_MAJ); W32(0x08, DEX_VER_MIN)
-    W32(0x0C, text_off)                   # entry_offset = .text-start i bilden
+    # entry_offset = .text-start i bilden (relative within image)
+    W32(0x0C, text_off)
     W32(0x10, text_off); W32(0x14, len(text))
     W32(0x18, ro_off);   W32(0x1C, len(ro))
     W32(0x20, data_off); W32(0x24, len(dat))

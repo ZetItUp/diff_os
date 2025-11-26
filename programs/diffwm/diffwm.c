@@ -33,7 +33,7 @@ int main(void)
         return -2;
     }
 
-    diffwm_lib_present(); // Ensure DiffWM EXL is linked in
+    window_t* window = window_create(0, 0, 100, 100, 0); 
 
     for (uint32_t i = 0; i < pixels; ++i)
     {

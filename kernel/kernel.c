@@ -81,7 +81,8 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
     irq_init();
     timer_install();
     scheduler_init();
-    thread_create(init_thread, NULL, 4096);
+    /* init_thread walks drivers/FS/EXL and needs ample kernel stack; 4KB was overflowing into the heap metadata. */
+    thread_create(init_thread, NULL, 32 * 1024);
 
     asm volatile("sti");
     scheduler_start();

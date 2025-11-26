@@ -113,6 +113,14 @@ static int is_loading(const char *name)
     return 0;
 }
 
+static void dump_kcopy_bounds(const char *tag, const void *dst, size_t dst_sz,
+                              uint32_t off, uint32_t sz)
+{
+    if (!(g_debug_mask & DEBUG_AREA_EXL)) return;
+    printf("[EXL DEBUG] %s: dst=%p dst_sz=%u off=0x%08x sz=0x%08x\n",
+           tag, dst, (unsigned)dst_sz, off, sz);
+}
+
 static void push_loading(const char *name)
 {
     if (loading_depth < MAX_EXL_FILES)
@@ -158,6 +166,8 @@ void exl_invalidate_for_cr3(uint32_t cr3)
             /* Frigör kernel-kopior (umalloc-området tillhör user-CR3 och rivs av paging_destroy_address_space) */
             if (exl_files[i].symbol_table) kfree((void*)exl_files[i].symbol_table);
             if (exl_files[i].strtab)       kfree((void*)exl_files[i].strtab);
+            if (exl_files[i].header && ((uintptr_t)exl_files[i].header < USER_MIN))
+                kfree((void*)exl_files[i].header);
 
             /* Komprimera listan genom att flytta sista posten hit */
             if (i != exl_count - 1)
@@ -429,6 +439,8 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
         return NULL;
     }
 
+    EXL_DBG("[EXL] load_exl req='%s'\n", exl_name ? exl_name : "(null)");
+
     if (g_debug_mask & DEBUG_AREA_EXL)
     {
         printf("load_exl heapdump:\n");
@@ -439,6 +451,7 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     canon_exl_name(exl_name, tmp_name, sizeof(tmp_name));
 
     uint32_t cur_cr3 = read_cr3_local();
+    EXL_DBG("[EXL] normalized='%s' cr3=%08x exl_count=%u\n", tmp_name, cur_cr3, (unsigned)exl_count);
 
     /* Hitta redan laddat EXL i *samma CR3* */
     for (size_t i = 0; i < exl_count; ++i)
@@ -478,189 +491,39 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
 
     const FileEntry *fe = &ft->entries[fidx];
     uint32_t sz = fe->file_size_bytes;
-    /* --- add: read into kernel buffer first (avoid USER faults during early load) --- */
-    uint8_t *kfilebuf = (uint8_t*)kmalloc(sz);
-    if (kfilebuf)
-    {
-        /* make kernel buffer look like USER for read_file() */
-        paging_update_flags((uint32_t)kfilebuf, sz, PAGE_USER, 0);
-        int rkb = read_file(ft, path, kfilebuf);
-        paging_update_flags((uint32_t)kfilebuf, sz, 0, PAGE_USER);
-        if (rkb >= 0)
-        {
-            uint32_t fsz = (uint32_t)rkb;
-            if (!range_ok(0, sizeof(dex_header_t), fsz))
-            {
-                printf("[EXL] file too small for header\n");
-                kfree(kfilebuf);
-                pop_loading(tmp_name);
-                return NULL;
-            }
-            const dex_header_t *hdr = (const dex_header_t*)kfilebuf;
-            if (hdr->magic != DEX_MAGIC)
-            {
-                printf("[EXL] bad magic in %s (0x%08x)\n", path, hdr->magic);
-                kfree(kfilebuf);
-                pop_loading(tmp_name);
-                return NULL;
-            }
-            debug_print_hdr(hdr);
-            if (!range_ok(hdr->text_offset, hdr->text_size, fsz) ||
-                !range_ok(hdr->rodata_offset, hdr->rodata_size, fsz) ||
-                !range_ok(hdr->data_offset, hdr->data_size, fsz))
-            {
-                printf("[EXL] section range OOR (fsz=%u)\n", fsz);
-                kfree(kfilebuf);
-                pop_loading(tmp_name);
-                return NULL;
-            }
-            if ((hdr->import_table_count &&
-                 !range_ok(hdr->import_table_offset, hdr->import_table_count * sizeof(dex_import_t), fsz)) ||
-                (hdr->reloc_table_count &&
-                 !range_ok(hdr->reloc_table_offset, hdr->reloc_table_count * sizeof(dex_reloc_t), fsz)) ||
-                (hdr->symbol_table_count &&
-                 !range_ok(hdr->symbol_table_offset, hdr->symbol_table_count * sizeof(dex_symbol_t), fsz)) ||
-                (hdr->strtab_size &&
-                 !range_ok(hdr->strtab_offset, hdr->strtab_size, fsz)))
-            {
-                printf("[EXL] table range OOR\n");
-                kfree(kfilebuf);
-                pop_loading(tmp_name);
-                return NULL;
-            }
-
-            /* Build user image */
-            uint32_t text_sz = hdr->text_size;
-            uint32_t ro_sz   = hdr->rodata_size;
-            uint32_t data_sz = hdr->data_size;
-            uint32_t bss_sz  = hdr->bss_size;
-            uint32_t end_text = hdr->text_offset + text_sz;
-            uint32_t end_ro   = hdr->rodata_offset + ro_sz;
-            uint32_t end_dat  = hdr->data_offset + data_sz + bss_sz;
-            uint32_t max_end = end_text;
-            if (end_ro  > max_end) max_end = end_ro;
-            if (end_dat > max_end) max_end = end_dat;
-            uint32_t total_sz = PAGE_ALIGN_UP(max_end);
-
-            uint8_t *image = umalloc(total_sz);
-            if (!image)
-            {
-                printf("[EXL] umalloc(%u) fail\n", total_sz);
-                kfree(kfilebuf);
-                pop_loading(tmp_name);
-                return NULL;
-            }
-            paging_update_flags((uint32_t)image, total_sz,
-                                PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
-
-            if (text_sz && copy_to_user(image + hdr->text_offset, kfilebuf + hdr->text_offset, text_sz) != 0) { ufree(image, total_sz); kfree(kfilebuf); pop_loading(tmp_name); return NULL; }
-            if (ro_sz   && copy_to_user(image + hdr->rodata_offset, kfilebuf + hdr->rodata_offset, ro_sz) != 0) { ufree(image, total_sz); kfree(kfilebuf); pop_loading(tmp_name); return NULL; }
-            if (data_sz && copy_to_user(image + hdr->data_offset, kfilebuf + hdr->data_offset, data_sz) != 0) { ufree(image, total_sz); kfree(kfilebuf); pop_loading(tmp_name); return NULL; }
-            if (bss_sz  && zero_user(image + hdr->data_offset + data_sz, bss_sz) != 0) { ufree(image, total_sz); kfree(kfilebuf); pop_loading(tmp_name); return NULL; }
-
-            const dex_import_t *imp = (const dex_import_t*)(kfilebuf + hdr->import_table_offset);
-            const dex_reloc_t  *rel = (const dex_reloc_t *)(kfilebuf + hdr->reloc_table_offset);
-            const dex_symbol_t *symtab = (const dex_symbol_t*)(kfilebuf + hdr->symbol_table_offset);
-            const char *strtab         = (const char*)(kfilebuf + hdr->strtab_offset);
-
-            if (do_relocate_exl(image, total_sz, hdr, imp, rel, symtab, strtab, tmp_name) != 0)
-            {
-                printf("[EXL] relocation failed for %s\n", tmp_name);
-                ufree(image, total_sz);
-                kfree(kfilebuf);
-                pop_loading(tmp_name);
-                return NULL;
-            }
-
-            if (text_sz) paging_update_flags((uint32_t)(image + hdr->text_offset), PAGE_ALIGN_UP(text_sz), 0, PAGE_RW);
-            if (ro_sz)   paging_update_flags((uint32_t)(image + hdr->rodata_offset), PAGE_ALIGN_UP(ro_sz), 0, PAGE_RW);
-            if (data_sz || bss_sz) paging_update_flags((uint32_t)(image + hdr->data_offset), PAGE_ALIGN_UP(data_sz + bss_sz), PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
-            paging_set_user((uint32_t)image, total_sz);
-
-            /* Copy small metadata to kernel */
-            dex_symbol_t *symtab_copy = NULL;
-            char *strtab_copy = NULL;
-            if (hdr->symbol_table_count)
-            {
-                size_t sym_bytes = hdr->symbol_table_count * sizeof(dex_symbol_t);
-                symtab_copy = kmalloc(sym_bytes);
-                if (!symtab_copy) { ufree(image, total_sz); kfree(kfilebuf); pop_loading(tmp_name); return NULL; }
-                memcpy(symtab_copy, (const void*)(kfilebuf + hdr->symbol_table_offset), sym_bytes);
-            }
-            if (hdr->strtab_size)
-            {
-                strtab_copy = kmalloc(hdr->strtab_size);
-                if (!strtab_copy) { if (symtab_copy) kfree(symtab_copy); ufree(image, total_sz); kfree(kfilebuf); pop_loading(tmp_name); return NULL; }
-                memcpy(strtab_copy, (const void*)(kfilebuf + hdr->strtab_offset), hdr->strtab_size);
-            }
-
-            exl_t *lib = &exl_files[exl_count];
-            memset(lib, 0, sizeof(*lib));
-            (void)strlcpy(lib->name, tmp_name, sizeof(lib->name));
-            lib->image_base   = image;
-            lib->image_size   = total_sz;
-            lib->header       = (const dex_header_t*)kfilebuf; /* keep for absolute offsets */
-            lib->symbol_table = symtab_copy;
-            lib->symbol_count = hdr->symbol_table_count;
-            lib->strtab       = strtab_copy;
-
-            exl_cr3s[exl_count] = cur_cr3;
-            exl_count++;
-
-            pop_loading(tmp_name);
-            return lib;
-        }
-        /* else: fall back to USER scratch path */
-        kfree(kfilebuf);
-    }
-    /* --- end add --- */
-
-
-    /* Läs in hela EXL-filen i temporär buffer (kernel → fallback till user) */
-    uint8_t *filebuf = kmalloc(sz);
-    int filebuf_is_user = 0;
+    /* Läs in hela EXL-filen i temporär buffer (kernel only) */
+    /* Läs in EXL i user buffer; avoids touching kernel heap with large files */
+    uint8_t *filebuf = umalloc(sz);
     if (!filebuf)
     {
-        filebuf = umalloc(sz);
-        if (filebuf) filebuf_is_user = 1;
-    }
-
-    if (!filebuf)
-    {
-        printf("[EXL] kmalloc/umalloc filebuf fail (%u)\n", sz);
+        printf("[EXL] umalloc filebuf fail (%u)\n", sz);
         pop_loading(tmp_name);
         return NULL;
     }
 
-    /* read_file() använder sannolikt copy_to_user → bufferten måste vara USER */
-    int marked_user = 0;
-    if (!filebuf_is_user)
-    {
-        paging_update_flags((uint32_t)filebuf, sz, PAGE_USER, 0);
-        marked_user = 1;
-    }
+    paging_update_flags((uint32_t)filebuf, sz, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
+
+    if (g_debug_mask & DEBUG_AREA_EXL)
+        printf("[EXL DEBUG] filebuf=%p (user) sz=%u\n", filebuf, sz);
 
     int rbytes = read_file(ft, path, filebuf);
-
-    if (marked_user)
-    {
-        paging_update_flags((uint32_t)filebuf, sz, 0, PAGE_USER);
-    }
 
     if (rbytes < 0)
     {
         printf("[EXL] read fail: %s\n", path);
-        do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+        ufree(filebuf, sz);
+        if (heap_validate() != 0) heap_dump();
         pop_loading(tmp_name);
         return NULL;
     }
 
     uint32_t fsz = (uint32_t)rbytes;
+    EXL_DBG("[EXL] read bytes=%u from %s into %p\n", fsz, path, filebuf);
 
     if (!range_ok(0, sizeof(dex_header_t), fsz))
     {
         printf("[EXL] file too small for header\n");
-        do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+        ufree(filebuf, sz);
         pop_loading(tmp_name);
         return NULL;
     }
@@ -670,19 +533,39 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     if (hdr->magic != DEX_MAGIC)
     {
         printf("[EXL] bad magic in %s (0x%08x)\n", path, hdr->magic);
-        do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+        ufree(filebuf, sz);
+        pop_loading(tmp_name);
+        return NULL;
+    }
+    if (hdr->version_major != DEX_VERSION_MAJOR || hdr->version_minor != DEX_VERSION_MINOR)
+    {
+        printf("[EXL] unsupported EXL version %u.%u (want %u.%u)\n",
+               hdr->version_major, hdr->version_minor,
+               DEX_VERSION_MAJOR, DEX_VERSION_MINOR);
+        ufree(filebuf, sz);
         pop_loading(tmp_name);
         return NULL;
     }
 
     debug_print_hdr(hdr);
+    EXL_DBG("[EXL] sections text@0x%08x sz=%u ro@0x%08x sz=%u data@0x%08x sz=%u bss=%u\n",
+            hdr->text_offset, hdr->text_size,
+            hdr->rodata_offset, hdr->rodata_size,
+            hdr->data_offset, hdr->data_size,
+            hdr->bss_size);
+    EXL_DBG("[EXL] tables import_off=0x%08x cnt=%u reloc_off=0x%08x cnt=%u sym_off=0x%08x cnt=%u str_off=0x%08x sz=%u\n",
+            hdr->import_table_offset, hdr->import_table_count,
+            hdr->reloc_table_offset, hdr->reloc_table_count,
+            hdr->symbol_table_offset, hdr->symbol_table_count,
+            hdr->strtab_offset, hdr->strtab_size);
 
     if (!range_ok(hdr->text_offset, hdr->text_size, fsz) ||
         !range_ok(hdr->rodata_offset, hdr->rodata_size, fsz) ||
         !range_ok(hdr->data_offset, hdr->data_size, fsz))
     {
         printf("[EXL] section range OOR (fsz=%u)\n", fsz);
-        do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+        ufree(filebuf, sz);
+        if (heap_validate() != 0) heap_dump();
         pop_loading(tmp_name);
         return NULL;
     }
@@ -697,7 +580,20 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
          !range_ok(hdr->strtab_offset, hdr->strtab_size, fsz)))
     {
         printf("[EXL] table range OOR\n");
-        do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+        ufree(filebuf, sz);
+        if (heap_validate() != 0) heap_dump();
+        pop_loading(tmp_name);
+        return NULL;
+    }
+
+    /* Extra guard: entry must land inside .text range */
+    uint32_t entry_va_off = hdr->entry_offset;
+    if (!(entry_va_off >= hdr->text_offset && entry_va_off < hdr->text_offset + hdr->text_size))
+    {
+        printf("[EXL] entry_offset 0x%08x outside .text (text_off=0x%08x sz=0x%08x)\n",
+               entry_va_off, hdr->text_offset, hdr->text_size);
+        ufree(filebuf, sz);
+        if (heap_validate() != 0) heap_dump();
         pop_loading(tmp_name);
         return NULL;
     }
@@ -719,19 +615,32 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     if (end_dat > max_end) max_end = end_dat;
 
     uint32_t total_sz = PAGE_ALIGN_UP(max_end);
+    if (total_sz < max_end || total_sz == 0)
+    {
+        printf("[EXL] total size overflow\n");
+        ufree(filebuf, sz);
+        if (heap_validate() != 0) heap_dump();
+        pop_loading(tmp_name);
+        return NULL;
+    }
+    EXL_DBG("[EXL] image size total_sz=%u max_end=0x%08x\n", total_sz, max_end);
 
     /* Allokera user-image och mappa RW under kopiering */
     uint8_t *image = umalloc(total_sz);
     if (!image)
     {
         printf("[EXL] umalloc(%u) fail\n", total_sz);
-        do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+        ufree(filebuf, sz);
+        if (heap_validate() != 0) heap_dump();
         pop_loading(tmp_name);
         return NULL;
     }
 
     paging_update_flags((uint32_t)image, total_sz,
                         PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
+    EXL_DBG("[EXL] image_base=%p\n", image);
+    /* Zero the entire image so padding/gaps mirror the zero-filled layout produced by the builders. */
+    memset(image, 0, total_sz);
 
     /* Kopiera sektioner till user-image */
     if (text_sz)
@@ -742,7 +651,8 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
         {
             printf("[EXL] Failed to copy .text to user image\n");
             ufree(image, total_sz);
-            do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+            ufree(filebuf, sz);
+            if (heap_validate() != 0) heap_dump();
             pop_loading(tmp_name);
             return NULL;
         }
@@ -756,7 +666,8 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
         {
             printf("[EXL] Failed to copy .rodata to user image\n");
             ufree(image, total_sz);
-            do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+            ufree(filebuf, sz);
+            if (heap_validate() != 0) heap_dump();
             pop_loading(tmp_name);
             return NULL;
         }
@@ -770,7 +681,8 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
         {
             printf("[EXL] Failed to copy .data to user image\n");
             ufree(image, total_sz);
-            do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+            ufree(filebuf, sz);
+            if (heap_validate() != 0) heap_dump();
             pop_loading(tmp_name);
             return NULL;
         }
@@ -793,7 +705,8 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     {
         printf("[EXL] relocation failed for %s\n", tmp_name);
         ufree(image, total_sz);
-        do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+        ufree(filebuf, sz);
+        if (heap_validate() != 0) heap_dump();
         pop_loading(tmp_name);
         return NULL;
     }
@@ -820,6 +733,7 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     /* Kopiera symbol- och strtab till kernel (små, persistenta) */
     dex_symbol_t *symtab_copy = NULL;
     char *strtab_copy = NULL;
+    dex_header_t *hdr_copy = NULL;
 
     if (hdr->symbol_table_count)
     {
@@ -828,7 +742,8 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
         if (!symtab_copy)
         {
             printf("[EXL] symtab alloc fail\n");
-            do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+            ufree(filebuf, sz);
+            if (heap_validate() != 0) heap_dump();
             ufree(image, total_sz);
             pop_loading(tmp_name);
             return NULL;
@@ -843,13 +758,28 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
         {
             if (symtab_copy) kfree(symtab_copy);
             printf("[EXL] strtab alloc fail\n");
-            do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+            ufree(filebuf, sz);
+            if (heap_validate() != 0) heap_dump();
             ufree(image, total_sz);
             pop_loading(tmp_name);
             return NULL;
         }
         memcpy(strtab_copy, (const void*)(filebuf + hdr->strtab_offset), hdr->strtab_size);
     }
+
+    hdr_copy = kmalloc(sizeof(dex_header_t));
+    if (!hdr_copy)
+    {
+        printf("[EXL] header alloc fail\n");
+        if (symtab_copy) kfree(symtab_copy);
+        if (strtab_copy) kfree(strtab_copy);
+        ufree(filebuf, sz);
+        if (heap_validate() != 0) heap_dump();
+        ufree(image, total_sz);
+        pop_loading(tmp_name);
+        return NULL;
+    }
+    memcpy(hdr_copy, hdr, sizeof(dex_header_t));
 
     /* Registrera lib i cache för nuvarande CR3 */
     exl_t *lib = &exl_files[exl_count];
@@ -858,15 +788,19 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
 
     lib->image_base   = image;
     lib->image_size   = total_sz;
-    lib->header       = (const dex_header_t*)kfilebuf; /* vi behåller inte hela filheadern i kernel */
+    lib->header       = hdr_copy;
     lib->symbol_table = symtab_copy;
     lib->symbol_count = hdr->symbol_table_count;
     lib->strtab       = strtab_copy;
+    uint32_t entry_offset = hdr_copy->entry_offset;
 
     exl_cr3s[exl_count] = cur_cr3;
     exl_count++;
 
-    do { if (filebuf_is_user) ufree(filebuf, sz); else kfree(filebuf); } while (0);
+    /* Free file buffer */
+    ufree(filebuf, sz);
+    if (heap_validate() != 0)
+        heap_dump();
     pop_loading(tmp_name);
 
     EXL_DBG("[EXL] loaded '%s' base=%p size=%u (.text RX, .data/.bss RW) cr3=%08x\n",
@@ -874,9 +808,9 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
 
     if (g_debug_mask & DEBUG_AREA_EXL)
     {
-        uint32_t entry = (uint32_t)image + hdr->entry_offset;
+        uint32_t entry = (uint32_t)image + entry_offset;
         dump_pde_pte(entry);
-        printf("[EXL] entry VA=%08x (off=0x%x)\n", entry, hdr->entry_offset);
+        printf("[EXL] entry VA=%08x (off=0x%x)\n", entry, entry_offset);
     }
 
     return lib;

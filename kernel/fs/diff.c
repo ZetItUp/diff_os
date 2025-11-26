@@ -97,7 +97,7 @@ static int prefault_user_write_range(void* dst, uint32_t n)
 
     while (page <= end)
     {
-        if (!paging_check_user_range(page, 1))
+        if (paging_check_user_range(page, 1) != 0)
         {
             if (paging_handle_demand_fault(page) != 0)
             {
@@ -158,35 +158,21 @@ static int prefault_user_read_range(const void* src, uint32_t n)
 
 static int safe_copy_out(void* dst, const void* src, uint32_t n)
 {
-    if (n == 0)
-    {
-        return 0;
-    }
-    if (!dst || !src)
-    {
-        return -1;
-    }
+    if (n == 0) return 0;
+    if (!dst || !src) return -1;
 
+    /* If destination is user mapped, respect userfault/paging handling. */
     if (is_user_range(dst, n))
     {
         if (prefault_user_write_range(dst, n) != 0)
-        {
             return -3; // EFAULT
-        }
-
-        if(copy_to_user(dst, src, n) != 0)
-        {
+        if (copy_to_user(dst, src, n) != 0)
             return -4;
-        }
-
         return 0;
     }
 
-    if(copy_to_user(dst, src, n) != 0)
-    {
-        return -5;
-    }
-
+    /* Kernel buffer: simple memcpy. */
+    memcpy(dst, src, n);
     return 0;
 }
 

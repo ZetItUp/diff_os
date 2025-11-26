@@ -584,11 +584,23 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
 
         return -2;
     }
+    if (hdr->version_major != DEX_VERSION_MAJOR || hdr->version_minor != DEX_VERSION_MINOR)
+    {
+        DEX_DBG("[DEX] Unsupported DEX version %u.%u (want %u.%u)\n",
+                hdr->version_major, hdr->version_minor,
+                DEX_VERSION_MAJOR, DEX_VERSION_MINOR);
 
-    paging_update_flags((uint32_t)file_data,
-                    PAGE_ALIGN_UP(file_size),
-                    PAGE_PRESENT | PAGE_USER | PAGE_RW,
-                    0);
+        return -2;
+    }
+
+    /* Only mark the source buffer user-accessible if it actually lives in the user window. */
+    if (is_user_va((uint32_t)file_data))
+    {
+        paging_update_flags((uint32_t)file_data,
+                        PAGE_ALIGN_UP(file_size),
+                        PAGE_PRESENT | PAGE_USER | PAGE_RW,
+                        0);
+    }
 
     // Validate section ranges inside file
     if (!in_range(hdr->text_offset,   hdr->text_size,   (uint32_t)file_size) ||
@@ -644,6 +656,8 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
         0
     );
     paging_flush_tlb();
+    /* Zero-fill full image so padding matches the zeroed layout emitted by the tooling. */
+    memset(image, 0, total_sz);
 
     // Copy sections and clear bss into user image
     if (text_sz)
@@ -732,10 +746,13 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
         return -6;
     }
 
-    paging_update_flags((uint32_t)file_data,
-                    PAGE_ALIGN_UP(file_size),
-                    0,
-                    PAGE_USER);
+    if (is_user_va((uint32_t)file_data))
+    {
+        paging_update_flags((uint32_t)file_data,
+                        PAGE_ALIGN_UP(file_size),
+                        0,
+                        PAGE_USER);
+    }
 
     // Make .text read execute
     if (text_sz)

@@ -1,5 +1,5 @@
-#include <diffwm.h>
-#include <protocol.h>
+#include <diffwm/diffwm.h>
+#include <diffwm/protocol.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -109,7 +109,7 @@ void window_draw(window_t *window, const void *pixels)
     send_message(window->mailbox, &msg, sizeof(msg));
 }
 
-int window_poll_event(window_t *window, diffwm_event_t *event)
+int window_poll_event(window_t *window, diff_event_t *event)
 {
     dwm_msg_t msg;
 
