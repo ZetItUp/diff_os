@@ -3,6 +3,8 @@
 #include "string.h"
 #include "paging.h"
 #include "system/usercopy.h"
+#include "system/process.h"
+#include "system/shared_mem.h"
 #include "debug.h"
 
 #define PAGING_DBG(...) DDBG_IF(DEBUG_AREA_PAGING, __VA_ARGS__)
@@ -60,6 +62,8 @@ static uint32_t kmap_va2 = 0;
 static uint32_t *g_kmap_pt1 = NULL;
 static uint32_t *g_kmap_pt2 = NULL;
 
+// Reservations are now per-process (see process.h)
+// Keeping old global list for backwards compatibility with kernel-space reservations
 typedef struct
 {
     uint32_t start;
@@ -69,6 +73,10 @@ typedef struct
 #define MAX_USER_RESERVATIONS 32
 static uresv_t uresv_list[MAX_USER_RESERVATIONS];
 static int uresv_count = 0;
+
+static uresv_t pending_resv_list[MAX_USER_RESERVATIONS];
+static int pending_resv_count = 0;
+static uint32_t pending_resv_cr3 = 0;
 
 static int pt_next = 1;
 static int pt_bootstrap_next = 1;
@@ -856,7 +864,22 @@ void unmap_4kb_page(uint32_t virt_addr)
     if (!(page_directory[dir_index] & PAGE_PRESENT)) return;
     if (page_directory[dir_index] & PAGE_PS) return;
 
-    uint32_t *table = (uint32_t*)(page_directory[dir_index] & 0xFFFFF000u);
+    uint32_t pt_phys = page_directory[dir_index] & 0xFFFFF000u;
+    uint32_t kpt_start = (uint32_t)kernel_page_tables;
+    uint32_t kpt_end   = kpt_start + sizeof(kernel_page_tables);
+    uint32_t *table;
+    int need_kunmap = 0;
+
+    if (pt_phys >= kpt_start && pt_phys < kpt_end)
+    {
+        table = (uint32_t*)pt_phys;
+    }
+    else
+    {
+        table = (uint32_t*)kmap_phys(pt_phys, 0);
+        need_kunmap = 1;
+    }
+
     uint32_t pte = table[table_index];
 
     if (!(pte & PAGE_PRESENT)) return;
@@ -867,6 +890,8 @@ void unmap_4kb_page(uint32_t virt_addr)
 
     table[table_index] = 0;
     invlpg(virt_addr);
+
+    if (need_kunmap) kunmap_phys(0);
 }
 
 void unmap_page(uint32_t virt_addr)
@@ -887,7 +912,22 @@ void unmap_page(uint32_t virt_addr)
         return;
     }
 
-    uint32_t *page_table = (uint32_t*)(entry & 0xFFFFF000u);
+    uint32_t pt_phys = entry & 0xFFFFF000u;
+    uint32_t kpt_start = (uint32_t)kernel_page_tables;
+    uint32_t kpt_end   = kpt_start + sizeof(kernel_page_tables);
+    uint32_t *page_table;
+    int need_kunmap = 0;
+
+    if (pt_phys >= kpt_start && pt_phys < kpt_end)
+    {
+        page_table = (uint32_t*)pt_phys;
+    }
+    else
+    {
+        page_table = (uint32_t*)kmap_phys(pt_phys, 0);
+        need_kunmap = 1;
+    }
+
     uint32_t pte = page_table[table_index];
 
     if (pte & PAGE_PRESENT)
@@ -904,6 +944,8 @@ void unmap_page(uint32_t virt_addr)
         if (page_table[i] & PAGE_PRESENT) { empty = 0; break; }
     }
     if (empty) page_directory[dir_index] = 0;
+
+    if (need_kunmap) kunmap_phys(0);
 
     flush_tlb();
 }
@@ -1195,20 +1237,90 @@ void ufree_secure(void* ptr, size_t size)
 
 // ====== Reservation-API ======
 
+extern process_t *process_current(void);
+
 static int reservations_add(uint32_t start, uint32_t end)
 {
-    if (uresv_count >= MAX_USER_RESERVATIONS) return -1;
-    uresv_list[uresv_count++] = (uresv_t){ start, end };
-    return 0;
+    process_t *p = process_current();
+    uint32_t active_cr3 = read_cr3_local();
+
+    if (p && p->pid > 0 && p->cr3 == active_cr3)  // User process for current CR3
+    {
+        if (p->reservation_count >= MAX_PROCESS_RESERVATIONS) {
+            PAGING_DBG("[RESV][ERR] pid=%d reservation list full!\n", p->pid);
+            return -1;
+        }
+        p->reservations[p->reservation_count].start = start;
+        p->reservations[p->reservation_count].end = end;
+        PAGING_DBG("[RESV][ADD] pid=%d idx=%d range=%08x-%08x\n", p->pid, p->reservation_count, start, end);
+        p->reservation_count++;
+        return 0;
+    }
+    else if (p && p->pid > 0 && p->cr3 != active_cr3)
+    {
+        // We're temporarily operating in a different CR3 than process_current (e.g. while constructing a child AS).
+        // Stash the reservation until a process owning this CR3 adopts it.
+        if (pending_resv_cr3 != active_cr3) {
+            pending_resv_cr3 = active_cr3;
+            pending_resv_count = 0;
+        }
+        if (pending_resv_count >= MAX_USER_RESERVATIONS) {
+            PAGING_DBG("[RESV][ERR] pending reservations full for cr3=%08x\n", active_cr3);
+            return -1;
+        }
+        pending_resv_list[pending_resv_count++] = (uresv_t){ start, end };
+        PAGING_DBG("[RESV][ADD][PENDING] cr3=%08x idx=%d range=%08x-%08x\n",
+                   active_cr3, pending_resv_count - 1, start, end);
+        return 0;
+    }
+    else  // Kernel or no process context - use global list
+    {
+        if (uresv_count >= MAX_USER_RESERVATIONS) return -1;
+        uresv_list[uresv_count++] = (uresv_t){ start, end };
+        return 0;
+    }
 }
 
 static int reservations_contains(uint32_t va)
 {
-    for (int i = 0; i < uresv_count; i++)
+    process_t *p = process_current();
+    uint32_t active_cr3 = read_cr3_local();
+
+    if (p && p->pid > 0 && p->cr3 == active_cr3)  // User process matching current CR3
     {
-        if (va >= uresv_list[i].start && va < uresv_list[i].end) return 1;
+        for (int i = 0; i < p->reservation_count; i++)
+        {
+            if (va >= p->reservations[i].start && va < p->reservations[i].end) {
+                PAGING_DBG("[RESV][CHECK] pid=%d va=%08x FOUND in idx=%d (%08x-%08x)\n",
+                           p->pid, va, i, p->reservations[i].start, p->reservations[i].end);
+                return 1;
+            }
+        }
+        PAGING_DBG("[RESV][CHECK] pid=%d va=%08x NOT FOUND (count=%d)\n", p->pid, va, p->reservation_count);
+        return 0;
     }
-    return 0;
+    else if (pending_resv_cr3 == active_cr3 && pending_resv_count > 0)
+    {
+        for (int i = 0; i < pending_resv_count; i++)
+        {
+            if (va >= pending_resv_list[i].start && va < pending_resv_list[i].end) {
+                printf("[RESV][CHECK][PENDING] cr3=%08x va=%08x FOUND in idx=%d (%08x-%08x)\n",
+                           active_cr3, va, i, pending_resv_list[i].start, pending_resv_list[i].end);
+                return 1;
+            }
+        }
+        printf("[RESV][CHECK][PENDING] cr3=%08x va=%08x NOT FOUND (count=%d)\n",
+               active_cr3, va, pending_resv_count);
+        return 0;
+    }
+    else  // Kernel or no process context - check global list
+    {
+        for (int i = 0; i < uresv_count; i++)
+        {
+            if (va >= uresv_list[i].start && va < uresv_list[i].end) return 1;
+        }
+        return 0;
+    }
 }
 
 int paging_reserve_range(uintptr_t start, size_t size)
@@ -1288,6 +1400,59 @@ int paging_handle_demand_fault(uintptr_t fault_va)
 
     uint32_t phys = alloc_phys_page();
     if (!phys) return -2;
+
+    uint32_t cr3_current = read_cr3_local();
+
+    // Switch to kernel CR3, then call map_4kb_page_flags to map in kernel PD,
+    // then manually update the process's PD
+    uint32_t kcr3 = (uint32_t)paging_kernel_cr3_phys();
+    if (cr3_current != kcr3) {
+        // We're in a user process CR3 - need to map in the process's PD
+        // Temporarily map the process's page directory
+        uint32_t *proc_pd = (uint32_t*)kmap_phys(cr3_current, 0);
+
+        uint32_t dir_index = (page_base >> 22) & 0x3FFu;
+        uint32_t table_index = (page_base >> 12) & 0x3FFu;
+
+        uint32_t pde = proc_pd[dir_index];
+
+        // Ensure page table exists
+        if (!(pde & PAGE_PRESENT)) {
+            // Allocate a new page table
+            uint32_t pt_phys = alloc_phys_page();
+            if (!pt_phys) {
+                kunmap_phys(0);
+                free_phys_page(phys);
+                return -3;
+            }
+
+            // Clear the new page table
+            uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
+            for (int i = 0; i < 1024; i++) pt[i] = 0;
+            kunmap_phys(1);
+
+            // Install PT in process's PD
+            proc_pd[dir_index] = (pt_phys & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+            pde = proc_pd[dir_index];
+        }
+
+        // Now map the page table and set the PTE
+        uint32_t pt_phys = pde & 0xFFFFF000u;
+        uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
+        pt[table_index] = (phys & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+        kunmap_phys(1);
+        kunmap_phys(0);
+
+        // Zero the page
+        void *kptr = kmap_phys(phys, 0);
+        if (kptr) {
+            memset(kptr, 0, PAGE_SIZE_4KB);
+            kunmap_phys(0);
+        }
+
+        invlpg(page_base);
+        return 0;
+    }
 
     int rc = map_4kb_page_flags(page_base, phys, PAGE_PRESENT | PAGE_RW | PAGE_USER);
     if (rc != 0)
@@ -1377,6 +1542,11 @@ int paging_handle_page_fault(uint32_t fault_va, uint32_t err)
     int write   = !!(err & 2);
     int user    = !!(err & 4);
     int user_va = is_user_addr_inline(fault_va);
+
+    if ((user || user_va) && shared_memory_handle_fault(fault_va))
+    {
+        return 1;
+    }
 
     if (present && write && (user || user_va))
     {
@@ -1792,6 +1962,29 @@ void paging_set_user_heap(uintptr_t addr)
         addr = USER_MIN;
     }
     uheap_next = PAGE_ALIGN_UP((uint32_t)addr);
+}
+
+void paging_adopt_pending_reservations(uint32_t cr3_phys, process_t *p)
+{
+    if (!p || cr3_phys == 0) return;
+    if (pending_resv_cr3 != cr3_phys || pending_resv_count == 0) return;
+
+    for (int i = 0; i < pending_resv_count; i++)
+    {
+        if (p->reservation_count >= MAX_PROCESS_RESERVATIONS)
+        {
+            PAGING_DBG("[RESV][WARN] pid=%d reservation list full while adopting pending entries\n", p->pid);
+            break;
+        }
+        p->reservations[p->reservation_count].start = pending_resv_list[i].start;
+        p->reservations[p->reservation_count].end   = pending_resv_list[i].end;
+        p->reservation_count++;
+        PAGING_DBG("[RESV][ADOPT] pid=%d idx=%d range=%08x-%08x\n",
+                   p->pid, p->reservation_count - 1, pending_resv_list[i].start, pending_resv_list[i].end);
+    }
+
+    pending_resv_count = 0;
+    pending_resv_cr3 = 0;
 }
 
 void paging_free_all_user_in(uint32_t cr3_phys)

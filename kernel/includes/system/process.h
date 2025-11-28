@@ -29,6 +29,19 @@ typedef struct process
     thread_t *waiter;
     int live_threads;
 
+    // Heap management (per-process)
+    uintptr_t heap_base;
+    uintptr_t heap_end;
+    uintptr_t heap_max;
+
+    // Memory reservations for demand paging (per-process)
+    #define MAX_PROCESS_RESERVATIONS 16
+    struct {
+        uint32_t start;
+        uint32_t end;
+    } reservations[MAX_PROCESS_RESERVATIONS];
+    int reservation_count;
+
     // Absolute path to the executable (directory component). Used to
     // re-root child processes when resolving relative paths while still
     // allowing the caller's cwd to remain intact.

@@ -6,6 +6,11 @@ int exec_dex(const char *path, int argc, char **argv)
     return system_exec_dex(path, argc, argv);
 }
 
+int spawn_process(const char *path, int argc, char **argv)
+{
+    return system_process_spawn(path, argc, argv);
+}
+
 int chdir(const char *path)
 {
     return system_chdir(path);

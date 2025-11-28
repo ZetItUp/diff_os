@@ -39,3 +39,4 @@ int shared_memory_map(int handle);
 int shared_memory_unmap(int handle);
 int shared_memory_release(int handle);
 void shared_memory_cleanup_process(int pid);
+int shared_memory_handle_fault(uintptr_t fault_va);

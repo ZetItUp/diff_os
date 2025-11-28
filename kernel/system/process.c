@@ -239,6 +239,10 @@ void process_init(void)
     k->live_threads = 0;
     k->main_thread = NULL;
     k->waiter = NULL;
+    k->heap_base = 0;
+    k->heap_end = 0;
+    k->heap_max = 0;
+    k->reservation_count = 0;
     process_assign_default_cwd(k);
     process_set_exec_root(k, "/");
 

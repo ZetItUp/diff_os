@@ -8,10 +8,16 @@ typedef struct window
     uint32_t id;
     int handle;
     void *pixels;
-    int width;
-    int height;
+    
+    int x;
+    int y;
+    uint32_t width;
+    uint32_t height;
+
     int pitch;
-    int mailbox;
+    int mailbox;    /* Client mailbox channel index for replies/events */
+    int wm_channel; /* Channel index to talk to WM */
+    struct window *next;
 } window_t;
 
 window_t* window_create(int x, int y, int width, int height, uint32_t flags);

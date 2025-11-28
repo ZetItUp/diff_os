@@ -120,6 +120,8 @@ void paging_free_all_user_in(uint32_t cr3_phys);
 
 void paging_user_heap_reset(void);
 void paging_set_user_heap(uintptr_t addr);
+struct process;
+void paging_adopt_pending_reservations(uint32_t cr3_phys, struct process *p);
 uintptr_t paging_kernel_cr3_phys(void);
 uint32_t paging_new_address_space(void);
 void paging_switch_address_space(uint32_t pd_phys);

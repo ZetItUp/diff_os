@@ -901,17 +901,43 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     uintptr_t heap_base = image_end + GUARD_GAP;
     uintptr_t heap_size  = 64u << 20;  // 64 MB window
 
-    system_brk_init_window(heap_base, heap_size);
     DEX_DBG("[DEX] image_base=%p size=%u -> heap_base=%p window=%u\n",
            (void *)dex.image_base,
            (unsigned)dex.image_size,
            (void *)heap_base,
            (unsigned)heap_size);
 
-    // Reserve demand-zero window before committing initial brk
+    // Reserve demand-zero window and allocate initial heap
     paging_reserve_range(heap_base, heap_size);
     paging_set_user_heap(heap_base);
-    commit_initial_heap(heap_base, heap_size, 8u << 20);
+
+    // Commit initial heap pages (8MB)
+    uintptr_t initial_heap = 8u << 20;
+    if (initial_heap > heap_size) initial_heap = heap_size;
+    uintptr_t initial_end = PAGE_ALIGN_UP(heap_base + initial_heap);
+
+    // Pre-allocate some initial heap pages
+    for (uintptr_t va = heap_base; va < initial_end && va < heap_base + (1u << 20); va += PAGE_SIZE_4KB)
+    {
+        uint32_t phys = alloc_phys_page();
+        if (phys)
+        {
+            map_4kb_page_flags(va, phys, PAGE_PRESENT | PAGE_RW | PAGE_USER);
+        }
+    }
+
+    // Initialize heap fields for the current process
+    process_t *p = process_current();
+    if (p)
+    {
+        uintptr_t base = PAGE_ALIGN_UP(heap_base);
+        uintptr_t max  = base + heap_size;
+        p->heap_base = base;
+        p->heap_end  = initial_end;  // Set to initial committed size
+        p->heap_max  = max;
+        DEX_DBG("[DEX] exec: PID=%d heap_base=%p heap_end=%p heap_max=%p\n",
+               p->pid, (void *)p->heap_base, (void *)p->heap_end, (void *)p->heap_max);
+    }
     
     // Jump to user mode
     enter_user_mode((uint32_t)stub, user_sp);
@@ -1047,7 +1073,7 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     uintptr_t heap_base = image_end + GUARD_GAP;
     uintptr_t heap_size = 64u << 20;
 
-    system_brk_init_window(heap_base, heap_size);
+    // Note: heap fields will be set on the process after it's created below
     DEX_DBG("[DEX] image_base=%p size=%u -> heap_base=%p window=%u\n",
            (void *)dex.image_base,
            (unsigned)dex.image_size,
@@ -1055,8 +1081,23 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
            (unsigned)heap_size);
     paging_reserve_range(heap_base, heap_size);
     paging_set_user_heap(heap_base);
-    commit_initial_heap(heap_base, heap_size, 8u << 20);
-    
+
+    // Commit initial heap pages (8MB) while in child CR3
+    uintptr_t initial_heap = 8u << 20;
+    if (initial_heap > heap_size) initial_heap = heap_size;
+    uintptr_t initial_end = PAGE_ALIGN_UP(heap_base + initial_heap);
+    paging_reserve_range(heap_base, initial_end - heap_base);
+
+    // Pre-allocate some initial heap pages to avoid immediate demand faults
+    for (uintptr_t va = heap_base; va < initial_end && va < heap_base + (1u << 20); va += PAGE_SIZE_4KB)
+    {
+        uint32_t phys = alloc_phys_page();
+        if (phys)
+        {
+            map_4kb_page_flags(va, phys, PAGE_PRESENT | PAGE_RW | PAGE_USER);
+        }
+    }
+
     paging_switch_address_space(cr3_parent);
 
     p = process_create_user_with_cr3((uint32_t)stub, user_sp, cr3_child, 65536);
@@ -1073,6 +1114,17 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     pid = process_pid(p);
     DEX_DBG("[DEX] spawn: pid=%d parent_cr3=%08x child_cr3=%08x\n",
          pid, cr3_parent, cr3_child);
+
+    // Initialize heap fields for the new process with initial 8MB committed
+    uintptr_t base = PAGE_ALIGN_UP(heap_base);
+    uintptr_t max  = base + heap_size;
+    p->heap_base = base;
+    p->heap_end  = initial_end;  // Set to initial committed size, not base
+    p->heap_max  = max;
+    paging_adopt_pending_reservations(cr3_child, p);
+
+    DEX_DBG("[DEX] PID=%d heap_base=%p heap_end=%p heap_max=%p\n",
+           pid, (void *)p->heap_base, (void *)p->heap_end, (void *)p->heap_max);
 
     kfree(buffer);
 

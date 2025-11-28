@@ -37,6 +37,7 @@ typedef struct
     int16_t width;
     int16_t height;
     uint32_t flags;
+    int mailbox_id;     /* Client's reply/event mailbox id */
     int handle;
 } dwm_window_desc_t;
 
