@@ -806,8 +806,6 @@ int map_4kb_page_flags(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags)
     phys_ref_inc_idx(idx);
 
     table[table_index] = desired;
-    PAGING_DBG("[PAGING] Set PTE[%u][%u] = %08x for va=%08x (PDE=%08x)\n",
-               dir_index, table_index, desired, virt_addr, page_directory[dir_index]);
     // Verify the write actually happened
     uint32_t readback = table[table_index];
     if (readback != desired) {

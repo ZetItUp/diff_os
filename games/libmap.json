@@ -1,0 +1,23 @@
+{
+  "diffc.exl": [
+    "printf",
+    "puts",
+    "putchar",
+    "malloc",
+    "free",
+    "memcpy",
+    "memset",
+    "fopen",
+    "fread",
+    "fseek",
+    "ftell",
+    "fgets"
+  ],
+  "diffwm.exl": [
+    "diffwm_lib_present",
+    "window_create",
+    "window_destroy",
+    "window_draw",
+    "window_poll_event"
+  ]
+}

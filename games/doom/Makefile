@@ -23,7 +23,7 @@ CFLAGS := -ffreestanding -nostdlib -O2 -m32 -fno-pic -fno-plt \
           -mno-sse4.1 -mno-sse4.2 -mno-avx -mno-avx2 -mno-fma \
 		  -fno-asynchronous-unwind-tables -fno-unwind-tables \
           -Wall -Wextra \
-          -I../../exls/DiffC/include -I. \
+          -I../../exls/DiffC/include -I../../exls/DiffWM/includes -I. \
           -DDG_WIDTH=$(DG_WIDTH) -DDG_HEIGHT=$(DG_HEIGHT) \
 		  -march=i386 -mtune=i386 -fno-builtin -fno-stack-protector
 
@@ -47,7 +47,7 @@ $(SUPEROBJ): $(OBJS) | $(BUILDDIR)
 
 $(BUILDDIR)/imports.stamp: $(SUPEROBJ)
 	@echo "[GEN] imports"
-	$(PYTHON) $(GEN_IMPORTS) $(SUPEROBJ) $(BUILDDIR) $(LIBMAP) diffc
+	$(PYTHON) $(GEN_IMPORTS) $(SUPEROBJ) $(BUILDDIR) $(LIBMAP) diffc diffwm
 	@touch $@
 
 $(BUILDDIR)/dump.txt: $(SUPEROBJ)
@@ -57,7 +57,7 @@ $(BUILDDIR)/dump.txt: $(SUPEROBJ)
 $(OUT): $(SUPEROBJ) $(BUILDDIR)/imports.stamp $(BUILDDIR)/dump.txt | $(OUT_DIR)
 	@echo "[DEX] $@"
 	$(PYTHON) $(ELF2DEX) $(BUILDDIR)/dump.txt $(SUPEROBJ) $(OUT) \
-		--default-exl diffc.exl --verbose 
+		--default-exl diffc.exl --imports-map $(BUILDDIR)/imports_map.txt --verbose
 	@echo "[OUT]  $(OUT)"
 
 $(OBJDIR):

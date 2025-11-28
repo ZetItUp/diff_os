@@ -1,15 +1,16 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <ctype.h>
-#include <vbe/vbe.h>
 #include <syscall.h>
 #include <unistd.h>
+#include <diffgfx/graphics.h>
 #include "doomkeys.h"
 #include "m_argv.h"
 #include "doomgeneric.h"
 #include "i_system.h"
 
 static void DG_Finish(void);
+static window_t *g_doom_window = NULL;
 
 #define KEYQUEUE_SIZE 32
 
@@ -100,10 +101,10 @@ static void dg_poll_keys(void)
 
 void DG_Init(void)
 {
-    int w = DG_WIDTH;
-    int h = DG_HEIGHT;
+    int w = DOOMGENERIC_RESX;
+    int h = DOOMGENERIC_RESY;
 
-    size_t n = (size_t)DOOMGENERIC_RESX * DOOMGENERIC_RESY;
+    size_t n = (size_t)w * h;
     DG_ScreenBuffer = (pixel_t*)malloc(n * sizeof(pixel_t));
 
     char exec_root[256];
@@ -112,20 +113,25 @@ void DG_Init(void)
         chdir(exec_root);
     }
 
-    vbe_set_video_mode(w, h, 32);
+    // Create a window for Doom
+    g_doom_window = window_create(200, 200, w, h, 0);
+    if (!g_doom_window)
+    {
+        printf("[DOOM] Failed to create window!\n");
+        return;
+    }
 
-    // Hide text console overlay while the game runs
-    vbe_toggle_graphics_mode();
     I_AtExit(DG_Finish, true);
 }
 
 void DG_DrawFrame(void)
 {
-    int w = DG_WIDTH;
-    int h = DG_HEIGHT;
-    int pitch = w * 4;
+    if (!g_doom_window)
+    {
+        return;
+    }
 
-    vbe_present(DG_ScreenBuffer, pitch, w, h);
+    window_draw(g_doom_window, DG_ScreenBuffer);
 }
 
 void DG_SleepMs(uint32_t ms)
@@ -158,7 +164,7 @@ void DG_SetWindowTitle(const char *title)
 
 int main(int argc, char **argv)
 {
-    printf("Starting Doom...\n");
+    printf("[DOOM] Starting Doom...\n");
 
     doomgeneric_Create(argc, argv);
 
@@ -172,6 +178,9 @@ int main(int argc, char **argv)
 
 static void DG_Finish(void)
 {
-    // Restore text console overlay when leaving the game
-    vbe_toggle_graphics_mode();
+    if (g_doom_window)
+    {
+        window_destroy(g_doom_window);
+        g_doom_window = NULL;
+    }
 }

@@ -29,7 +29,6 @@ int main(void)
         return -2;
     }
 
-    printf("GUI WINDOW POG\n");
     /* Fill background with a dark color */
     for (size_t i = 0; i < pixels; ++i)
     {

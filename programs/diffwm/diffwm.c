@@ -3,6 +3,7 @@
 #include <string.h>
 #include <syscall.h>
 #include <time.h>
+#include <vbe/vbe.h>
 #include <video.h>
 #include <system/threads.h>
 #include <unistd.h>
@@ -14,7 +15,7 @@
 #include <diffgfx/graphics.h>
 #include <diffgfx/draw.h>
 
-// List of windows managed
+    // List of windows managed
 static window_t *g_windows = NULL;
 static uint32_t g_next_id = 1;
 static int g_mailbox = -1;
@@ -22,6 +23,25 @@ static int g_mailbox = -1;
 // Video mode and backbuffer
 static video_mode_info_t g_mode;
 static uint32_t *g_backbuffer = NULL;
+static uint32_t g_backbuffer_stride = 0; // pixels per line
+
+// Darken an ARGB pixel very slightly to simulate a subtle shadow (alpha over black).
+static inline uint32_t apply_shadow_20(uint32_t c)
+{
+    const uint32_t alpha = 32u;           // ~12.5% black
+    const uint32_t inv   = 255u - alpha;  // ~87.5% original
+
+    uint32_t a = c & 0xFF000000u;
+    uint32_t r = (c >> 16) & 0xFFu;
+    uint32_t g = (c >> 8) & 0xFFu;
+    uint32_t b = c & 0xFFu;
+
+    r = (r * inv + 127u) / 255u;
+    g = (g * inv + 127u) / 255u;
+    b = (b * inv + 127u) / 255u;
+
+    return a | (r << 16) | (g << 8) | b;
+}
 
 static window_t* wm_find(uint32_t id)
 {
@@ -66,9 +86,6 @@ static void wm_remove_window(uint32_t id)
 
 static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
 {
-    printf("[Diff WM] CREATE handle=%d size=%dx%d flags=0x%x\n",
-           desc->handle, desc->width, desc->height, desc->flags);
-
     int client_channel = connect_message_channel(desc->mailbox_id);
     if(client_channel < 0)
     {
@@ -77,6 +94,7 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     }
 
     int map_rc = shared_memory_map(desc->handle);
+
     if(map_rc < 0)
     {
         printf("[Diff WM] shared_memory_map failed rc=%d handle=%d\n", map_rc, desc->handle);
@@ -115,8 +133,6 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     wm_add_window(window);
     *out_id = window->id;
 
-    printf("[Diff WM] window created id=%u addr=%p\n", window->id, addr);
-
     return 0;
 }
 
@@ -126,6 +142,7 @@ static void wm_draw_window(const dwm_msg_t *msg)
 
     if(!window || !g_backbuffer)
     {
+        printf("[Diff WM] wm_draw_window: window=%p backbuffer=%p\n", (void*)window, (void*)g_backbuffer);
         return;
     }
 
@@ -136,13 +153,109 @@ static void wm_draw_window(const dwm_msg_t *msg)
 
     if(max_x <= 0 || max_y <= 0)
     {
+        printf("[Diff WM] wm_draw_window: invalid dimensions max_x=%d max_y=%d\n", max_x, max_y);
         return;
     }
 
+    uint32_t *src = (uint32_t*)window->pixels;
+    uint32_t src_stride = (uint32_t)(window->pitch / 4);
+    uint32_t *dst = g_backbuffer + (size_t)y0 * g_backbuffer_stride + (size_t)x0;
+
+    /* Shared memory is already mapped/pinned; use memcpy per row for speed. */
+    size_t row_bytes = (size_t)max_x * sizeof(uint32_t);
     for(int y = 0; y < max_y; ++y)
     {
-        memcpy((uint8_t*)g_backbuffer + (size_t)(y + y0) * g_mode.width * 4 + (size_t)x0 * 4,
-                (uint8_t*)window->pixels + (size_t)y * window->pitch, (size_t)max_x * 4);
+        memcpy(dst, src, row_bytes);
+        src += src_stride;
+        dst += g_backbuffer_stride;
+    }
+
+    // Draw a simple 2px border around the window area (clipped)
+    const int border = 2;
+    const uint32_t border_color = color_rgb(220, 220, 220);
+    const int x1 = x0 + max_x - 1;
+    const int y1 = y0 + max_y - 1;
+
+    // Top and bottom borders
+    for(int b = 0; b < border && b < max_y; ++b)
+    {
+        uint32_t *top = g_backbuffer + (size_t)(y0 + b) * g_backbuffer_stride + (size_t)x0;
+        uint32_t *bot = g_backbuffer + (size_t)(y1 - b) * g_backbuffer_stride + (size_t)x0;
+        for(int x = 0; x < max_x; ++x)
+        {
+            top[x] = border_color;
+            bot[x] = border_color;
+        }
+    }
+
+    // Left and right borders (avoid double-drawing corners excessively)
+    for(int y = border; y < max_y - border; ++y)
+    {
+        uint32_t *row = g_backbuffer + (size_t)(y0 + y) * g_backbuffer_stride;
+        for(int b = 0; b < border && b < max_x; ++b)
+        {
+            row[x0 + b] = border_color;
+            row[x1 - b] = border_color;
+        }
+    }
+
+    // Shadow on right and bottom (5px, 20% alpha black)
+    const int shadow = 5;
+    int shadow_x0 = x0 + max_x;
+    int shadow_y0 = y0 + max_y;
+
+    int shadow_x1 = shadow_x0 + shadow;
+    int shadow_y1 = shadow_y0 + shadow;
+
+    if (shadow_x0 < (int)g_mode.width)
+    {
+        int sx1 = (shadow_x1 < (int)g_mode.width) ? shadow_x1 : (int)g_mode.width;
+        int sy0 = y0;
+        int sy1 = y0 + max_y + shadow;
+        if (sy0 < 0) sy0 = 0;
+        if (sy1 > (int)g_mode.height) sy1 = (int)g_mode.height;
+
+        for (int y = sy0; y < sy1; ++y)
+        {
+            uint32_t *row = g_backbuffer + (size_t)y * g_backbuffer_stride;
+            int y_off = y - y0;
+            for (int x = shadow_x0; x < sx1; ++x)
+            {
+                // Bevel top of right shadow so inner edge meets the corner and fans outward.
+                if (y_off < shadow)
+                {
+                    int max_w = y_off + 1; // start with 1px at the top, grow downward
+                    if (x >= shadow_x0 + max_w) continue;
+                }
+                row[x] = apply_shadow_20(row[x]);
+            }
+        }
+    }
+
+    if (shadow_y0 < (int)g_mode.height)
+    {
+        int sy1 = (shadow_y1 < (int)g_mode.height) ? shadow_y1 : (int)g_mode.height;
+        int sx0 = x0;
+        int sx1 = x0 + max_x + shadow;
+        if (sx0 < 0) sx0 = 0;
+        if (sx1 > (int)g_mode.width) sx1 = (int)g_mode.width;
+
+        for (int y = shadow_y0; y < sy1; ++y)
+        {
+            uint32_t *row = g_backbuffer + (size_t)y * g_backbuffer_stride;
+            int y_off = y - shadow_y0;
+            for (int x = sx0; x < sx1; ++x)
+            {
+                // Bevel bottom shadow near left: inner edge touches corner, height grows to the right.
+                int x_off = x - x0;
+                if (x_off < shadow)
+                {
+                    int max_h = x_off + 1; // start with 1px height at left corner
+                    if (y_off >= max_h) continue;
+                }
+                row[x] = apply_shadow_20(row[x]);
+            }
+        }
     }
 
     system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
@@ -196,7 +309,7 @@ static void wm_handle_message(const dwm_msg_t *msg)
 
 int main(void)
 {
-    printf("[Diff WM] Starting the Window Manager...\n");
+    vbe_toggle_graphics_mode();
 
     if(system_video_mode_get(&g_mode) < 0)
     {
@@ -205,7 +318,9 @@ int main(void)
         return -1;
     }
 
-    g_backbuffer = calloc((size_t)g_mode.width * g_mode.height, sizeof(uint32_t));
+    g_backbuffer_stride = (uint32_t)(g_mode.pitch / 4);
+    if (g_backbuffer_stride < g_mode.width) g_backbuffer_stride = g_mode.width;
+    g_backbuffer = calloc((size_t)g_backbuffer_stride * g_mode.height, sizeof(uint32_t));
 
     if(!g_backbuffer)
     {
@@ -228,14 +343,13 @@ int main(void)
     {
         for(uint32_t x = 0; x < g_mode.width; ++x)
         {
-            g_backbuffer[y * g_mode.width + x] = color_rgb(69, 67, 117);
+            g_backbuffer[y * g_backbuffer_stride + x] = color_rgb(69, 67, 117);
         }
     }
     system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
 
-    /* Launch a demo client window (guitest) */
-    const char *client_path = "/programs/guitest/guitest.dex";
-    printf("[Diff WM] Spawning client: %s\n", client_path);
+    /* Launch Doom */
+    const char *client_path = "/games/doom/doom.dex";
     spawn_process(client_path, 0, NULL);
 
     dwm_msg_t msg;
@@ -243,14 +357,12 @@ int main(void)
     {
         if(receive_message(g_mailbox, &msg, sizeof(msg)) > 0)
         {
-            printf("Message Received\n");
             wm_handle_message(&msg);
         }
 
         thread_sleep_ms(1);
     }
 
-    printf("[Diff WM] Exiting Window Manager...\n");
     free(g_backbuffer);
 
     return 0;

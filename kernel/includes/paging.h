@@ -138,3 +138,6 @@ int  page_present(uint32_t lin);
 void dump_err_bits(uint32_t err);
 
 void paging_pt_pool_commit(void);
+
+void* paging_kmap_phys(uint32_t phys, int slot);
+void  paging_kunmap_phys(int slot);

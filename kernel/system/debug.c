@@ -5,7 +5,8 @@
 #include "console.h"
 
 #ifdef DIFF_DEBUG
-uint32_t g_debug_mask = DEBUG_AREA_GENERIC | DEBUG_AREA_PAGING | DEBUG_AREA_EXL;
+/* Disable noisy paging debug by default; enable manually with debug_enable() if needed. */
+uint32_t g_debug_mask = DEBUG_AREA_GENERIC | DEBUG_AREA_EXL;
 #else
 /* Always keep EXL debug enabled to aid tracing library loads. */
 uint32_t g_debug_mask = 0;

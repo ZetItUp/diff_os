@@ -120,23 +120,70 @@ static inline void shared_memory_lazy_init(void)
 // Map all pages of an object into the current process at a base VA
 static int shared_memory_map_into_current(shared_memory_object_t *obj, uintptr_t va_base)
 {
-    uint32_t flags = PAGE_PRESENT | PAGE_USER | PAGE_RW;
+    uint32_t cr3_current = read_cr3_local();
+    uint32_t kcr3 = (uint32_t)paging_kernel_cr3_phys();
+
+    // If we're in kernel CR3, use the normal map function
+    if (cr3_current == kcr3)
+    {
+        uint32_t flags = PAGE_PRESENT | PAGE_USER | PAGE_RW;
+        for (uint32_t i = 0; i < obj->page_count; i++)
+        {
+            uintptr_t va = va_base + i * PAGE_SIZE_4KB;
+            unmap_4kb_page((uint32_t)va);
+            if (map_4kb_page_flags((uint32_t)va, obj->phys_pages[i], flags) != 0)
+            {
+                return -1;
+            }
+        }
+        paging_flush_tlb();
+        return 0;
+    }
+
+    // We're in a user process CR3 - map directly into the process's page directory
+    uint32_t *proc_pd = (uint32_t*)paging_kmap_phys(cr3_current, 0);
+    if (!proc_pd)
+    {
+        return -1;
+    }
 
     for (uint32_t i = 0; i < obj->page_count; i++)
     {
         uintptr_t va = va_base + i * PAGE_SIZE_4KB;
+        uint32_t dir_index = (va >> 22) & 0x3FFu;
+        uint32_t table_index = (va >> 12) & 0x3FFu;
 
-        // Remove any old mapping before inserting
-        unmap_4kb_page((uint32_t)va);
+        uint32_t pde = proc_pd[dir_index];
 
-        /* map_4kb_page_flags will allocate user page tables on demand,
-           so we don't need a separate paging_ensure_pagetable call here. */
-        if (map_4kb_page_flags((uint32_t)va, obj->phys_pages[i], flags) != 0)
+        // Ensure page table exists
+        if (!(pde & PAGE_PRESENT))
         {
-            return -1;
+            // Allocate a new page table
+            uint32_t pt_phys = alloc_phys_page();
+            if (!pt_phys)
+            {
+                paging_kunmap_phys(0);
+                return -1;
+            }
+
+            // Clear the new page table
+            uint32_t *pt = (uint32_t*)paging_kmap_phys(pt_phys, 1);
+            for (int j = 0; j < 1024; j++) pt[j] = 0;
+            paging_kunmap_phys(1);
+
+            // Install PT in process's PD
+            proc_pd[dir_index] = (pt_phys & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+            pde = proc_pd[dir_index];
         }
+
+        // Now map the page table and set the PTE
+        uint32_t pt_phys = pde & 0xFFFFF000u;
+        uint32_t *pt = (uint32_t*)paging_kmap_phys(pt_phys, 1);
+        pt[table_index] = (obj->phys_pages[i] & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+        paging_kunmap_phys(1);
     }
 
+    paging_kunmap_phys(0);
     paging_flush_tlb();
     return 0;
 }
@@ -544,11 +591,6 @@ int shared_memory_handle_fault(uintptr_t fault_va)
                     paging_flush_tlb();
                     spin_unlock_irqrestore(&obj->lock, flags);
                     return 1;
-                }
-                else
-                {
-                    printf("[SHM][FAULT] remap failed pid=%d base=%08x pages=%u\n",
-                           pid, (uint32_t)base, obj->page_count);
                 }
                 break;
             }
