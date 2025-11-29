@@ -4,6 +4,8 @@
 #include "stddef.h"
 #include "system/threads.h"
 
+struct tty;
+
 typedef enum process_state
 {
     PROCESS_CREATED = 0,
@@ -46,6 +48,10 @@ typedef struct process
     // re-root child processes when resolving relative paths while still
     // allowing the caller's cwd to remain intact.
     char exec_root[256];
+
+    // Per-process tty endpoints (stdout/stderr and stdin)
+    struct tty *tty_out;
+    struct tty *tty_in;
 } process_t;
 
 typedef struct user_boot_args

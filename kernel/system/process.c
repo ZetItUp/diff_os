@@ -19,6 +19,7 @@
 #include "system/messaging.h"
 #include "system/shared_mem.h"
 #include "interfaces.h"
+#include "system/tty.h"
 
 extern void enter_user_mode(uint32_t entry_eip, uint32_t user_stack_top) __attribute__((noreturn));
 
@@ -168,6 +169,17 @@ void process_destroy(process_t *p)
     }
 
     // Fria PCB
+    if (p->tty_out)
+    {
+        tty_destroy(p->tty_out);
+        p->tty_out = NULL;
+    }
+    if (p->tty_in)
+    {
+        tty_destroy(p->tty_in);
+        p->tty_in = NULL;
+    }
+
     kfree(p);
 
     // Återställ CR3 exakt som det var.
@@ -279,6 +291,15 @@ process_t *process_create_kernel(void (*entry)(void *),
     p->live_threads = 0;
     p->main_thread = NULL;
     p->waiter = NULL;
+    p->tty_out = tty_create();
+    p->tty_in  = tty_create();
+    if (!p->tty_out || !p->tty_in)
+    {
+        if (p->tty_out) tty_destroy(p->tty_out);
+        if (p->tty_in)  tty_destroy(p->tty_in);
+        kfree(p);
+        return NULL;
+    }
     process_inherit_cwd_from_parent(p, p->parent);
     process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 
@@ -319,6 +340,15 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
     p->live_threads = 0;
     p->main_thread = NULL;
     p->waiter = NULL;
+    p->tty_out = tty_create();
+    p->tty_in  = tty_create();
+    if (!p->tty_out || !p->tty_in)
+    {
+        if (p->tty_out) tty_destroy(p->tty_out);
+        if (p->tty_in)  tty_destroy(p->tty_in);
+        kfree(p);
+        return NULL;
+    }
     process_inherit_cwd_from_parent(p, p->parent);
     process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 

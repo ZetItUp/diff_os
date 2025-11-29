@@ -1,0 +1,150 @@
+// tty.c - simple ring-buffer tty endpoints for user stdout/stderr
+
+#include "system/tty.h"
+#include "system/process.h"
+#include "system/usercopy.h"
+#include "heap.h"
+#include "string.h"
+
+static inline uint32_t tty_count(const tty_t *t)
+{
+    return t->head - t->tail;
+}
+
+tty_t *tty_create(void)
+{
+    tty_t *t = (tty_t *)kmalloc(sizeof(tty_t));
+
+    if (!t)
+    {
+        return NULL;
+    }
+
+    memset(t, 0, sizeof(*t));
+    spinlock_init(&t->lock);
+
+    return t;
+}
+
+void tty_destroy(tty_t *t)
+{
+    if (!t)
+    {
+        return;
+    }
+
+    kfree(t);
+}
+
+int tty_write(tty_t *t, const void *buf, size_t len)
+{
+    if (!t || !buf || len == 0)
+    {
+        return 0;
+    }
+
+    const uint8_t *p = (const uint8_t *)buf;
+    uint32_t flags;
+    spin_lock_irqsave(&t->lock, &flags);
+
+    uint32_t written = 0;
+    while (written < len && tty_count(t) < (TTY_BUF_SIZE - 1u))
+    {
+        t->buf[t->head & TTY_BUF_MASK] = p[written];
+        t->head++;
+        written++;
+    }
+
+    spin_unlock_irqrestore(&t->lock, flags);
+    return (int)written;
+}
+
+int tty_read(tty_t *t, void *buf, size_t len)
+{
+    if (!t || !buf || len == 0)
+    {
+        return 0;
+    }
+
+    uint8_t *p = (uint8_t *)buf;
+    uint32_t flags;
+    spin_lock_irqsave(&t->lock, &flags);
+
+    uint32_t read = 0;
+    while (read < len && t->tail != t->head)
+    {
+        p[read] = t->buf[t->tail & TTY_BUF_MASK];
+        t->tail++;
+        read++;
+    }
+
+    spin_unlock_irqrestore(&t->lock, flags);
+    return (int)read;
+}
+
+// -----------------------------------------------------------------------------
+// Syscall helpers for user buffers (current process only)
+// -----------------------------------------------------------------------------
+int system_tty_write_user(const void *user_buf, uint32_t len)
+{
+    if (!user_buf || len == 0)
+    {
+        return 0;
+    }
+
+    process_t *p = process_current();
+    if (!p || !p->tty_in)
+    {
+        return -1;
+    }
+
+    uint32_t chunk = (len > TTY_BUF_SIZE) ? TTY_BUF_SIZE : len;
+    uint8_t *kbuf = (uint8_t *)kmalloc(chunk);
+    if (!kbuf)
+    {
+        return -1;
+    }
+
+    if (copy_from_user(kbuf, user_buf, chunk) != 0)
+    {
+        kfree(kbuf);
+        return -1;
+    }
+
+    int wrote = tty_write(p->tty_in, kbuf, chunk);
+    kfree(kbuf);
+    return wrote;
+}
+
+int system_tty_read_user(void *user_buf, uint32_t len)
+{
+    if (!user_buf || len == 0)
+    {
+        return 0;
+    }
+
+    process_t *p = process_current();
+    if (!p || !p->tty_out)
+    {
+        return -1;
+    }
+
+    uint32_t chunk = (len > TTY_BUF_SIZE) ? TTY_BUF_SIZE : len;
+    uint8_t *kbuf = (uint8_t *)kmalloc(chunk);
+    if (!kbuf)
+    {
+        return -1;
+    }
+
+    int rd = tty_read(p->tty_out, kbuf, chunk);
+    if (rd > 0)
+    {
+        if (copy_to_user(user_buf, kbuf, (size_t)rd) != 0)
+        {
+            rd = -1;
+        }
+    }
+
+    kfree(kbuf);
+    return rd;
+}

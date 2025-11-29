@@ -16,6 +16,7 @@
 #include "diff.h"
 #include "timer.h"
 #include "system/shared_mem.h"
+#include "system/tty.h"
 
 struct dirent;
 
@@ -734,6 +735,18 @@ int system_call_dispatch(struct syscall_frame *f)
         case SYSTEM_SHARED_MEMORY_RELEASE:
         {
             ret = shared_memory_release(arg0);
+
+            break;
+        }
+        case SYSTEM_TTY_READ:
+        {
+            ret = system_tty_read_user((void*)arg0, (uint32_t)arg1);
+
+            break;
+        }
+        case SYSTEM_TTY_WRITE:
+        {
+            ret = system_tty_write_user((const void*)arg0, (uint32_t)arg1);
 
             break;
         }

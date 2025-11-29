@@ -60,6 +60,8 @@ enum
     SYSTEM_SHARED_MEMORY_MAP = 48,
     SYSTEM_SHARED_MEMORY_UNMAP = 49,
     SYSTEM_SHARED_MEMORY_RELEASE = 50,
+    SYSTEM_TTY_READ = 51,
+    SYSTEM_TTY_WRITE = 52,
 };
 
 struct syscall_frame 
@@ -118,6 +120,8 @@ int system_file_delete(const char *abs_path);
 int system_file_rename(const char *old_path, const char *new_path);
 int system_mkdir(const char *path);
 int system_rmdir(const char *path);
+int system_tty_read_user(void *user_buf, uint32_t len);
+int system_tty_write_user(const void *user_buf, uint32_t len);
 
 int system_brk_set(void *new_break);
 void system_brk_init_window(uintptr_t image_base, uintptr_t image_size);

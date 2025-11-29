@@ -62,6 +62,8 @@ enum
     SYSTEM_SHARED_MEMORY_MAP = 48,
     SYSTEM_SHARED_MEMORY_UNMAP = 49,
     SYSTEM_SHARED_MEMORY_RELEASE = 50,
+    SYSTEM_TTY_READ = 51,
+    SYSTEM_TTY_WRITE = 52,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -405,4 +407,14 @@ static inline int system_shared_memory_unmap(int handle)
 static inline int system_shared_memory_release(int handle)
 {
     return do_sys(SYSTEM_SHARED_MEMORY_RELEASE, handle, 0, 0, 0);
+}
+
+static inline int system_tty_read(void *buf, uint32_t len)
+{
+    return do_sys(SYSTEM_TTY_READ, (int)(uintptr_t)buf, (int)len, 0, 0);
+}
+
+static inline int system_tty_write(const void *buf, uint32_t len)
+{
+    return do_sys(SYSTEM_TTY_WRITE, (int)(uintptr_t)buf, (int)len, 0, 0);
 }
