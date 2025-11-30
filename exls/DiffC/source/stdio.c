@@ -141,6 +141,8 @@ FILE *fopen(const char *path, const char *mode)
     file->error = 0;
     file->eof = 0;
     file->ungot = -1;
+    file->buffer_pos = 0;
+    file->buffer_len = 0;
 
     return file;
 }
@@ -172,19 +174,51 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *file)
     uint8_t *dst = (uint8_t*)ptr;
     size_t done = 0;
 
+    // First, handle ungot character
     if (file->ungot >= 0 && done < total) {
         dst[done++] = (uint8_t)file->ungot;
         file->ungot = -1;
     }
 
+    // Try to satisfy the request from the buffer or file
     while (done < total) {
-        int32_t r = system_read(file->file_descriptor, dst + done, total - done);
-        if (r <= 0) {
-            if (r == 0) file->eof = 1;
-            else file->error = 1;
-            break;
+        // Do we have data in the buffer?
+        if (file->buffer_pos < file->buffer_len) {
+            // Copy from buffer
+            int32_t available = file->buffer_len - file->buffer_pos;
+            int32_t needed = total - done;
+            int32_t to_copy = (available < needed) ? available : needed;
+
+            for (int32_t i = 0; i < to_copy; i++) {
+                dst[done + i] = file->buffer[file->buffer_pos + i];
+            }
+            file->buffer_pos += to_copy;
+            done += to_copy;
         }
-        done += r;
+        else {
+            // Buffer is empty, refill it or read directly
+            if (total - done >= FILE_BUFFER_SIZE) {
+                // Large read, bypass buffer
+                int32_t r = system_read(file->file_descriptor, dst + done, total - done);
+                if (r <= 0) {
+                    if (r == 0) file->eof = 1;
+                    else file->error = 1;
+                    break;
+                }
+                done += r;
+            }
+            else {
+                // Small read, refill buffer
+                int32_t r = system_read(file->file_descriptor, file->buffer, FILE_BUFFER_SIZE);
+                if (r <= 0) {
+                    if (r == 0) file->eof = 1;
+                    else file->error = 1;
+                    break;
+                }
+                file->buffer_pos = 0;
+                file->buffer_len = r;
+            }
+        }
     }
 
     return done / size;
@@ -548,15 +582,18 @@ int putchar(int c)
 int fseek(FILE *file, long offset, int whence)
 {
     if (!file) return -1;
-    
+
     int ret = system_lseek(file->file_descriptor, offset, whence);
     if (ret < 0) {
         file->error = 1;
         return -1;
     }
-    
+
     file->eof = 0;
     file->ungot = -1;
+    // Invalidate the buffer since we've moved the file position
+    file->buffer_pos = 0;
+    file->buffer_len = 0;
     return 0;
 }
 

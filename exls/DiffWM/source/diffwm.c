@@ -77,19 +77,31 @@ window_t* window_create(int x, int y, int width, int height, uint32_t flags)
         return NULL;
     }
 
-    dwm_msg_t reply;
-    int rcv = receive_message(mailbox, &reply, sizeof(reply));
-    if(rcv < 0)
+    dwm_msg_t *reply = malloc(sizeof(*reply));
+    if(!reply)
     {
-        printf("[diffwm.lib] receive_message for CREATE failed rc=%d\n", rcv);
+        printf("[diffwm.lib] receive buffer alloc failed\n");
         return NULL;
     }
 
-    if(reply.type != DWM_MSG_CREATE_WINDOW || reply.create.id == 0)
+    int rcv = receive_message(mailbox, reply, sizeof(*reply));
+    if(rcv < 0)
     {
-        printf("[diffwm.lib] CREATE reply invalid type=%d id=%u\n", reply.type, reply.create.id);
+        printf("[diffwm.lib] receive_message for CREATE failed rc=%d\n", rcv);
+        free(reply);
         return NULL;
     }
+
+    if(reply->type != DWM_MSG_CREATE_WINDOW || reply->create.id == 0)
+    {
+        printf("[diffwm.lib] CREATE reply invalid type=%d id=%u\n",
+               reply->type, reply->create.id);
+        free(reply);
+        return NULL;
+    }
+
+    int reply_id = reply->create.id;
+    free(reply);
 
     int addr = shared_memory_map(handle);
     if(addr < 0)
@@ -101,7 +113,7 @@ window_t* window_create(int x, int y, int width, int height, uint32_t flags)
     window_t* win = malloc(sizeof(*win));
     *win = (window_t)
     {
-        .id = reply.create.id,
+        .id = reply_id,
         .handle = handle,
         .pixels = (void*)addr,
         .x = x,

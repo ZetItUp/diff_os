@@ -243,6 +243,35 @@ static void panic_dump_code_window(uint32_t center, size_t pre, size_t post)
 static volatile int s_in_pf = 0;  // reentransvakt
 
 // PF-utskrift som INTE kan pagefaulta (ingen printf/heap/lås)
+static void print_user_stack_snapshot(uint32_t useresp)
+{
+    const int stack_words = 8;
+    uint32_t stack[stack_words];
+
+    if (paging_check_user_range(useresp, stack_words * sizeof(uint32_t)) != 0)
+    {
+        panic_puts("User stack snapshot unavailable\n");
+        return;
+    }
+
+    if (copy_from_user(stack, (const void *)(uintptr_t)useresp,
+                       stack_words * sizeof(uint32_t)) != 0)
+    {
+        panic_puts("User stack snapshot failed\n");
+        return;
+    }
+
+    panic_puts("User stack @");
+    panic_puthex32(useresp);
+    panic_putc(':');
+    for (int i = 0; i < stack_words; ++i)
+    {
+        panic_putc(' ');
+        panic_puthex32(stack[i]);
+    }
+    panic_puts("\n");
+}
+
 static void print_page_fault(struct stack_frame *f, uint32_t cr2, uint32_t cr3, int handled)
 {
     // Re-entrant PF -> skriv minsta möjliga och stoppa hårt
@@ -273,6 +302,7 @@ static void print_page_fault(struct stack_frame *f, uint32_t cr2, uint32_t cr3, 
 
     panic_print_cpu_context(f);
     panic_print_process_info();
+    print_user_stack_snapshot(f->useresp);
     --s_in_pf;
 }
 

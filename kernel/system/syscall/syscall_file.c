@@ -297,7 +297,7 @@ long system_file_write(int file, const void *buf, unsigned long count)
             char c;
             if (copy_from_user(&c, (const uint8_t*)buf + i, 1) != 0)
                 return (long)i;
-            putch(c);
+            tty_putc(c);
         }
         return (long)count;
     }

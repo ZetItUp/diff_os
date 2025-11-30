@@ -13,10 +13,13 @@ typedef struct tty
     uint32_t   head;
     uint32_t   tail;
     spinlock_t lock;
+    int        refcount;
 } tty_t;
 
 tty_t *tty_create(void);
 void   tty_destroy(tty_t *t);
+void   tty_add_ref(tty_t *t);
+void   tty_putc(int ch);
 int    tty_write(tty_t *t, const void *buf, size_t len);
 int    tty_read(tty_t *t, void *buf, size_t len);
 

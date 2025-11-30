@@ -43,7 +43,6 @@ void irq_handler_c(unsigned irq_ptr, void *context)
     }
 
     g_in_irq = 0;
-    scheduler_handle_irq_exit();
 }
 
 void irq_install_handler(uint8_t irq, irq_handler_t handler)

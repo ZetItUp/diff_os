@@ -2,6 +2,7 @@
 #include "system/usercopy.h"
 #include "system/process.h"
 #include "system/messaging.h"
+#include <stdio.h>
 #include "system/scheduler.h"
 #include "system/spinlock.h"
 #include "system/threads.h"
@@ -160,7 +161,7 @@ int system_msg_recv(int channel_id, void *buffer, uint32_t buf_len)
         if(buf_len < msg_len)
         {
             spin_unlock_irqrestore(&channel->lock, flags);
-            
+
             // Caller buffer too small
             return -3;
         }
@@ -168,7 +169,7 @@ int system_msg_recv(int channel_id, void *buffer, uint32_t buf_len)
         if(copy_to_user(buffer, channel->messages[slot], msg_len) != 0)
         {
             spin_unlock_irqrestore(&channel->lock, flags);
-            
+
             // Bad user buffer
             return -4;
         }

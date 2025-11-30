@@ -306,6 +306,18 @@ void process_init(void)
     DDBG("[PROC] init: kernel pid=%d cr3=%08x\n", k->pid, k->cr3);
 }
 
+// Helper for inheriting a tty (or creating new if none)
+static tty_t *process_clone_tty(tty_t *parent_tty)
+{
+    if (parent_tty)
+    {
+        tty_add_ref(parent_tty);
+        return parent_tty;
+    }
+
+    return tty_create();
+}
+
 // Create a kernel process with one thread
 process_t *process_create_kernel(void (*entry)(void *),
                                  void *argument,
@@ -324,16 +336,17 @@ process_t *process_create_kernel(void (*entry)(void *),
     }
 
     // Inherit current address space
+    process_t *parent = process_current();
     p->pid = process_alloc_pid();
     p->state = PROCESS_READY;
     p->cr3 = read_cr3_local();
-    p->parent = process_current();
+    p->parent = parent;
     p->exit_code = 0;
     p->live_threads = 0;
     p->main_thread = NULL;
     p->waiter = NULL;
-    p->tty_out = tty_create();
-    p->tty_in  = tty_create();
+    p->tty_out = process_clone_tty(parent ? parent->tty_out : NULL);
+    p->tty_in  = process_clone_tty(parent ? parent->tty_in : NULL);
     if (!p->tty_out || !p->tty_in)
     {
         if (p->tty_out) tty_destroy(p->tty_out);
@@ -378,16 +391,17 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
         return NULL;
     }
 
+    process_t *parent = process_current();
     p->pid = process_alloc_pid();
     p->state = PROCESS_READY;
     p->cr3 = cr3;
-    p->parent = process_current();
+    p->parent = parent;
     p->exit_code = 0;
     p->live_threads = 0;
     p->main_thread = NULL;
     p->waiter = NULL;
-    p->tty_out = tty_create();
-    p->tty_in  = tty_create();
+    p->tty_out = process_clone_tty(parent ? parent->tty_out : NULL);
+    p->tty_in  = process_clone_tty(parent ? parent->tty_in : NULL);
     if (!p->tty_out || !p->tty_in)
     {
         if (p->tty_out) tty_destroy(p->tty_out);

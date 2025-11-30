@@ -9,6 +9,8 @@
 #define FILE_CAN_READ  0x01
 #define FILE_CAN_WRITE 0x02
 
+#define FILE_BUFFER_SIZE 512
+
 typedef struct FILE
 {
     int file_descriptor;
@@ -16,6 +18,10 @@ typedef struct FILE
     int error;
     int eof;
     int ungot;
+    // Read buffer for performance
+    char buffer[FILE_BUFFER_SIZE];
+    int buffer_pos;   // Current position in buffer
+    int buffer_len;   // Valid bytes in buffer
 } FILE;
 
 #ifndef O_RDONLY

@@ -5,6 +5,8 @@
 #include "system/usercopy.h"
 #include "heap.h"
 #include "string.h"
+#include "console.h"
+#include "serial.h"
 
 static inline uint32_t tty_count(const tty_t *t)
 {
@@ -22,8 +24,22 @@ tty_t *tty_create(void)
 
     memset(t, 0, sizeof(*t));
     spinlock_init(&t->lock);
+    t->refcount = 1;
 
     return t;
+}
+
+void tty_add_ref(tty_t *t)
+{
+    if (!t)
+    {
+        return;
+    }
+
+    uint32_t flags;
+    spin_lock_irqsave(&t->lock, &flags);
+    t->refcount++;
+    spin_unlock_irqrestore(&t->lock, flags);
 }
 
 void tty_destroy(tty_t *t)
@@ -33,7 +49,33 @@ void tty_destroy(tty_t *t)
         return;
     }
 
-    kfree(t);
+    uint32_t flags;
+    spin_lock_irqsave(&t->lock, &flags);
+    t->refcount--;
+    int count = t->refcount;
+    spin_unlock_irqrestore(&t->lock, flags);
+
+    if (count <= 0)
+    {
+        kfree(t);
+    }
+}
+
+void tty_putc(int ch)
+{
+    process_t *p = process_current();
+
+    if (p && p->tty_out)
+    {
+        char c = (char)ch;
+
+        if (tty_write(p->tty_out, &c, 1) > 0)
+        {
+            return;
+        }
+    }
+
+    putch((char)ch & 0xFF);
 }
 
 int tty_write(tty_t *t, const void *buf, size_t len)
@@ -56,6 +98,20 @@ int tty_write(tty_t *t, const void *buf, size_t len)
     }
 
     spin_unlock_irqrestore(&t->lock, flags);
+
+#ifdef DIFF_DEBUG
+    // Print to serial debug output when debugging is enabled
+    for (uint32_t i = 0; i < written; i++)
+    {
+        char c = (char)p[i];
+        if (c == '\n')
+        {
+            serial_putc('\r');
+        }
+        serial_putc(c);
+    }
+#endif
+
     return (int)written;
 }
 

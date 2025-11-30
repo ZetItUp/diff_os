@@ -91,7 +91,6 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     int client_channel = connect_message_channel(desc->mailbox_id);
     if(client_channel < 0)
     {
-        printf("[Diff WM] connect_message_channel mailbox_id=%d failed\n", desc->mailbox_id);
         return -1;
     }
 
@@ -99,7 +98,6 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
 
     if(map_rc < 0)
     {
-        printf("[Diff WM] shared_memory_map failed rc=%d handle=%d\n", map_rc, desc->handle);
         return -1;
     }
 
@@ -107,7 +105,6 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
 
     if(!addr)
     {
-        printf("[Diff WM] shared_memory_map returned NULL handle=%d\n", desc->handle);
         return -1;
     }
 
@@ -116,8 +113,6 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     if(!window)
     {
         shared_memory_unmap(desc->handle);
-
-        printf("[Diff WM] calloc for window failed\n");
         return -1;
     }
 
@@ -132,9 +127,6 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     window->mailbox = client_channel;
     window->wm_channel = g_mailbox;
 
-    printf("[Diff WM] create_window ok id=%u addr=%p size=%ux%u pitch=%u client_box=%d\n",
-           window->id, addr, window->width, window->height, window->pitch, client_channel);
-
     wm_add_window(window);
     *out_id = window->id;
 
@@ -147,7 +139,6 @@ static void wm_draw_window(const dwm_msg_t *msg)
 
     if(!window || !g_backbuffer)
     {
-        printf("[Diff WM] wm_draw_window: window=%p backbuffer=%p\n", (void*)window, (void*)g_backbuffer);
         return;
     }
 
@@ -158,7 +149,6 @@ static void wm_draw_window(const dwm_msg_t *msg)
 
     if(max_x <= 0 || max_y <= 0)
     {
-        printf("[Diff WM] wm_draw_window: invalid dimensions max_x=%d max_y=%d\n", max_x, max_y);
         return;
     }
 
@@ -272,29 +262,28 @@ static void wm_handle_message(const dwm_msg_t *msg)
     {
         case DWM_MSG_CREATE_WINDOW:
             {
-                printf("[Diff WM] CREATE win request: %ux%u at (%d,%d) handle=%d mailbox=%d\n",
-                       msg->create.width, msg->create.height,
-                       msg->create.x, msg->create.y,
-                       msg->create.handle, msg->create.mailbox_id);
-
-                dwm_msg_t reply = {0};
-                reply.type = DWM_MSG_CREATE_WINDOW;
-                reply.create.id = 0;
-
-                if(wm_create_window(&msg->create, &reply.create.id) != 0)
+                dwm_msg_t *reply = calloc(1, sizeof(*reply));
+                if (!reply)
                 {
-                    reply.create.id = 0;
+                    break;
+                }
+
+                reply->type = DWM_MSG_CREATE_WINDOW;
+                reply->create.id = 0;
+
+                if(wm_create_window(&msg->create, &reply->create.id) != 0)
+                {
+                    reply->create.id = 0;
                 }
 
                 int client_channel = connect_message_channel(msg->create.mailbox_id);
                 if(client_channel < 0)
                 {
-                    printf("[Diff WM] connect_message_channel for reply failed id=%d\n", msg->create.mailbox_id);
                     client_channel = g_mailbox;
                 }
 
-                send_message(client_channel, &reply, sizeof(reply));
-                printf("[Diff WM] CREATE reply sent id=%u chan=%d\n", reply.create.id, client_channel);
+                send_message(client_channel, reply, sizeof(*reply));
+                free(reply);
 
                 break;
             }
@@ -322,12 +311,8 @@ int main(void)
 {
     vbe_toggle_graphics_mode();
 
-    printf("[Diff WM] starting\n");
-
     if(system_video_mode_get(&g_mode) < 0)
     {
-        printf("[Diff WM] ERROR: No VBE Mode Set!\n");
-
         return -1;
     }
 
@@ -337,7 +322,6 @@ int main(void)
 
     if(!g_backbuffer)
     {
-        printf("[Diff WM] ERROR: Could not allocate backbuffer!\n");
         return -2;
     }
 
@@ -346,12 +330,8 @@ int main(void)
 
     if(g_mailbox < 0)
     {
-        printf("[Diff WM] ERROR: Cannot create mailbox!\n");
-
         return -3;
     }
-
-    printf("[Diff WM] created mailbox\n");
 
     /* Fill background to a known color before any client draws */
     for(uint32_t y = 0; y < g_mode.height; ++y)
@@ -362,25 +342,24 @@ int main(void)
         }
     }
 
-    printf("[Diff WM] filled background\n");
-
     system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
-    printf("[Diff WM] presented background\n");
 
     /* Spawn a simple graphical terminal client */
     const char *client_path = "/programs/gdterm/gdterm.dex";
-    int pid = spawn_process(client_path, 0, NULL);
-    printf("[Diff WM] spawn %s pid=%d\n", client_path, pid);
+    spawn_process(client_path, 0, NULL);
 
-    dwm_msg_t msg;
+    dwm_msg_t *msg = (dwm_msg_t *)malloc(sizeof(dwm_msg_t));
+    if (!msg)
+    {
+        return -4;
+    }
+
     for(;;)
     {
-        int rcv = system_message_receive(g_mailbox, &msg, sizeof(msg));
+        int rcv = system_message_receive(g_mailbox, msg, sizeof(*msg));
         if (rcv > 0)
         {
-            printf("[Diff WM] recv type=%d win=%u\n", msg.type, msg.window_id);
-            wm_handle_message(&msg);
-            printf("[Diff WM] handled message type=%d\n", msg.type);
+            wm_handle_message(msg);
             system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
         }
         else
@@ -390,6 +369,7 @@ int main(void)
     }
 
     free(g_backbuffer);
+    free(msg);
 
     return 0;
 }

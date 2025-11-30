@@ -480,25 +480,9 @@ void scheduler_tick_from_timer(void)
 
 void scheduler_handle_irq_exit(void)
 {
-    if (!g_need_resched)
-    {
-        return;
-    }
-    if (g_in_resched)
-    {
-        return;
-    }
-
-    if (!g_run_queue_head)
-    {
-        g_need_resched = 0;
-        return;
-    }
-
-    g_need_resched = 0;
-    g_in_resched = 1;
-    thread_yield();
-    g_in_resched = 0;
+    // Rescheduling from IRQ context is unsafe with the current
+    // context_switch path. Keep a deferred flag for cooperative
+    // yield points instead.
 }
 
 void scheduler_reap_all_zombies(void)

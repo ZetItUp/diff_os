@@ -14,6 +14,7 @@
 #include "heap.h"
 #include "dex/dex.h"
 #include "diff.h"
+#include "debug.h"
 #include "timer.h"
 #include "system/shared_mem.h"
 #include "system/tty.h"
@@ -111,10 +112,10 @@ static int system_console_get_color(uint32_t *out)
     return 0;
 }
 
-// Print one character to the console
+// Print one character to the console/tty
 static int system_putchar(int ch)
 {
-    putch((char)ch & 0xFF);
+    tty_putc(ch);
 
     return 0;
 }
@@ -143,7 +144,7 @@ static int system_print(const char *s)
             break;
         }
 
-        putch(c);
+        system_putchar(c);
 #ifdef DIFF_DEBUG
         printf("[WRITE] pid=%d\n", process_current()->pid);
 #endif
@@ -773,6 +774,16 @@ int system_call_dispatch(struct syscall_frame *f)
     {
         f->eax = (uint32_t)ret;
         f->edx = 0;
+    }
+
+    // Safety: never try to iret to a NULL EIP. If the saved user EIP
+    // got clobbered, terminate the current process/thread instead of
+    // crashing in ring3.
+    if (f->eip == 0)
+    {
+        DDBG("[SYSCALL][ERR] NULL user EIP, killing pid=%d\n",
+             process_current() ? process_current()->pid : -1);
+        process_exit_current(-1);
     }
 
     return ret;
