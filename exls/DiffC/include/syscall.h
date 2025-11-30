@@ -57,6 +57,7 @@ enum
     SYSTEM_MESSAGE_CONNECT_CHANNEL = 43,
     SYSTEM_MESSAGE_SEND = 44,
     SYSTEM_MESSAGE_RECEIVE = 45,
+    SYSTEM_MESSAGE_TRY_RECEIVE = 53,
     SYSTEM_SHARED_MEMORY_CREATE = 46,
     SYSTEM_SHARED_MEMORY_GRANT = 47,
     SYSTEM_SHARED_MEMORY_MAP = 48,
@@ -381,7 +382,12 @@ static inline int system_message_send(int channel_id, const void *buffer, uint32
 
 static inline int system_message_receive(int channel_id, void *buffer, uint32_t buf_len)
 {
-    return do_sys(SYSTEM_MESSAGE_RECEIVE, channel_id, (int)(uintptr_t)buffer, (int)buf_len, 0);
+    return do_sys(SYSTEM_MESSAGE_RECEIVE, channel_id, (int)(uintptr_t)buffer, (int)buf_len, 0); 
+}
+
+static inline int system_message_try_receive(int channel_id, void *buffer, uint32_t buf_len)
+{
+    return do_sys(SYSTEM_MESSAGE_TRY_RECEIVE, channel_id, (int)(uintptr_t)buffer, (int)buf_len, 0);
 }
 
 static inline int system_shared_memory_create(uint32_t size_bytes)

@@ -8,6 +8,7 @@
 #include "string.h"
 #include "stdint.h"
 #include "stddef.h"
+#include "system/spinlock.h"
 
 extern void thread_entry_thunk(void);
 
@@ -87,12 +88,18 @@ int thread_create_for_process(
 
     memset(t, 0, sizeof(*t));
 
+    size_t kstack_size = kernel_stack_bytes;
+    if (kstack_size < 4096)
+    {
+        kstack_size = 4096;
+    }
+
     t->thread_id = g_next_tid++;
     t->state = THREAD_NEW;
     t->owner_process = owner;
 
     // Allocate kernel stack
-    void* stack = kstack_alloc(kernel_stack_bytes);
+    void* stack = kstack_alloc(kstack_size);
     if (!stack)
     {
         kfree(t);
@@ -100,7 +107,7 @@ int thread_create_for_process(
     }
 
     t->kernel_stack_base = (uint32_t)(uintptr_t)stack;
-    t->kernel_stack_top = t->kernel_stack_base + (uint32_t)kernel_stack_bytes;
+    t->kernel_stack_top = t->kernel_stack_base + (uint32_t)kstack_size;
 
     // Build initial context
     init_thread_context(t, entry, argument);
@@ -108,7 +115,17 @@ int thread_create_for_process(
     // Increase live thread count for process
     if (owner)
     {
+        uint32_t f;
+        spin_lock_irqsave(&owner->lock, &f);
         owner->live_threads++;
+        if (!owner->main_thread)
+        {
+            owner->main_thread = t;
+            owner->kstack_base = t->kernel_stack_base;
+            owner->kstack_top = t->kernel_stack_top;
+            owner->kstack_size = kstack_size;
+        }
+        spin_unlock_irqrestore(&owner->lock, f);
     }
 
     // Make runnable and enqueue
@@ -142,4 +159,3 @@ void threads_reap_one(thread_t *t)
     // Free thread object
     kfree(t);
 }
-

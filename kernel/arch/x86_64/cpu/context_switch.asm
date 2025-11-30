@@ -42,8 +42,7 @@ context_switch:
 
     ; Byt till new:s stack och hoppa dit
     mov     esp, [edx + OFF_ESP]
-    sti                         ; *** viktigt: slå på avbrott innan vi ret:ar ***
-    ret
+    ret                         ; return with interrupts still disabled
 
 ; För nyskapade kernel-trådar: ret hoppar hit först
 ; Stack vid start:

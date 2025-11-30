@@ -11,6 +11,7 @@
 #include "system/threads.h"
 #include "system/scheduler.h"
 #include "system/path.h"
+#include "system/spinlock.h"
 #include "debug.h"
 #include "dex/dex.h"
 #include "dex/exl.h"
@@ -40,6 +41,17 @@ static void user_bootstrap(void *arg);
 static process_t *g_current = NULL;
 static process_t *g_all_head = NULL;
 static int g_next_pid = 1;
+static spinlock_t g_proc_lock;
+
+static inline void proc_list_lock(uint32_t *flags)
+{
+    spin_lock_irqsave(&g_proc_lock, flags);
+}
+
+static inline void proc_list_unlock(uint32_t flags)
+{
+    spin_unlock_irqrestore(&g_proc_lock, flags);
+}
 
 static uint32_t process_root_dir_id(void)
 {
@@ -115,10 +127,13 @@ static void process_unlink_from_all(process_t *p)
         return;
     }
 
+    uint32_t f;
+    proc_list_lock(&f);
+
     if (g_all_head == p)
     {
         g_all_head = p->next;
-
+        proc_list_unlock(f);
         return;
     }
 
@@ -127,12 +142,13 @@ static void process_unlink_from_all(process_t *p)
         if (it->next == p)
         {
             it->next = p->next;
-
+            proc_list_unlock(f);
             return;
         }
     }
 
     p->next = NULL;
+    proc_list_unlock(f);
 }
 
 // Destroy process and free resources (kernel side only)
@@ -190,8 +206,18 @@ void process_destroy(process_t *p)
 // Link process into global list
 static void process_link(process_t *p)
 {
+    if (!p)
+    {
+        return;
+    }
+
+    uint32_t f;
+    proc_list_lock(&f);
+
     p->next = g_all_head;
     g_all_head = p;
+
+    proc_list_unlock(f);
 }
 
 // Allocate zeroed process object
@@ -205,8 +231,21 @@ static process_t *process_alloc(void)
     }
 
     memset(p, 0, sizeof(*p));
+    spinlock_init(&p->lock);
 
     return p;
+}
+
+static int process_alloc_pid(void)
+{
+    uint32_t f;
+    proc_list_lock(&f);
+
+    int pid = g_next_pid++;
+
+    proc_list_unlock(f);
+
+    return pid;
 }
 
 // Switch to user address space and jump to user mode
@@ -233,6 +272,8 @@ static void user_bootstrap(void *arg)
 // Initialize process system with a kernel process
 void process_init(void)
 {
+    spinlock_init(&g_proc_lock);
+
     process_t *k = process_alloc();
 
     if (!k)
@@ -283,7 +324,7 @@ process_t *process_create_kernel(void (*entry)(void *),
     }
 
     // Inherit current address space
-    p->pid = g_next_pid++;
+    p->pid = process_alloc_pid();
     p->state = PROCESS_READY;
     p->cr3 = read_cr3_local();
     p->parent = process_current();
@@ -323,7 +364,12 @@ process_t *process_create_kernel(void (*entry)(void *),
 process_t *process_create_user_with_cr3(uint32_t user_eip,
                                         uint32_t user_esp,
                                         uint32_t cr3,
-                                        size_t kstack_bytes)
+                                        size_t kstack_bytes,
+                                        uintptr_t user_stack_base,
+                                        size_t user_stack_size,
+                                        uintptr_t heap_base,
+                                        uintptr_t heap_end,
+                                        uintptr_t heap_max)
 {
     process_t *p = process_alloc();
 
@@ -332,7 +378,7 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
         return NULL;
     }
 
-    p->pid = g_next_pid++;
+    p->pid = process_alloc_pid();
     p->state = PROCESS_READY;
     p->cr3 = cr3;
     p->parent = process_current();
@@ -351,6 +397,11 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
     }
     process_inherit_cwd_from_parent(p, p->parent);
     process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
+
+    process_set_user_stack(p, user_stack_base, user_esp, user_stack_size);
+    p->heap_base = heap_base;
+    p->heap_end  = heap_end;
+    p->heap_max  = heap_max;
 
     process_link(p);
 
@@ -386,7 +437,12 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
 // Create a user process with a new address space
 process_t *process_create_user(uint32_t user_eip,
                                uint32_t user_esp,
-                               size_t kstack_bytes)
+                               size_t kstack_bytes,
+                               uintptr_t user_stack_base,
+                               size_t user_stack_size,
+                               uintptr_t heap_base,
+                               uintptr_t heap_end,
+                               uintptr_t heap_max)
 {
     uint32_t new_cr3 = paging_new_address_space();
 
@@ -397,7 +453,15 @@ process_t *process_create_user(uint32_t user_eip,
         return NULL;
     }
 
-    return process_create_user_with_cr3(user_eip, user_esp, new_cr3, kstack_bytes);
+    return process_create_user_with_cr3(user_eip,
+                                        user_esp,
+                                        new_cr3,
+                                        kstack_bytes,
+                                        user_stack_base,
+                                        user_stack_size,
+                                        heap_base,
+                                        heap_end,
+                                        heap_max);
 }
 
 // Exit current process via its last thread
@@ -426,13 +490,20 @@ void process_exit_current(int exit_code)
 // Get current process
 process_t *process_current(void)
 {
-    return g_current;
+    uint32_t f;
+    proc_list_lock(&f);
+    process_t *p = g_current;
+    proc_list_unlock(f);
+    return p;
 }
 
 // Set current process
 void process_set_current(process_t *p)
 {
+    uint32_t f;
+    proc_list_lock(&f);
     g_current = p;
+    proc_list_unlock(f);
 }
 
 // Get pid of a process
@@ -460,15 +531,50 @@ uint32_t process_cr3(const process_t *p)
 // Find process by pid
 process_t *process_find_by_pid(int pid)
 {
+    uint32_t f;
+    proc_list_lock(&f);
+
     for (process_t *it = g_all_head; it; it = it->next)
     {
         if (it->pid == pid)
         {
+            proc_list_unlock(f);
             return it;
         }
     }
 
+    proc_list_unlock(f);
     return NULL;
+}
+
+void process_set_kernel_stack(process_t *p, uintptr_t base, uintptr_t top, size_t size)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    uint32_t f;
+    spin_lock_irqsave(&p->lock, &f);
+    p->kstack_base = base;
+    p->kstack_top = top;
+    p->kstack_size = size;
+    spin_unlock_irqrestore(&p->lock, f);
+}
+
+void process_set_user_stack(process_t *p, uintptr_t base, uintptr_t top, size_t size)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    uint32_t f;
+    spin_lock_irqsave(&p->lock, &f);
+    p->user_stack_base = base;
+    p->user_stack_top = top;
+    p->user_stack_size = size;
+    spin_unlock_irqrestore(&p->lock, f);
 }
 
 void process_set_cwd(process_t *p, uint32_t dir_id, const char *abs_path)

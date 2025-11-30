@@ -1394,7 +1394,15 @@ int paging_handle_demand_fault(uintptr_t fault_va)
     if (!is_user_addr_inline(fva)) return -1;
 
     uint32_t page_base = ALIGN_DOWN(fva, PAGE_SIZE_4KB);
-    if (!reservations_contains(page_base)) return -1;
+    if (!reservations_contains(page_base))
+    {
+        process_t *p = process_current();
+        if (!(p && p->heap_base && p->heap_max &&
+              page_base >= p->heap_base && page_base < p->heap_max))
+        {
+            return -1;
+        }
+    }
 
     uint32_t phys = alloc_phys_page();
     if (!phys) return -2;

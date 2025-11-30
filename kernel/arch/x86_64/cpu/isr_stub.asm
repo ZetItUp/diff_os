@@ -181,12 +181,12 @@ system_call_stub:
     mov fs, ax
     mov gs, ax
 
-    mov eax, esp         
+    mov eax, esp
     push eax
     call system_call_dispatch
     add  esp, 4
 
-    ;mov [esp + 4*7], eax
+    mov [esp + 4*7], eax
 
     popad
     pop gs

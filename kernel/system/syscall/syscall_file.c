@@ -292,47 +292,6 @@ long system_file_write(int file, const void *buf, unsigned long count)
     // stdout/stderr
     if (file == 1 || file == 2)
     {
-        process_t *p = process_current();
-        if (p && p->tty_out)
-        {
-            size_t bounce_sz = (count < FILE_READ_CHUNK_BYTES) ? (size_t)count : (size_t)FILE_READ_CHUNK_BYTES;
-            if (bounce_sz == 0)
-                bounce_sz = 1;
-
-            uint8_t *kbuf = (uint8_t*)kmalloc(bounce_sz);
-            if (!kbuf)
-                return -1;
-
-            unsigned long total = 0;
-            while (total < count)
-            {
-                unsigned long want = count - total;
-                if (want > FILE_READ_CHUNK_BYTES)
-                    want = FILE_READ_CHUNK_BYTES;
-
-                if (copy_from_user(kbuf, (const uint8_t*)buf + total, (size_t)want) != 0)
-                {
-                    kfree(kbuf);
-                    return (total > 0) ? (long)total : -1;
-                }
-
-                int w = tty_write(p->tty_out, kbuf, (size_t)want);
-                if (w < 0)
-                {
-                    kfree(kbuf);
-                    return (total > 0) ? (long)total : -1;
-                }
-
-                total += (unsigned long)w;
-
-                if ((unsigned long)w < want)
-                    break; // ring full
-            }
-
-            kfree(kbuf);
-            return (long)total;
-        }
-
         for (unsigned long i = 0; i < count; i++)
         {
             char c;

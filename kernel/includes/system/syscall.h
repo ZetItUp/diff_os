@@ -55,6 +55,7 @@ enum
     SYSTEM_MESSAGE_CONNECT_CHANNEL = 43,
     SYSTEM_MESSAGE_SEND = 44,
     SYSTEM_MESSAGE_RECEIVE = 45,
+    SYSTEM_MESSAGE_TRY_RECEIVE = 53,
     SYSTEM_SHARED_MEMORY_CREATE = 46,
     SYSTEM_SHARED_MEMORY_GRANT = 47,
     SYSTEM_SHARED_MEMORY_MAP = 48,
@@ -124,6 +125,7 @@ int system_tty_read_user(void *user_buf, uint32_t len);
 int system_tty_write_user(const void *user_buf, uint32_t len);
 
 int system_brk_set(void *new_break);
+void system_brk_set_log(int enabled);
 void system_brk_init_window(uintptr_t image_base, uintptr_t image_size);
 
 int system_process_spawn(const char *upath, int argc, char **uargv);

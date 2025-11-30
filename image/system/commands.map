@@ -16,6 +16,7 @@ testcall=/programs/testcall/testcall.dex
 filetest=/programs/filetest/filetest.dex
 wad=/programs/testwad/testwad.dex
 wrtest=/programs/writetest/writetest.dex
+gdterm=/programs/gdterm/gdterm.dex
 
 # Games
 doom=/games/doom/doom.dex

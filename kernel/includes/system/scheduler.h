@@ -14,6 +14,7 @@ void scheduler_block_current_until_wakeup(void);
 void scheduler_wake_owner(void *owner);
 void scheduler_reap_owned_zombies(struct process *p);
 void scheduler_reap_all_zombies(void);
+void scheduler_tick_from_timer(void);
+void scheduler_handle_irq_exit(void);
 /* Arch interface */
 void context_switch(cpu_context_t *save_context, cpu_context_t *load_context);
-

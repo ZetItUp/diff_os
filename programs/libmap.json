@@ -19,5 +19,12 @@
     "window_destroy",
     "window_draw",
     "window_poll_event"
+  ],
+  "difffonts.exl": [
+    "font_destroy",
+    "font_draw_text",
+    "font_height",
+    "font_load_bdf",
+    "font_width"
   ]
 }

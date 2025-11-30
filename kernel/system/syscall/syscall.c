@@ -708,6 +708,12 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_MESSAGE_TRY_RECEIVE:
+        {
+            ret = system_msg_try_recv(arg0, (void*)arg1, (uint32_t)arg2);
+
+            break;
+        }
         case SYSTEM_SHARED_MEMORY_CREATE:
         {
             ret = shared_memory_create((uint32_t)arg0);

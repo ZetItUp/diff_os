@@ -5,7 +5,7 @@
 #include "debug.h"
 
 #ifndef BRK_DBG
-#define BRK_DBG(...) DDBG_IF(DEBUG_AREA_GENERIC, __VA_ARGS__)
+#define BRK_DBG(...) DDBG_IF(DEBUG_AREA_BRK, __VA_ARGS__)
 #endif
 
 #ifndef KMAP_BASE
@@ -114,6 +114,7 @@ int system_brk_set(void *new_break)
         return (int)p->heap_end;
     }
 
+    /* Reduce noise: only log break moves when DIFF_DEBUG is enabled. */
     BRK_DBG("[BRK] Set: pid=%d new_break=%p base=%p max=%p\n",
             p->pid, new_break, (void *)p->heap_base, (void *)p->heap_max);
 

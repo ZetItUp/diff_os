@@ -28,6 +28,8 @@ static thread_t *g_run_queue_head  = NULL; // ready queue head
 static thread_t *g_run_queue_tail  = NULL; // ready queue tail
 static thread_t *g_zombie_head     = NULL; // zombie list
 static thread_t *g_idle            = NULL; // idle thread
+static volatile int g_need_resched = 0;    // preempt flag from timer
+static int g_in_resched            = 0;
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -62,6 +64,7 @@ static void run_queue_enqueue(thread_t *t)
     if (!t || t == g_idle) return;
 
     t->next = NULL;
+    SDBG("[SCH] enqueue: tid=%d pid=%d\n", t->thread_id, t->owner_process ? t->owner_process->pid : -1);
     if (!g_run_queue_head) {
         g_run_queue_head = g_run_queue_tail = t;
         SDBG("[SCH] enqueue: tid=%d (head)\n", t->thread_id);
@@ -69,7 +72,6 @@ static void run_queue_enqueue(thread_t *t)
     }
     g_run_queue_tail->next = t;
     g_run_queue_tail = t;
-    SDBG("[SCH] enqueue: tid=%d\n", t->thread_id);
 }
 
 // enqueue head (skip idle)
@@ -80,12 +82,12 @@ static void run_queue_enqueue_front(thread_t *t)
     if (!g_run_queue_head) {
         t->next = NULL;
         g_run_queue_head = g_run_queue_tail = t;
-        SDBG("[SCH] enqueue(front): tid=%d (head)\n", t->thread_id);
+        SDBG("[SCH] enqueue(front): tid=%d pid=%d (head)\n", t->thread_id, t->owner_process ? t->owner_process->pid : -1);
         return;
     }
     t->next = g_run_queue_head;
     g_run_queue_head = t;
-    SDBG("[SCH] enqueue(front): tid=%d\n", t->thread_id);
+    SDBG("[SCH] enqueue(front): tid=%d pid=%d\n", t->thread_id, t->owner_process ? t->owner_process->pid : -1);
 }
 
 // pop head
@@ -97,7 +99,7 @@ static thread_t *run_queue_pick_next(void)
         if (!g_run_queue_head) g_run_queue_tail = NULL;
         t->next = NULL;
     }
-    if (t)  SDBG("[SCH] pick_next -> thread\n");
+    if (t)  SDBG("[SCH] pick_next -> thread tid=%d pid=%d\n", t->thread_id, t->owner_process ? t->owner_process->pid : -1);
     else    SDBG("[SCH] pick_next -> idle/null\n");
     return t;
 }
@@ -121,6 +123,19 @@ static inline void switch_address_space_if_needed(thread_t *next)
     process_set_current(np);
 }
 
+static inline void set_process_state_locked(process_t *p, process_state_t state)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    uint32_t pf = 0;
+    spin_lock_irqsave(&p->lock, &pf);
+    p->state = state;
+    spin_unlock_irqrestore(&p->lock, pf);
+}
+
 // Markera tråd som zombie (säker, påverkar inte freed processfält)
 static void scheduler_mark_zombie(thread_t *t)
 {
@@ -135,11 +150,19 @@ static void scheduler_mark_zombie(thread_t *t)
 
     if (t->owner_process) {
         process_t *p = t->owner_process;
+        int notify_waiter = 0;
+        uint32_t pf = 0;
+        spin_lock_irqsave(&p->lock, &pf);
         if (p->live_threads > 0) p->live_threads--;
-
-        if (p->pid != 0 && p->live_threads == 0 && p->state != PROCESS_ZOMBIE) {
+        int remaining = p->live_threads;
+        if (p->pid != 0 && remaining == 0 && p->state != PROCESS_ZOMBIE) {
             p->state = PROCESS_ZOMBIE;
+            notify_waiter = 1;
             SDBG("[SCH] process -> ZOMBIE: pid=%d\n", p->pid);
+        }
+        spin_unlock_irqrestore(&p->lock, pf);
+
+        if (notify_waiter) {
             process_notify_exit(p);
         }
     }
@@ -229,6 +252,7 @@ void scheduler_add_thread(thread_t *t)
     }
 
     t->state = THREAD_READY;
+    set_process_state_locked(t->owner_process, PROCESS_READY);
     SDBG("[SCH] add_thread: tid=%d pid=%d\n",
          t->thread_id, t->owner_process ? t->owner_process->pid : -1);
     run_queue_enqueue(t);
@@ -272,10 +296,15 @@ void scheduler_start(void)
     SDBG("[SCH] start\n");
 
     thread_t *next = pick_next_alive();
-    if (next->context.eip == 0)
+    if (next->context.eip == 0) {
+        SDBG("[SCH] WARNING: next thread tid=%d has EIP=0, setting to thunk\n", next->thread_id);
         next->context.eip = (uint32_t)(uintptr_t)thread_entry_thunk;
+    }
 
     next->state = THREAD_RUNNING;
+    set_process_state_locked(next->owner_process, PROCESS_RUNNING);
+    set_process_state_locked(next->owner_process, PROCESS_RUNNING);
+    set_process_state_locked(next->owner_process, PROCESS_RUNNING);
 
     // Ladda adressrymd + TSS
     switch_address_space_if_needed(next);
@@ -302,16 +331,22 @@ void thread_yield(void)
     if (!self) { irq_restore(f); return; }
 
     if (self != g_idle && self->state == THREAD_RUNNING)
+    {
         self->state = THREAD_READY;
+        set_process_state_locked(self->owner_process, PROCESS_READY);
+    }
 
     if (self != g_idle && self->state == THREAD_READY)
         run_queue_enqueue(self);
 
     thread_t *next = pick_next_alive();
-    if (next->context.eip == 0)
+    if (next->context.eip == 0) {
+        SDBG("[SCH] WARNING: next thread tid=%d has EIP=0, setting to thunk\n", next->thread_id);
         next->context.eip = (uint32_t)(uintptr_t)thread_entry_thunk;
+    }
 
     next->state = THREAD_RUNNING;
+    set_process_state_locked(next->owner_process, PROCESS_RUNNING);
 
     switch_address_space_if_needed(next);
     tss_set_esp0(thread_kstack_top(next));
@@ -339,8 +374,10 @@ void scheduler_block_current_until_wakeup(void)
     self->state = THREAD_SLEEPING;
 
     thread_t *next = pick_next_alive();
-    if (next->context.eip == 0)
+    if (next->context.eip == 0) {
+        SDBG("[SCH] WARNING: next thread tid=%d has EIP=0, setting to thunk\n", next->thread_id);
         next->context.eip = (uint32_t)(uintptr_t)thread_entry_thunk;
+    }
 
     next->state = THREAD_RUNNING;
 
@@ -351,6 +388,12 @@ void scheduler_block_current_until_wakeup(void)
          self->thread_id,
          next->thread_id,
          next->owner_process ? next->owner_process->pid : -1);
+
+    // Verify pointers before context switch
+    uint32_t esp_val;
+    __asm__ volatile("mov %%esp, %0" : "=r"(esp_val));
+    SDBG("[SCH] actual ESP=%08x, &self->context=%08x, &next->context=%08x\n",
+         esp_val, (uint32_t)&self->context, (uint32_t)&next->context);
 
     g_current = next;
     context_switch(&self->context, &next->context);
@@ -403,7 +446,7 @@ void scheduler_wake_owner(void *owner)
 
 void thread_exit(void)
 {
-    uint32_t f = irq_save();
+    irq_save();
 
     thread_t *self = g_current;
     SDBG("[SCH] thread_exit: tid=%d pid=%d\n",
@@ -413,8 +456,10 @@ void thread_exit(void)
     scheduler_mark_zombie(self);
 
     thread_t *next = pick_next_alive();
-    if (next->context.eip == 0)
+    if (next->context.eip == 0) {
+        SDBG("[SCH] WARNING: next thread tid=%d has EIP=0, setting to thunk\n", next->thread_id);
         next->context.eip = (uint32_t)(uintptr_t)thread_entry_thunk;
+    }
 
     next->state = THREAD_RUNNING;
 
@@ -428,3 +473,37 @@ void thread_exit(void)
         ; // ska aldrig återvända
 }
 
+void scheduler_tick_from_timer(void)
+{
+    g_need_resched = 1;
+}
+
+void scheduler_handle_irq_exit(void)
+{
+    if (!g_need_resched)
+    {
+        return;
+    }
+    if (g_in_resched)
+    {
+        return;
+    }
+
+    if (!g_run_queue_head)
+    {
+        g_need_resched = 0;
+        return;
+    }
+
+    g_need_resched = 0;
+    g_in_resched = 1;
+    thread_yield();
+    g_in_resched = 0;
+}
+
+void scheduler_reap_all_zombies(void)
+{
+    uint32_t f = irq_save();
+    reap_zombies();
+    irq_restore(f);
+}

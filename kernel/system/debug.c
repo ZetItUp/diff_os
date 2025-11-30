@@ -5,7 +5,7 @@
 #include "console.h"
 
 #ifdef DIFF_DEBUG
-/* Disable noisy paging debug by default; enable manually with debug_enable() if needed. */
+/* Enable generic + EXL by default in debug builds. */
 uint32_t g_debug_mask = DEBUG_AREA_GENERIC | DEBUG_AREA_EXL;
 #else
 /* Always keep EXL debug enabled to aid tracing library loads. */
@@ -24,6 +24,14 @@ void debug_request_single_step(uint32_t entry_va, uint32_t steps)
     g_ss_arg_a = 0;
     g_ss_arg_b = 0;
     DDBG("[SSTEP] request entry=0x%08x steps=%u\n", entry_va, steps);
+}
+
+void debug_clear_single_step(void)
+{
+    g_ss_entry = 0;
+    g_ss_remaining = 0;
+    g_ss_arg_a = 0;
+    g_ss_arg_b = 0;
 }
 
 int debug_prepare_single_step(uint32_t entry_eip)

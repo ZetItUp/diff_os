@@ -190,6 +190,60 @@ int system_msg_recv(int channel_id, void *buffer, uint32_t buf_len)
     }
 }
 
+// Non-blocking receive: returns 0 if no message available
+int system_msg_try_recv(int channel_id, void *buffer, uint32_t buf_len)
+{
+    if(channel_id < 0 || channel_id >= MESSAGES_MAX_CHANNELS)
+    {
+        return -1;
+    }
+
+    uint32_t flags;
+    msg_channel_t *channel = &g_channels[channel_id];
+
+    spin_lock_irqsave(&channel->lock, &flags);
+
+    if(!channel->used)
+    {
+        spin_unlock_irqrestore(&channel->lock, flags);
+        return -1;
+    }
+
+    if(channel->count == 0)
+    {
+        spin_unlock_irqrestore(&channel->lock, flags);
+        return 0; // no message
+    }
+
+    uint16_t slot = channel->head;
+    uint16_t msg_len = channel->sizes[slot];
+
+    if(buf_len < msg_len)
+    {
+        spin_unlock_irqrestore(&channel->lock, flags);
+        return -3;
+    }
+
+    if(copy_to_user(buffer, channel->messages[slot], msg_len) != 0)
+    {
+        spin_unlock_irqrestore(&channel->lock, flags);
+        return -4;
+    }
+
+    channel->head = (uint16_t)((channel->head + 1) % MESSAGES_QUEUE_LEN);
+    channel->count--;
+
+    if(channel->send_waiter)
+    {
+        scheduler_wake_owner(channel->send_waiter);
+        channel->send_waiter = NULL;
+    }
+
+    spin_unlock_irqrestore(&channel->lock, flags);
+
+    return (int)msg_len;
+}
+
 void messaging_cleanup_process(int pid)
 {
     for (int i = 0; i < MESSAGES_MAX_CHANNELS; i++)

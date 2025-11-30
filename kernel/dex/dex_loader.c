@@ -142,10 +142,21 @@ static uint8_t *build_user_exit_stub(uint32_t entry_va)
 static uint32_t build_user_stack(
     const char *prog_path,
     int argc_in,
-    char *const argv_in[]
+    char *const argv_in[],
+    uint32_t *out_base,
+    uint32_t *out_size
 )
 {
     const uint32_t STK_SZ = 64 * 1024;
+
+    if (out_base)
+    {
+        *out_base = 0;
+    }
+    if (out_size)
+    {
+        *out_size = 0;
+    }
 
     uint8_t *stk = umalloc(STK_SZ);
     if (!stk)
@@ -174,6 +185,14 @@ static uint32_t build_user_stack(
     }
 
     uint32_t sp = (uint32_t)stk + STK_SZ;
+    if (out_base)
+    {
+        *out_base = (uint32_t)(uintptr_t)stk;
+    }
+    if (out_size)
+    {
+        *out_size = STK_SZ;
+    }
     uint32_t base = (uint32_t)stk;
 
     for (int i = argc - 1; i >= 0; --i)
@@ -814,6 +833,8 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     dex_executable_t dex;
     int rc;
     uint32_t user_sp;
+    uint32_t user_stack_base = 0;
+    uint32_t user_stack_size = 0;
     uint8_t *stub;
 
     if (!ft || !path || !path[0])
@@ -866,7 +887,7 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     }
 
     // Build initial user stack
-    user_sp = build_user_stack(path, argc, argv);
+    user_sp = build_user_stack(path, argc, argv, &user_stack_base, &user_stack_size);
     if (!user_sp)
     {
         kfree(buffer);
@@ -887,10 +908,11 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     // Ensure stub is user present and writable while patching
     paging_update_flags((uint32_t)stub, 64, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
 
-    if (dex.header && dex.header->text_size > 0x10000)
-    {
-        debug_request_single_step((uint32_t)stub, 512);
-    }
+    // Disable single-stepping for now to avoid debug state corruption
+    // if (dex.header && dex.header->text_size > 0x10000)
+    // {
+    //     debug_request_single_step((uint32_t)stub, 512);
+    // }
 
     DEX_DBG("[DEX] run: entry=%08x stub=%08x sp=%08x (no process)\n",
          (uint32_t)dex.dex_entry, (uint32_t)stub, user_sp);
@@ -930,6 +952,8 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     process_t *p = process_current();
     if (p)
     {
+        process_set_user_stack(p, (uintptr_t)user_stack_base, (uintptr_t)user_sp, user_stack_size);
+
         uintptr_t base = PAGE_ALIGN_UP(heap_base);
         uintptr_t max  = base + heap_size;
         p->heap_base = base;
@@ -959,6 +983,8 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     dex_executable_t dex;
     int load_rc;
     uint32_t user_sp;
+    uint32_t user_stack_base = 0;
+    uint32_t user_stack_size = 0;
     uint32_t entry_va;
     uint8_t *stub;
     process_t *p;
@@ -1031,7 +1057,7 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
         return -7;
     }
 
-    user_sp = build_user_stack(path, argc, argv);
+    user_sp = build_user_stack(path, argc, argv, &user_stack_base, &user_stack_size);
     if (!user_sp || !is_user_va(user_sp))
     {
         paging_switch_address_space(cr3_parent);
@@ -1063,10 +1089,11 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
 
     paging_update_flags((uint32_t)stub, 64, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
 
-    if (dex.header && dex.header->text_size > 0x10000)
-    {
-        debug_request_single_step((uint32_t)stub, 512);
-    }
+    // Disable single-stepping for now to avoid debug state corruption
+    // if (dex.header && dex.header->text_size > 0x10000)
+    // {
+    //     debug_request_single_step((uint32_t)stub, 512);
+    // }
 
     uintptr_t image_end = PAGE_ALIGN_UP((uintptr_t)dex.image_base + dex.image_size);
     const uintptr_t GUARD_GAP = 4 * 1024 * 1024;
@@ -1086,6 +1113,8 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     uintptr_t initial_heap = 8u << 20;
     if (initial_heap > heap_size) initial_heap = heap_size;
     uintptr_t initial_end = PAGE_ALIGN_UP(heap_base + initial_heap);
+    uintptr_t base = PAGE_ALIGN_UP(heap_base);
+    uintptr_t max  = base + heap_size;
     paging_reserve_range(heap_base, initial_end - heap_base);
 
     // Pre-allocate some initial heap pages to avoid immediate demand faults
@@ -1100,7 +1129,18 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
 
     paging_switch_address_space(cr3_parent);
 
-    p = process_create_user_with_cr3((uint32_t)stub, user_sp, cr3_child, 65536);
+    // Clear single-step debug state before spawning new process
+    debug_clear_single_step();
+
+    p = process_create_user_with_cr3((uint32_t)stub,
+                                     user_sp,
+                                     cr3_child,
+                                     65536,
+                                     (uintptr_t)user_stack_base,
+                                     (size_t)user_stack_size,
+                                     base,
+                                     initial_end,
+                                     max);
     if (!p)
     {
         paging_switch_address_space(cr3_child);
@@ -1116,8 +1156,6 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
          pid, cr3_parent, cr3_child);
 
     // Initialize heap fields for the new process with initial 8MB committed
-    uintptr_t base = PAGE_ALIGN_UP(heap_base);
-    uintptr_t max  = base + heap_size;
     p->heap_base = base;
     p->heap_end  = initial_end;  // Set to initial committed size, not base
     p->heap_max  = max;

@@ -308,7 +308,8 @@ static void timer_irq_handler(unsigned irq, void *ctx)
     (void)irq;
     (void)ctx;
 
-    ktimer_tick_isr(); 
+    ktimer_tick_isr();
+    scheduler_tick_from_timer();
 }
 
 void timer_init(uint32_t frequency)
@@ -323,4 +324,3 @@ void timer_install(void)
     irq_install_handler(PIT_IRQ_LINE, timer_irq_handler);  // This needs to be bound to IRQ0
     pic_clear_mask(PIT_IRQ_LINE);  // This needs to unmask IRQ0 on PIC
 }
-
