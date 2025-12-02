@@ -23,7 +23,7 @@ CFLAGS := -ffreestanding -nostdlib -O2 -m32 -fno-pic -fno-plt \
           -mno-sse4.1 -mno-sse4.2 -mno-avx -mno-avx2 -mno-fma \
 		  -fno-asynchronous-unwind-tables -fno-unwind-tables \
           -Wall -Wextra \
-          -I../../exls/DiffC/include -I../../exls/DiffWM/includes -I. \
+          -I../../exls/DiffC/include -I../../exls/DiffWM/includes -I../../exls/DiffFonts/include -I. \
           -DDG_WIDTH=$(DG_WIDTH) -DDG_HEIGHT=$(DG_HEIGHT) \
 		  -march=i386 -mtune=i386 -fno-builtin -fno-stack-protector
 

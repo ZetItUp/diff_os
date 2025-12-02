@@ -65,6 +65,7 @@ enum
     SYSTEM_SHARED_MEMORY_RELEASE = 50,
     SYSTEM_TTY_READ = 51,
     SYSTEM_TTY_WRITE = 52,
+    SYSTEM_CONSOLE_DISABLE = 54,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -360,6 +361,11 @@ static inline int system_video_get_graphics_mode(void)
     return do_sys(SYSTEM_VIDEO_GET_GRAPHICS_MODE, 0, 0, 0, 0);
 }
 
+static inline int system_console_disable(void)
+{
+    return do_sys(SYSTEM_CONSOLE_DISABLE, 0, 0, 0, 0);
+}
+
 static inline int system_video_mode_get(video_mode_info_t *video_out)
 {
     return do_sys(SYSTEM_VIDEO_MODE_GET, (int)video_out, 0, 0, 0);
@@ -415,9 +421,12 @@ static inline int system_shared_memory_release(int handle)
     return do_sys(SYSTEM_SHARED_MEMORY_RELEASE, handle, 0, 0, 0);
 }
 
-static inline int system_tty_read(void *buf, uint32_t len)
+#define TTY_READ_MODE_INPUT  0
+#define TTY_READ_MODE_OUTPUT 1
+
+static inline int system_tty_read(void *buf, uint32_t len, int mode, void *color_buf)
 {
-    return do_sys(SYSTEM_TTY_READ, (int)(uintptr_t)buf, (int)len, 0, 0);
+    return do_sys(SYSTEM_TTY_READ, (int)(uintptr_t)buf, (int)len, mode, (int)(uintptr_t)color_buf);
 }
 
 static inline int system_tty_write(const void *buf, uint32_t len)

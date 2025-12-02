@@ -747,13 +747,20 @@ int system_call_dispatch(struct syscall_frame *f)
         }
         case SYSTEM_TTY_READ:
         {
-            ret = system_tty_read_user((void*)arg0, (uint32_t)arg1);
+            ret = system_tty_read_user((void*)arg0, (uint32_t)arg1, (int)arg2, (void*)arg3);
 
             break;
         }
         case SYSTEM_TTY_WRITE:
         {
             ret = system_tty_write_user((const void*)arg0, (uint32_t)arg1);
+
+            break;
+        }
+        case SYSTEM_CONSOLE_DISABLE:
+        {
+            console_disable();
+            ret = 0;
 
             break;
         }

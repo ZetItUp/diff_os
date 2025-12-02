@@ -68,9 +68,15 @@
 
 typedef bool boolean;
 
+#elif defined(false) && defined(true)
+
+// stdbool.h already defines false and true
+typedef int boolean;
+#define undef 0xFFFFFFFF
+
 #else
 
-typedef enum 
+typedef enum
 {
     false	= 0,
     true	= 1,

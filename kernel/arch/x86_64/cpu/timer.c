@@ -264,6 +264,8 @@ static void pit_program(uint32_t hz)
 
 void ktimer_tick_isr(void)
 {
+    extern void keyboard_drain(void);
+
     g_ticks++;
     timer_ticks++;
     timer_tick_updated = true;
@@ -280,6 +282,10 @@ void ktimer_tick_isr(void)
     }
 
     g_ms_frac_accum = acc;
+
+    // Drain keyboard scan codes from driver and process them
+    // This triggers keyboard_process_scancode → push_key_event → writes to TTY
+    keyboard_drain();
 
     uint64_t now_ms = g_ms;  // Reading current ms for timer expirations
 

@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <syscall.h>
 #include <time.h>
 #include <vbe/vbe.h>
@@ -16,8 +17,31 @@
 #include <diffgfx/graphics.h>
 #include <diffgfx/draw.h>
 
-    // List of windows managed
-static window_t *g_windows = NULL;
+/*
+ * Window Manager Internal Window Tracking
+ *
+ * This structure is used by the window manager to track client windows.
+ * It's separate from the client-side window_t which has polymorphic components.
+ */
+typedef struct wm_window
+{
+    uint32_t id;
+    int handle;
+    void *pixels;
+
+    int x;
+    int y;
+    uint32_t width;
+    uint32_t height;
+
+    int pitch;
+    int mailbox;    /* Client mailbox channel index for replies/events */
+    int wm_channel; /* Channel index to talk to WM */
+    struct wm_window *next;
+} wm_window_t;
+
+// List of windows managed
+static wm_window_t *g_windows = NULL;
 static uint32_t g_next_id = 1;
 static int g_mailbox = -1;
 
@@ -25,7 +49,6 @@ static int g_mailbox = -1;
 static video_mode_info_t g_mode;
 static uint32_t *g_backbuffer = NULL;
 static uint32_t g_backbuffer_stride = 0; // pixels per line
-static font_t *g_font = NULL;
 
 // Darken an ARGB pixel very slightly to simulate a subtle shadow (alpha over black).
 static inline uint32_t apply_shadow_20(uint32_t c)
@@ -45,9 +68,9 @@ static inline uint32_t apply_shadow_20(uint32_t c)
     return a | (r << 16) | (g << 8) | b;
 }
 
-static window_t* wm_find(uint32_t id)
+static wm_window_t* wm_find(uint32_t id)
 {
-    for(window_t *win = g_windows; win; win = win->next)
+    for(wm_window_t *win = g_windows; win; win = win->next)
     {
         if(win->id == id)
         {
@@ -58,7 +81,7 @@ static window_t* wm_find(uint32_t id)
     return NULL;
 }
 
-static void wm_add_window(window_t *window)
+static void wm_add_window(wm_window_t *window)
 {
     window->next = g_windows;
     g_windows = window;
@@ -66,13 +89,13 @@ static void wm_add_window(window_t *window)
 
 static void wm_remove_window(uint32_t id)
 {
-    window_t **winp = &g_windows;
+    wm_window_t **winp = &g_windows;
 
     while(*winp)
     {
         if((*winp)->id == id)
         {
-            window_t* window = *winp;
+            wm_window_t* window = *winp;
             *winp = window->next;
             shared_memory_unmap(window->handle);
             shared_memory_release(window->handle);
@@ -108,7 +131,7 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
         return -1;
     }
 
-    window_t *window = calloc(1, sizeof(*window));
+    wm_window_t *window = calloc(1, sizeof(*window));
 
     if(!window)
     {
@@ -135,7 +158,7 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
 
 static void wm_draw_window(const dwm_msg_t *msg)
 {
-    window_t *window = wm_find(msg->window_id);
+    wm_window_t *window = wm_find(msg->window_id);
 
     if(!window || !g_backbuffer)
     {
@@ -310,6 +333,7 @@ static void wm_handle_message(const dwm_msg_t *msg)
 int main(void)
 {
     vbe_toggle_graphics_mode();
+    system_console_disable();
 
     if(system_video_mode_get(&g_mode) < 0)
     {

@@ -299,6 +299,20 @@ void process_init(void)
     process_assign_default_cwd(k);
     process_set_exec_root(k, "/");
 
+    // Give the kernel process a default TTY pair so children inherit a live console.
+    k->tty_out = tty_create();
+    k->tty_in  = tty_create();
+    if (!k->tty_out || !k->tty_in)
+    {
+        printf("[PROC] FATAL: failed to create kernel TTY endpoints\n");
+        if (k->tty_out) tty_destroy(k->tty_out);
+        if (k->tty_in)  tty_destroy(k->tty_in);
+        kfree(k);
+        return;
+    }
+
+    k->tty_attr = 0x07;
+
     // Link and set as current
     process_link(k);
     g_current = k;
@@ -354,6 +368,7 @@ process_t *process_create_kernel(void (*entry)(void *),
         kfree(p);
         return NULL;
     }
+    p->tty_attr = parent ? parent->tty_attr : 0x07;
     process_inherit_cwd_from_parent(p, p->parent);
     process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 
@@ -409,6 +424,7 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
         kfree(p);
         return NULL;
     }
+    p->tty_attr = parent ? parent->tty_attr : 0x07;
     process_inherit_cwd_from_parent(p, p->parent);
     process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 

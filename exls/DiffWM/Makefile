@@ -4,8 +4,10 @@ CC        := i386-elf-gcc
 LD        := i386-elf-ld
 PYTHON    := python3
 ELF2DEX   := ../DiffC/elf2dexlib.py
+GEN_IMPORTS := ../../tools/gen_imports.py
+LIBMAP    := ../../programs/libmap.json
 
-CFLAGS    := -ffreestanding -nostdlib -Wall -Wextra -O2 -Iincludes/ -I../DiffC/include
+CFLAGS    := -ffreestanding -nostdlib -Wall -Wextra -O2 -Iincludes/ -I../DiffC/include -I../DiffFonts/include
 SRCDIR    := source
 OBJDIR    := build
 EXLDIR    := exls
@@ -14,7 +16,6 @@ IMAGE_EXL := ../../image/system/exls
 LIBNAME   := diffwm.exl
 VERBOSE   = 1
 IMPORT_EXL ?= diffc.exl
-IMPORTS_MAP ?=
 
 rwildcard = $(foreach d,$(wildcard $(1)/*),$(call rwildcard,$(d),$(2))) $(wildcard $(1)/$(2))
 SRCS      := $(call rwildcard,$(SRCDIR),*.c)
@@ -31,14 +32,19 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.c
 $(OBJDIR)/libdiffwm.elf: $(OBJS)
 	$(LD) -r -o $@ $^
 
+$(OBJDIR)/imports.stamp: $(OBJDIR)/libdiffwm.elf
+	@echo "[GEN] imports for DiffWM"
+	$(PYTHON) $(GEN_IMPORTS) $(OBJDIR)/libdiffwm.elf $(OBJDIR) $(LIBMAP) diffc difffonts
+	@touch $@
+
 exldir:
 	@mkdir -p $(EXLDIR)
 
-$(EXLDIR)/$(LIBNAME): $(OBJDIR)/libdiffwm.elf exldir $(ELF2DEX)
+$(EXLDIR)/$(LIBNAME): $(OBJDIR)/libdiffwm.elf $(OBJDIR)/imports.stamp exldir $(ELF2DEX)
 	@rm -f $@
 	$(PYTHON) $(ELF2DEX) $< $@ $(LIBNAME) \
 		$(if $(IMPORT_EXL),--import-exl $(IMPORT_EXL)) \
-		$(if $(IMPORTS_MAP),--imports-map $(IMPORTS_MAP)) \
+		--imports-map $(OBJDIR)/imports_map.txt \
 		$(if $(VERBOSE),--verbose)
 
 image_exl: $(EXLDIR)/$(LIBNAME)

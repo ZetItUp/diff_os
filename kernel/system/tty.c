@@ -86,13 +86,17 @@ int tty_write(tty_t *t, const void *buf, size_t len)
     }
 
     const uint8_t *p = (const uint8_t *)buf;
+    process_t *writer = process_current();
+    uint8_t attr = writer ? writer->tty_attr : 0x07;
     uint32_t flags;
     spin_lock_irqsave(&t->lock, &flags);
 
     uint32_t written = 0;
     while (written < len && tty_count(t) < (TTY_BUF_SIZE - 1u))
     {
-        t->buf[t->head & TTY_BUF_MASK] = p[written];
+        uint32_t idx = t->head & TTY_BUF_MASK;
+        t->buf[idx] = p[written];
+        t->colors[idx] = attr;
         t->head++;
         written++;
     }
@@ -115,7 +119,7 @@ int tty_write(tty_t *t, const void *buf, size_t len)
     return (int)written;
 }
 
-int tty_read(tty_t *t, void *buf, size_t len)
+static int tty_read_internal(tty_t *t, void *buf, uint8_t *colors, size_t len)
 {
     if (!t || !buf || len == 0)
     {
@@ -130,6 +134,10 @@ int tty_read(tty_t *t, void *buf, size_t len)
     while (read < len && t->tail != t->head)
     {
         p[read] = t->buf[t->tail & TTY_BUF_MASK];
+        if (colors)
+        {
+            colors[read] = t->colors[t->tail & TTY_BUF_MASK];
+        }
         t->tail++;
         read++;
     }
@@ -138,41 +146,15 @@ int tty_read(tty_t *t, void *buf, size_t len)
     return (int)read;
 }
 
+int tty_read(tty_t *t, void *buf, size_t len)
+{
+    return tty_read_internal(t, buf, NULL, len);
+}
+
 // -----------------------------------------------------------------------------
 // Syscall helpers for user buffers (current process only)
 // -----------------------------------------------------------------------------
 int system_tty_write_user(const void *user_buf, uint32_t len)
-{
-    if (!user_buf || len == 0)
-    {
-        return 0;
-    }
-
-    process_t *p = process_current();
-    if (!p || !p->tty_in)
-    {
-        return -1;
-    }
-
-    uint32_t chunk = (len > TTY_BUF_SIZE) ? TTY_BUF_SIZE : len;
-    uint8_t *kbuf = (uint8_t *)kmalloc(chunk);
-    if (!kbuf)
-    {
-        return -1;
-    }
-
-    if (copy_from_user(kbuf, user_buf, chunk) != 0)
-    {
-        kfree(kbuf);
-        return -1;
-    }
-
-    int wrote = tty_write(p->tty_in, kbuf, chunk);
-    kfree(kbuf);
-    return wrote;
-}
-
-int system_tty_read_user(void *user_buf, uint32_t len)
 {
     if (!user_buf || len == 0)
     {
@@ -192,15 +174,88 @@ int system_tty_read_user(void *user_buf, uint32_t len)
         return -1;
     }
 
-    int rd = tty_read(p->tty_out, kbuf, chunk);
+    if (copy_from_user(kbuf, user_buf, chunk) != 0)
+    {
+        kfree(kbuf);
+        return -1;
+    }
+
+    int wrote = tty_write(p->tty_out, kbuf, chunk);
+    kfree(kbuf);
+    return wrote;
+}
+
+int system_tty_read_user(void *user_buf, uint32_t len, int mode, void *color_buf)
+{
+    if (!user_buf || len == 0)
+    {
+        return 0;
+    }
+
+    process_t *p = process_current();
+    if (!p)
+    {
+        return -1;
+    }
+
+    uint32_t chunk = (len > TTY_BUF_SIZE) ? TTY_BUF_SIZE : len;
+    uint8_t *kbuf = (uint8_t *)kmalloc(chunk);
+    if (!kbuf)
+    {
+        return -1;
+    }
+
+    tty_t *target = NULL;
+
+    if (mode == TTY_READ_MODE_OUTPUT && p->tty_out)
+    {
+        target = p->tty_out;
+    }
+
+    if (!target)
+    {
+        target = p->tty_in;
+    }
+
+    if (!target)
+    {
+        kfree(kbuf);
+        return -1;
+    }
+
+    int need_colors = color_buf && mode == TTY_READ_MODE_OUTPUT;
+    uint8_t *attr_buf = NULL;
+
+    if (need_colors)
+    {
+        attr_buf = (uint8_t *)kmalloc(chunk);
+        if (!attr_buf)
+        {
+            kfree(kbuf);
+            return -1;
+        }
+    }
+
+    int rd = tty_read_internal(target, kbuf, attr_buf, chunk);
     if (rd > 0)
     {
         if (copy_to_user(user_buf, kbuf, (size_t)rd) != 0)
         {
             rd = -1;
         }
+        else if (need_colors)
+        {
+            if (copy_to_user(color_buf, attr_buf, (size_t)rd) != 0)
+            {
+                rd = -1;
+            }
+        }
     }
 
+    if (attr_buf)
+    {
+        kfree(attr_buf);
+    }
     kfree(kbuf);
     return rd;
 }

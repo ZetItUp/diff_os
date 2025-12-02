@@ -1,6 +1,9 @@
 #include "stdint.h"
+#include "stddef.h"
 #include "interfaces.h"
 #include "console.h"
+#include "system/process.h"
+#include "system/tty.h"
 
 #define CH_FIFO_SIZE 256
 
@@ -182,8 +185,62 @@ static int shift, caps, ctrl, alt, e0, num_lock;
 // Helper to push a key event (press or release) as 2 bytes
 static void push_key_event(int pressed, uint8_t key)
 {
+    extern int printf(const char *fmt, ...);
+
     ch_push(pressed ? 1 : 0);
     ch_push(key);
+
+    // Immediately write key presses to the active process's TTY
+    if (pressed)
+    {
+        process_t *p = process_current();
+
+#ifdef DIFF_DEBUG
+        printf("[KBD] key=0x%02x pressed=%d p=%p\n", key, pressed, p);
+        if (p)
+        {
+            printf("[KBD] tty_in=%p tty_out=%p\n", p->tty_in, p->tty_out);
+        }
+#endif
+
+        if (p && p->tty_in)
+        {
+            // Filter and write printable characters and control keys
+            if (key >= 0x20 && key <= 0x7E)
+            {
+                // Printable ASCII
+                char c = (char)key;
+                int wrote = tty_write(p->tty_in, &c, 1);
+#ifdef DIFF_DEBUG
+                printf("[KBD] wrote '%c' to tty_in, ret=%d\n", c, wrote);
+#endif
+            }
+            else if (key == '\b' || key == 0x08 || key == 127)
+            {
+                // Backspace
+                char c = '\b';
+                tty_write(p->tty_in, &c, 1);
+            }
+            else if (key == '\n' || key == '\r' || key == 13)
+            {
+                // Enter
+                char c = '\n';
+                tty_write(p->tty_in, &c, 1);
+            }
+            else if (key == '\t' || key == 0x09)
+            {
+                // Tab
+                char c = '\t';
+                tty_write(p->tty_in, &c, 1);
+            }
+            else if (key == 27)
+            {
+                // ESC
+                char c = 27;
+                tty_write(p->tty_in, &c, 1);
+            }
+        }
+    }
 }
 
 static void keyboard_process_scancode(uint8_t sc)
@@ -453,6 +510,12 @@ void keyboard_init(void)
 
 void keyboard_drain(void)
 {
+    // Don't try to drain if keyboard driver isn't registered yet
+    if (!g_keyboard.keyboard_read || !g_keyboard.keyboard_read_blocking)
+    {
+        return;
+    }
+
     uint8_t sc;
 
     while (g_keyboard.keyboard_read(&sc))
@@ -543,3 +606,4 @@ int keyboard_trygetch(uint8_t *out)
         return 1;
     }
 }
+

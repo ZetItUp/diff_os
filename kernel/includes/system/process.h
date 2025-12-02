@@ -62,6 +62,7 @@ typedef struct process
     // Per-process tty endpoints (stdout/stderr and stdin)
     struct tty *tty_out;
     struct tty *tty_in;
+    uint8_t   tty_attr;
 } process_t;
 
 typedef struct user_boot_args

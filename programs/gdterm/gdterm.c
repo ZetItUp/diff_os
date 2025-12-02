@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <syscall.h>
 #include <diffwm/diffwm.h>
+#include <diffwm/terminal_component.h>
 #include <diffgfx/draw.h>
 #include <difffonts/fonts.h>
 #include <system/threads.h>
@@ -14,197 +15,68 @@
 #include <dirent.h>
 
 #define WIN_W 640
-#define WIN_H 400
-
-#define MAX_LINES 128
-#define MAX_COLS  80
+#define WIN_H 600
 
 // VGA color to RGB mapping
-static uint32_t vga_to_rgb(uint8_t vga_color)
+static term_color_t vga_to_color(uint8_t vga_color)
 {
+    term_color_t c = {0, 0, 0, 0xFF};
+
     switch (vga_color & 0xF)
     {
-        case 0x0: return color_rgb(0, 0, 0);         // Black
-        case 0x1: return color_rgb(0, 0, 170);       // Blue
-        case 0x2: return color_rgb(0, 170, 0);       // Green
-        case 0x3: return color_rgb(0, 170, 170);     // Cyan
-        case 0x4: return color_rgb(170, 0, 0);       // Red
-        case 0x5: return color_rgb(170, 0, 170);     // Magenta
-        case 0x6: return color_rgb(170, 85, 0);      // Brown
-        case 0x7: return color_rgb(170, 170, 170);   // Gray
-        case 0x8: return color_rgb(85, 85, 85);      // Dark Gray
-        case 0x9: return color_rgb(85, 85, 255);     // Light Blue
-        case 0xA: return color_rgb(85, 255, 85);     // Light Green
-        case 0xB: return color_rgb(85, 255, 255);    // Light Cyan
-        case 0xC: return color_rgb(255, 85, 85);     // Light Red
-        case 0xD: return color_rgb(255, 85, 255);    // Pink
-        case 0xE: return color_rgb(255, 255, 85);    // Yellow
-        case 0xF: return color_rgb(255, 255, 255);   // White
-        default:  return color_rgb(170, 170, 170);   // Default to gray
+        case 0x0: c.r = 0;   c.g = 0;   c.b = 0;   break; // Black
+        case 0x1: c.r = 0;   c.g = 0;   c.b = 170; break; // Blue
+        case 0x2: c.r = 0;   c.g = 170; c.b = 0;   break; // Green
+        case 0x3: c.r = 0;   c.g = 170; c.b = 170; break; // Cyan
+        case 0x4: c.r = 170; c.g = 0;   c.b = 0;   break; // Red
+        case 0x5: c.r = 170; c.g = 0;   c.b = 170; break; // Magenta
+        case 0x6: c.r = 170; c.g = 85;  c.b = 0;   break; // Brown
+        case 0x7: c.r = 170; c.g = 170; c.b = 170; break; // Gray
+        case 0x8: c.r = 85;  c.g = 85;  c.b = 85;  break; // Dark Gray
+        case 0x9: c.r = 85;  c.g = 85;  c.b = 255; break; // Light Blue
+        case 0xA: c.r = 85;  c.g = 255; c.b = 85;  break; // Light Green
+        case 0xB: c.r = 85;  c.g = 255; c.b = 255; break; // Light Cyan
+        case 0xC: c.r = 255; c.g = 85;  c.b = 85;  break; // Light Red
+        case 0xD: c.r = 255; c.g = 85;  c.b = 255; break; // Pink
+        case 0xE: c.r = 255; c.g = 255; c.b = 85;  break; // Yellow
+        case 0xF: c.r = 255; c.g = 255; c.b = 255; break; // White
+        default:  c.r = 170; c.g = 170; c.b = 170; break; // Default to gray
     }
+
+    return c;
 }
 
-typedef struct
+static term_color_t vga_attr_to_color(uint8_t attr)
 {
-    char text[MAX_COLS];
-    uint8_t colors[MAX_COLS];
-    int len;
-} line_t;
+    return vga_to_color(attr & 0x0F);
+}
 
-static line_t g_lines[MAX_LINES];
-static int g_line_count = 0;
-static int g_cursor_x = 0;
-static int g_cursor_y = 0;
-static uint8_t g_current_color = 0x07; // Gray on black
+// Terminal component
+static terminal_component_t g_terminal;
 
 static const char *g_shell_name = "Different Terminal";
 static const unsigned g_ver_major = 1;
 static const unsigned g_ver_minor = 0;
 
+static const term_color_t default_color = {203, 219, 252, 0xFF};
 static int g_last_status = 0;
 static char g_cwd[256] = "/";
 
-static void ensure_line(int y)
+static void term_puts_colored(const char *s, term_color_t color)
 {
-    while (g_line_count <= y)
-    {
-        if (g_line_count >= MAX_LINES)
-        {
-            // Scroll up
-            for (int i = 0; i < MAX_LINES - 1; i++)
-            {
-                g_lines[i] = g_lines[i + 1];
-            }
-            g_line_count = MAX_LINES - 1;
-        }
-        g_lines[g_line_count].len = 0;
-        g_lines[g_line_count].text[0] = '\0';
-        g_line_count++;
-    }
-}
-
-static void putc_at(int x, int y, char c, uint8_t color)
-{
-    if (y < 0 || y >= MAX_LINES || x < 0 || x >= MAX_COLS)
-        return;
-
-    ensure_line(y);
-
-    if (x >= g_lines[y].len)
-    {
-        // Extend line
-        for (int i = g_lines[y].len; i < x; i++)
-        {
-            g_lines[y].text[i] = ' ';
-            g_lines[y].colors[i] = color;
-        }
-        g_lines[y].len = x + 1;
-    }
-
-    g_lines[y].text[x] = c;
-    g_lines[y].colors[x] = color;
-    g_lines[y].text[g_lines[y].len] = '\0';
-}
-
-static void term_putchar(char c)
-{
-    if (c == '\n')
-    {
-        g_cursor_y++;
-        g_cursor_x = 0;
-        return;
-    }
-    if (c == '\r')
-    {
-        g_cursor_x = 0;
-        return;
-    }
-
-    putc_at(g_cursor_x, g_cursor_y, c, g_current_color);
-    g_cursor_x++;
-
-    if (g_cursor_x >= MAX_COLS)
-    {
-        g_cursor_x = 0;
-        g_cursor_y++;
-    }
-}
-
-static void term_puts(const char *s)
-{
-    while (*s)
-    {
-        term_putchar(*s++);
-    }
-}
-
-static void term_puts_colored(const char *s, uint8_t color)
-{
-    uint8_t old = g_current_color;
-    g_current_color = color;
-    term_puts(s);
-    g_current_color = old;
+    term_color_t old = g_terminal.current_color;
+    terminal_set_color(&g_terminal, color);
+    terminal_puts(&g_terminal, s);
+    terminal_set_color(&g_terminal, old);
 }
 
 static void display_banner(void)
 {
-    term_puts_colored(" D", 0x0B);        // Light Cyan
-    term_puts_colored("ifferent ", 0x03);  // Cyan
-    term_puts_colored("OS\n\n", 0x0B);     // Light Cyan
+    term_puts_colored(" D", vga_to_color(0x0B));        // Light Cyan
+    term_puts_colored("ifferent ", vga_to_color(0x03));  // Cyan
+    term_puts_colored("OS\n\n", vga_to_color(0x0B));     // Light Cyan
 }
 
-static void render(uint32_t *pix, int pitch_pixels, font_t *font)
-{
-    // Clear to black
-    size_t total = (size_t)WIN_W * WIN_H;
-    for (size_t i = 0; i < total; i++)
-    {
-        pix[i] = color_rgb(0, 0, 0);
-    }
-
-    if (!font)
-        return;
-
-    int fh = font_height(font);
-    int fw = font_width(font);
-    int y = 8;
-
-    for (int i = 0; i < g_line_count && i < MAX_LINES; i++)
-    {
-        int x = 8;
-        for (int j = 0; j < g_lines[i].len && j < MAX_COLS; j++)
-        {
-            uint32_t fg = vga_to_rgb(g_lines[i].colors[j]);
-            char buf[2] = {g_lines[i].text[j], '\0'};
-            font_draw_text(font, pix, pitch_pixels, x, y, buf, fg);
-            x += fw;
-        }
-        y += fh;
-        if (y >= WIN_H - fh)
-            break;
-    }
-
-    // Draw cursor
-    if (g_cursor_y >= 0 && g_cursor_y < g_line_count)
-    {
-        int cursor_screen_y = 8 + g_cursor_y * fh;
-        int cursor_screen_x = 8 + g_cursor_x * fw;
-
-        if (cursor_screen_y < WIN_H - fh)
-        {
-            // Draw cursor as an underscore
-            for (int x = 0; x < fw - 1; x++)
-            {
-                int px = cursor_screen_x + x;
-                int py = cursor_screen_y + fh - 2;
-                if (px < WIN_W && py < WIN_H)
-                {
-                    pix[py * pitch_pixels + px] = color_rgb(170, 170, 170);
-                }
-            }
-        }
-    }
-}
 
 // Built-in commands
 static int bi_help(int argc, char **argv)
@@ -212,29 +84,29 @@ static int bi_help(int argc, char **argv)
     (void)argc;
     (void)argv;
 
-    term_puts(" Available commands:\n");
-    term_puts("--------------------------------------------\n");
-    term_puts(" cd    \t- Change current directory\n");
-    term_puts(" help  \t- List built-in commands\n");
-    term_puts(" echo  \t- Print its arguments\n");
-    term_puts(" ver   \t- Show shell version\n");
-    term_puts(" exit  \t- Exit the shell\n");
-    term_puts("\n");
+    terminal_puts(&g_terminal, " Available commands:\n");
+    terminal_puts(&g_terminal, "--------------------------------------------\n");
+    terminal_puts(&g_terminal, " cd    \t- Change current directory\n");
+    terminal_puts(&g_terminal, " help  \t- List built-in commands\n");
+    terminal_puts(&g_terminal, " echo  \t- Print its arguments\n");
+    terminal_puts(&g_terminal, " ver   \t- Show shell version\n");
+    terminal_puts(&g_terminal, " exit  \t- Exit the shell\n");
+    terminal_puts(&g_terminal, "\n");
 
     return 0;
 }
 
 static int bi_echo(int argc, char **argv)
 {
-    g_current_color = 0x03; // Cyan
+    terminal_set_color(&g_terminal, vga_to_color(0x03)); // Cyan
     for (int i = 1; i < argc; i++)
     {
         if (i > 1)
-            term_putchar(' ');
-        term_puts(argv[i]);
+            terminal_putchar(&g_terminal, ' ');
+        terminal_puts(&g_terminal, argv[i]);
     }
-    g_current_color = 0x07; // Gray
-    term_putchar('\n');
+    terminal_putchar(&g_terminal, '\n');
+    terminal_set_color(&g_terminal, default_color);
 
     return 0;
 }
@@ -246,7 +118,7 @@ static int bi_ver(int argc, char **argv)
 
     char buf[256];
     snprintf(buf, sizeof(buf), "%s (Version %u.%u)\n", g_shell_name, g_ver_major, g_ver_minor);
-    term_puts(buf);
+    terminal_puts(&g_terminal, buf);
 
     return 0;
 }
@@ -268,7 +140,7 @@ static int bi_cd(int argc, char **argv)
     {
         char buf[256];
         snprintf(buf, sizeof(buf), "Directory %s does not exist.\n", arg);
-        term_puts(buf);
+        terminal_puts(&g_terminal, buf);
         return -1;
     }
 
@@ -338,7 +210,32 @@ static int run_builtin(int argc, char **argv)
     return 1; // Not a builtin
 }
 
-static int run_external(int argc, char **argv)
+static bool drain_tty_output(void)
+{
+    char buf[256];
+    uint8_t attrs[256];
+    bool seen = false;
+    term_color_t saved_color = g_terminal.current_color;
+
+    while (1)
+    {
+        int n = system_tty_read(buf, sizeof(buf), TTY_READ_MODE_OUTPUT, attrs);
+        if (n <= 0)
+            break;
+
+        seen = true;
+        for (int i = 0; i < n; i++)
+        {
+            terminal_set_color(&g_terminal, vga_attr_to_color(attrs[i]));
+            terminal_putchar(&g_terminal, buf[i]);
+        }
+    }
+
+    terminal_set_color(&g_terminal, saved_color);
+    return seen;
+}
+
+static int run_external(int argc, char **argv, int *dirty_flag)
 {
     if (argc == 0)
         return 0;
@@ -348,7 +245,7 @@ static int run_external(int argc, char **argv)
     {
         char buf[256];
         snprintf(buf, sizeof(buf), "Unknown command: %s\n", argv[0]);
-        term_puts(buf);
+        terminal_puts(&g_terminal, buf);
         return -1;
     }
 
@@ -373,7 +270,7 @@ static int run_external(int argc, char **argv)
     {
         char buf[256];
         snprintf(buf, sizeof(buf), "[SYSTEM] Could not start %s\n", path);
-        term_puts(buf);
+        terminal_puts(&g_terminal, buf);
         return -1;
     }
 
@@ -383,7 +280,7 @@ static int run_external(int argc, char **argv)
     {
         char buf[256];
         snprintf(buf, sizeof(buf), "[SYSTEM] Failed to wait for process %d\n", pid);
-        term_puts(buf);
+        terminal_puts(&g_terminal, buf);
         return -1;
     }
 
@@ -392,44 +289,45 @@ static int run_external(int argc, char **argv)
     {
         char buf[256];
         snprintf(buf, sizeof(buf), "%s exited with %d\n", argv[0], status);
-        term_puts(buf);
+        terminal_puts(&g_terminal, buf);
     }
+
+    if (dirty_flag && drain_tty_output())
+    {
+        *dirty_flag = 1;
+    }
+
+    // Restore default color after program exits
+    terminal_set_color(&g_terminal, default_color);
+
     return status;
 }
 
 int main(void)
 {
-    window_t *win = window_create(80, 80, WIN_W, WIN_H, 0);
+    window_t *win = window_create(80, 80, WIN_W, WIN_H, 0, "Different Terminal");
     if (!win)
         return -1;
 
-    uint32_t *back = (uint32_t *)malloc((size_t)WIN_W * WIN_H * sizeof(uint32_t));
-    if (!back)
+    font_t *font = font_load_bdf("/system/fonts/spleen-6x12.bdf");
+    if (!font)
     {
         window_destroy(win);
         return -2;
     }
 
-    font_t *font = font_load_bdf("/system/fonts/spleen-8x16.bdf");
-    if (!font)
-    {
-        free(back);
-        window_destroy(win);
-        return -3;
-    }
+    // Initialize terminal component
+    terminal_component_init(&g_terminal, 0, 0, WIN_W, WIN_H, font);
+    terminal_set_color(&g_terminal, default_color);
 
-    // Initialize terminal state
-    g_line_count = 0;
-    g_cursor_x = 0;
-    g_cursor_y = 0;
-    g_current_color = 0x07;
+    // Add terminal to window
+    window_add_component(win, &g_terminal.base);
 
     // Initialize command registry
     if (!cmdreg_init("/system/commands.map"))
     {
-        term_puts("[CRITICAL ERROR] Unable to initialize command registry!\n");
+        terminal_puts(&g_terminal, "[CRITICAL ERROR] Unable to initialize command registry!\n");
         font_destroy(font);
-        free(back);
         window_destroy(win);
         return 127;
     }
@@ -445,16 +343,19 @@ int main(void)
 
     char verline[256];
     snprintf(verline, sizeof(verline), "%s (Version %u.%u)\n\n", g_shell_name, g_ver_major, g_ver_minor);
-    term_puts(verline);
+    terminal_puts(&g_terminal, verline);
 
-    char *line = NULL;
-    size_t cap = 0;
     int dirty = 1;
 
     // Display initial prompt
     char prompt[256];
     snprintf(prompt, sizeof(prompt), "%s> ", g_cwd);
-    term_puts(prompt);
+    terminal_puts(&g_terminal, prompt);
+
+    if (drain_tty_output())
+    {
+        dirty = 1;
+    }
 
     char tty_buf[256];
     int input_pos = 0;
@@ -463,7 +364,8 @@ int main(void)
     while (1)
     {
         // Read from tty
-        int n = system_tty_read(tty_buf, (uint32_t)sizeof(tty_buf));
+        int n = system_tty_read(tty_buf, (uint32_t)sizeof(tty_buf), TTY_READ_MODE_INPUT, NULL);
+
         if (n > 0)
         {
             for (int i = 0; i < n; i++)
@@ -473,7 +375,7 @@ int main(void)
                 if (c == '\n' || c == '\r')
                 {
                     // Execute command
-                    term_putchar('\n');
+                    terminal_putchar(&g_terminal, '\n');
                     input_line[input_pos] = '\0';
 
                     if (input_pos > 0)
@@ -481,14 +383,14 @@ int main(void)
                         char *argv[16];
                         int argc = tokenize(input_line, argv, 16);
 
-                        if (argc > 0)
+                    if (argc > 0)
+                    {
+                        int rc = run_builtin(argc, argv);
+                        if (rc == 1)
                         {
-                            int rc = run_builtin(argc, argv);
-                            if (rc == 1)
-                            {
-                                run_external(argc, argv);
-                            }
+                            run_external(argc, argv, &dirty);
                         }
+                    }
                     }
 
                     // Reset input
@@ -496,9 +398,9 @@ int main(void)
                     input_line[0] = '\0';
 
                     // Display new prompt
-                    term_putchar('\n');
+                    terminal_putchar(&g_terminal, '\n');
                     snprintf(prompt, sizeof(prompt), "%s> ", g_cwd);
-                    term_puts(prompt);
+                    terminal_puts(&g_terminal, prompt);
                     dirty = 1;
                 }
                 else if (c == '\b' || c == 127) // Backspace
@@ -507,13 +409,7 @@ int main(void)
                     {
                         input_pos--;
                         input_line[input_pos] = '\0';
-
-                        // Move cursor back
-                        if (g_cursor_x > 0)
-                        {
-                            g_cursor_x--;
-                            putc_at(g_cursor_x, g_cursor_y, ' ', g_current_color);
-                        }
+                        terminal_backspace(&g_terminal);
                         dirty = 1;
                     }
                 }
@@ -522,7 +418,7 @@ int main(void)
                     if (input_pos < (int)sizeof(input_line) - 1)
                     {
                         input_line[input_pos++] = c;
-                        term_putchar(c);
+                        terminal_putchar(&g_terminal, c);
                         dirty = 1;
                     }
                 }
@@ -531,8 +427,7 @@ int main(void)
 
         if (dirty)
         {
-            render(back, WIN_W, font);
-            window_draw(win, back);
+            window_paint(&win->base);
             dirty = 0;
         }
         else
@@ -542,7 +437,6 @@ int main(void)
     }
 
     font_destroy(font);
-    free(back);
     window_destroy(win);
     return 0;
 }

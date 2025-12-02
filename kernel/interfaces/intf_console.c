@@ -2,6 +2,7 @@
 #include "console.h"
 #include "graphics/vbe_text.h"
 #include "stdint.h"
+#include "system/process.h"
 
 extern unsigned char current_attrib;
 extern int console_is_vbe_active(void);
@@ -21,6 +22,12 @@ int console_set_colors_kernel(uint8_t fg, uint8_t bg)
     unsigned char attrib = make_attr(fg, bg);
     set_color(attrib);
 
+    process_t *p = process_current();
+    if (p)
+    {
+        p->tty_attr = attrib;
+    }
+
     return 0;
 }
 
@@ -36,4 +43,3 @@ void console_get_colors_kernel(uint8_t *out_fg, uint8_t *out_bg)
         *out_bg = (uint8_t)((current_attrib >> 4) & 0x0F);
     }
 }
-

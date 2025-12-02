@@ -114,7 +114,7 @@ void DG_Init(void)
     }
 
     // Create a window for Doom
-    g_doom_window = window_create(200, 200, w, h, 0);
+    g_doom_window = window_create(200, 200, w, h, 0, "DOOM");
     if (!g_doom_window)
     {
         printf("[DOOM] Failed to create window!\n");
@@ -131,7 +131,7 @@ void DG_DrawFrame(void)
         return;
     }
 
-    window_draw(g_doom_window, DG_ScreenBuffer);
+    window_present(g_doom_window, DG_ScreenBuffer);
 }
 
 void DG_SleepMs(uint32_t ms)

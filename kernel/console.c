@@ -19,6 +19,7 @@ static int floor_enabled = 0;
 static int floor_x = 0;
 static int floor_y = 0;
 static int s_vbe_console_active = 0;
+static int s_console_disabled = 0;
 static int s_replaying = 0;
 unsigned char current_attrib = MAKE_COLOR(FG_GRAY, BG_BLACK);
 
@@ -772,6 +773,11 @@ int console_get_graphics_mode(void)
 
 void console_restore_text_mode(void)
 {
+    if (s_console_disabled)
+    {
+        return;
+    }
+
     int console_off = !console_is_vbe_active();
     int mode_changed = !vbe_is_default_mode();
 
@@ -790,4 +796,9 @@ void console_restore_text_mode(void)
         console_use_vbe(1);
     }
     console_flush_log();
+}
+
+void console_disable(void)
+{
+    s_console_disabled = 1;
 }

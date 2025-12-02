@@ -63,6 +63,7 @@ enum
     SYSTEM_SHARED_MEMORY_RELEASE = 50,
     SYSTEM_TTY_READ = 51,
     SYSTEM_TTY_WRITE = 52,
+    SYSTEM_CONSOLE_DISABLE = 54,
 };
 
 struct syscall_frame 
@@ -121,8 +122,9 @@ int system_file_delete(const char *abs_path);
 int system_file_rename(const char *old_path, const char *new_path);
 int system_mkdir(const char *path);
 int system_rmdir(const char *path);
-int system_tty_read_user(void *user_buf, uint32_t len);
+int system_tty_read_user(void *user_buf, uint32_t len, int mode, void *color_buf);
 int system_tty_write_user(const void *user_buf, uint32_t len);
+int system_console_disable(void);
 
 int system_brk_set(void *new_break);
 void system_brk_set_log(int enabled);
@@ -137,3 +139,6 @@ int system_getcwd(char *out, size_t out_sz);
 int system_getexecroot(char *out, size_t out_sz);
 
 int system_video_mode_get(video_mode_info_t *video_out);
+
+#define TTY_READ_MODE_INPUT  0
+#define TTY_READ_MODE_OUTPUT 1

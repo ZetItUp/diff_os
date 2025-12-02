@@ -12,19 +12,5 @@
     "fseek",
     "ftell",
     "fgets"
-  ],
-  "diffwm.exl": [
-    "diffwm_lib_present",
-    "window_create",
-    "window_destroy",
-    "window_draw",
-    "window_poll_event"
-  ],
-  "difffonts.exl": [
-    "font_destroy",
-    "font_draw_text",
-    "font_height",
-    "font_load_bdf",
-    "font_width"
   ]
 }

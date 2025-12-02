@@ -1,4 +1,6 @@
-#include <diffwm/diffwm.h>
+#include <diffwm/diff_ipc.h>
+#include <diffwm/window.h>
+#include <diffwm/window_component.h>
 #include <diffwm/protocol.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -26,7 +28,7 @@ static int dwm_mailbox(void)
     return channel;
 }
 
-window_t* window_create(int x, int y, int width, int height, uint32_t flags)
+window_t* window_create(int x, int y, int width, int height, uint32_t flags, const char *title)
 {
     int wm_channel = dwm_mailbox();
 
@@ -55,7 +57,7 @@ window_t* window_create(int x, int y, int width, int height, uint32_t flags)
         return NULL;
     }
 
-    dwm_msg_t msg = 
+    dwm_msg_t msg =
     {
         .type = DWM_MSG_CREATE_WINDOW
     };
@@ -111,33 +113,53 @@ window_t* window_create(int x, int y, int width, int height, uint32_t flags)
     }
 
     window_t* win = malloc(sizeof(*win));
-    *win = (window_t)
+
+    /* Initialize base component */
+    window_component_init(&win->base, x, y, width, height);
+
+    /* Set window-specific fields */
+    win->title = title;
+    win->id = reply_id;
+    win->handle = handle;
+    win->pixels = (void*)addr;
+    win->pitch = width * 4;
+    win->mailbox = mailbox;
+    win->wm_channel = wm_channel;
+    win->next = NULL;
+
+    /* Allocate backbuffer for rendering */
+    win->backbuffer = malloc((size_t)width * height * sizeof(uint32_t));
+    if (!win->backbuffer)
     {
-        .id = reply_id,
-        .handle = handle,
-        .pixels = (void*)addr,
-        .x = x,
-        .y = y,
-        .width = width,
-        .height = height,
-        .pitch = width * 4,
-        .mailbox = mailbox,
-        .wm_channel = wm_channel
-    };
+        printf("[diffwm.lib] backbuffer alloc failed\n");
+        free(win);
+        return NULL;
+    }
+
+    /* Initialize child components */
+    win->child_count = 0;
+    for (int i = 0; i < WINDOW_MAX_CHILDREN; i++)
+    {
+        win->children[i] = NULL;
+    }
+
+    /* Set polymorphic function pointers */
+    win->base.update = window_update;
+    win->base.draw = window_paint;
 
     return win;
 }
 
-void window_draw(window_t *window, const void *pixels)
+void window_present(window_t *window, const void *pixels)
 {
     if(!window)
     {
         return;
     }
 
-    int pitch = window->width * 4;
+    int pitch = window->base.width * 4;
 
-    for(int y = 0; y < window->height; y++)
+    for(int y = 0; y < window->base.height; y++)
     {
         memcpy((uint8_t*)window->pixels + y * window->pitch, (const uint8_t*)pixels + y * pitch, pitch);
     }
@@ -187,6 +209,11 @@ void window_destroy(window_t *window)
 
     shared_memory_unmap(window->handle);
     shared_memory_release(window->handle);
+
+    if (window->backbuffer)
+    {
+        free(window->backbuffer);
+    }
 
     free(window);
 }
