@@ -2,12 +2,14 @@
 #include "idt.h"
 #include "io.h"
 #include "pic.h"
+#include "apic.h"
 #include "console.h"
 #include "stdio.h"
 #include "drivers/driver.h"
 #include "system/scheduler.h"
 
 irq_handler_t irq_handlers[NUM_IRQS];
+static int g_use_apic = 0;
 
 volatile int g_in_irq = 0;
 
@@ -32,14 +34,21 @@ void irq_handler_c(unsigned irq_ptr, void *context)
         printf("[IRQ] Unhandled vector %u (real=%u)\n", irq, real_irq);
     }
     
-    // Always send EOI
-    if(irq >= 32)
+    // Send EOI to either APIC or PIC
+    if (g_use_apic)
     {
-        pic_send_eoi((unsigned char)irq - 32);
+        apic_send_eoi();
     }
     else
     {
-        pic_send_eoi((unsigned char)irq);
+        if(irq >= 32)
+        {
+            pic_send_eoi((unsigned char)irq - 32);
+        }
+        else
+        {
+            pic_send_eoi((unsigned char)irq);
+        }
     }
 
     g_in_irq = 0;
@@ -78,4 +87,9 @@ void irq_init(void) {
     idt_set_entry(45, (unsigned)irq13, 0x08, 0x8E);
     idt_set_entry(46, (unsigned)irq14, 0x08, 0x8E);
     idt_set_entry(47, (unsigned)irq15, 0x08, 0x8E);
+}
+
+void irq_set_use_apic(int use_apic)
+{
+    g_use_apic = use_apic;
 }

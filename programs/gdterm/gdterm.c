@@ -62,6 +62,10 @@ static const term_color_t default_color = {203, 219, 252, 0xFF};
 static int g_last_status = 0;
 static char g_cwd[256] = "/";
 
+#define MAX_CHILDREN 32
+static int g_children[MAX_CHILDREN];
+static int g_child_count = 0;
+
 static void term_puts_colored(const char *s, term_color_t color)
 {
     term_color_t old = g_terminal.current_color;
@@ -235,6 +239,52 @@ static bool drain_tty_output(void)
     return seen;
 }
 
+static void remember_child(int pid)
+{
+    if (pid <= 0 || g_child_count >= MAX_CHILDREN)
+    {
+        return;
+    }
+
+    g_children[g_child_count++] = pid;
+}
+
+static void reap_children(int *dirty_flag)
+{
+    for (int i = 0; i < g_child_count; )
+    {
+        int status = 0;
+        int rc = system_wait_pid_nohang(g_children[i], &status);
+
+        if (rc > 0)
+        {
+            g_last_status = status;
+
+            char buf[128];
+            snprintf(buf, sizeof(buf), "[SYSTEM] pid %d exited with %d\n", rc, status);
+            terminal_puts(&g_terminal, buf);
+
+            g_children[i] = g_children[g_child_count - 1];
+            g_child_count--;
+
+            if (dirty_flag)
+            {
+                *dirty_flag = 1;
+            }
+            continue;
+        }
+        else if (rc < 0)
+        {
+            // Child is gone or invalid; drop it to avoid leaking the slot.
+            g_children[i] = g_children[g_child_count - 1];
+            g_child_count--;
+            continue;
+        }
+
+        ++i;
+    }
+}
+
 static int run_external(int argc, char **argv, int *dirty_flag)
 {
     if (argc == 0)
@@ -274,33 +324,15 @@ static int run_external(int argc, char **argv, int *dirty_flag)
         return -1;
     }
 
-    int status = 0;
-    int w = process_wait(pid, &status);
-    if (w < 0)
-    {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "[SYSTEM] Failed to wait for process %d\n", pid);
-        terminal_puts(&g_terminal, buf);
-        return -1;
-    }
+    remember_child(pid);
 
-    g_last_status = status;
-    if (status != 0)
-    {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "%s exited with %d\n", argv[0], status);
-        terminal_puts(&g_terminal, buf);
-    }
-
-    if (dirty_flag && drain_tty_output())
+    // Mark dirty so the prompt repaints after launching.
+    if (dirty_flag)
     {
         *dirty_flag = 1;
     }
 
-    // Restore default color after program exits
-    terminal_set_color(&g_terminal, default_color);
-
-    return status;
+    return 0;
 }
 
 int main(void)
@@ -363,6 +395,13 @@ int main(void)
 
     while (1)
     {
+        if (drain_tty_output())
+        {
+            dirty = 1;
+        }
+
+        reap_children(&dirty);
+
         // Read from tty
         int n = system_tty_read(tty_buf, (uint32_t)sizeof(tty_buf), TTY_READ_MODE_INPUT, NULL);
 

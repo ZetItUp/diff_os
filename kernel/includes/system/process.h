@@ -99,6 +99,7 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
                                         uintptr_t heap_max);
 process_t *process_find_by_pid(int pid);
 int system_wait_pid(int pid, int *u_status);
+int system_wait_pid_nohang(int pid, int *u_status);
 uint32_t read_cr3_local(void);
 void process_set_cwd(process_t *p, uint32_t dir_id, const char *abs_path);
 uint32_t process_cwd_id(const process_t *p);

@@ -28,3 +28,4 @@ extern void irq15(void);
 void irq_install_handler(uint8_t irq, irq_handler_t handler);
 void irq_uninstall_handler(uint8_t irq);
 void irq_init(void);
+void irq_set_use_apic(int use_apic);

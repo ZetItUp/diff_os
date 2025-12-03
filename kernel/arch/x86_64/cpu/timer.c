@@ -3,7 +3,9 @@
 #include "timer.h"
 #include "irq.h"
 #include "pic.h"
+#include "apic.h"
 #include "io.h"
+#include <stdio.h>
 #include "stdint.h"
 #include "stddef.h"
 #include "stdbool.h"
@@ -283,6 +285,7 @@ void ktimer_tick_isr(void)
 
     g_ms_frac_accum = acc;
 
+
     // Drain keyboard scan codes from driver and process them
     // This triggers keyboard_process_scancode → push_key_event → writes to TTY
     keyboard_drain();
@@ -329,4 +332,22 @@ void timer_install(void)
 
     irq_install_handler(PIT_IRQ_LINE, timer_irq_handler);  // This needs to be bound to IRQ0
     pic_clear_mask(PIT_IRQ_LINE);  // This needs to unmask IRQ0 on PIC
+}
+
+void timer_install_apic(void)
+{
+    // Install timer handler for APIC timer (uses vector 32, same as PIT IRQ0)
+    // Note: APIC timer is local to the CPU, doesn't go through I/O APIC
+    irq_install_handler(PIT_IRQ_LINE, timer_irq_handler);
+
+    // Set up the timer frequency tracking variables for APIC timer
+    uint32_t f = irq_save();
+    g_hz = TIMER_DEFAULT_HZ;
+    g_ms_inc = 1000u / g_hz;
+    g_ms_rem = 1000u % g_hz;
+    g_ms_frac_accum = 0;
+    irq_restore(f);
+
+    // No need to unmask in I/O APIC - APIC timer is already enabled
+    // The APIC timer interrupt is controlled by the APIC_REG_TIMER register
 }

@@ -9,6 +9,7 @@ extern volatile uint32_t timer_ticks;
 
 void timer_init(uint32_t frequency);
 void timer_install(void);
+void timer_install_apic(void);
 
 uint32_t timer_hz(void);
 uint64_t timer_now_ticks(void);

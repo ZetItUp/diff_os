@@ -57,6 +57,7 @@
 #include "i_system.h"
 #include "i_timer.h"
 #include "i_video.h"
+#include "doomgeneric.h"
 
 #include "g_game.h"
 

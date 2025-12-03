@@ -170,7 +170,12 @@ void window_present(window_t *window, const void *pixels)
         .window_id = window->id,
     };
 
-    send_message(window->wm_channel, &msg, sizeof(msg));
+    int rc = send_message(window->wm_channel, &msg, sizeof(msg));
+    if (rc < 0)
+    {
+        printf("[diffwm.lib] send_message DRAW failed rc=%d chan=%d id=%u\n",
+               rc, window->wm_channel, window->id);
+    }
 }
 
 int window_poll_event(window_t *window, diff_event_t *event)

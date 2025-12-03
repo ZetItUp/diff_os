@@ -4,6 +4,10 @@ LD = i386-elf-ld
 OBJCOPY = i386-elf-objcopy
 NASM = nasm
 
+# QEMU Configuration
+# Choose which QEMU to use (comment/uncomment):
+QEMU = qemu-system-i386
+
 # Build Directories
 BUILD = build
 OBJ = $(BUILD)/obj
@@ -46,6 +50,7 @@ KERNEL_SRC = \
 	kernel/arch/x86_64/cpu/irq.c \
 	kernel/arch/x86_64/cpu/io.c \
 	kernel/arch/x86_64/cpu/pic.c \
+	kernel/arch/x86_64/cpu/apic.c \
 	kernel/arch/x86_64/cpu/timer.c \
 	kernel/arch/x86_64/cpu/tss.c \
 	kernel/drivers/ata.c \
@@ -218,7 +223,7 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 run: all
 	@echo "[QEMU] Starting OS"
 	@# @VBoxManage convertfromraw --format VDI build/diffos.img build/diffos.vdi
-	qemu-system-i386 \
+	$(QEMU) \
 		-monitor stdio \
 		-m 64M \
 		-serial file:serial.log \
@@ -230,7 +235,7 @@ run: all
 # Debug in QEMU with GDB
 debug: all
 	@echo "[QEMU] Starting in debug mode"
-	@qemu-system-i386 -monitor stdio -m 64M -vga std -drive format=raw,file=$(TARGET) -s -S &
+	@$(QEMU) -monitor stdio -m 64M -vga std -drive format=raw,file=$(TARGET) -s -S &
 	@echo "[GDB] Starting debugger"
 	@gdb -x 1kernel.gdb
 

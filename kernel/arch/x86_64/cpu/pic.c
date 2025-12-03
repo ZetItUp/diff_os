@@ -90,3 +90,10 @@ void pic_clear_mask(uint8_t irq_line)
     value = inb(port) & ~(1 << irq_line);
     outb(port, value);
 }
+
+// Disable the PIC by masking all IRQs
+void pic_disable(void)
+{
+    outb(PIC1_DATA, 0xFF);
+    outb(PIC2_DATA, 0xFF);
+}

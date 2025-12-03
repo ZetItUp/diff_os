@@ -66,6 +66,7 @@ enum
     SYSTEM_TTY_READ = 51,
     SYSTEM_TTY_WRITE = 52,
     SYSTEM_CONSOLE_DISABLE = 54,
+    SYSTEM_WAIT_PID_NOHANG = 55,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -291,7 +292,10 @@ static inline __attribute__((always_inline)) void system_thread_sleep_ms(uint32_
 
 static inline __attribute__((always_inline)) uint64_t system_time_ms(void)
 {
-    return do_sys64_0(SYSTEM_TIME_MS);
+    // Kernel returns time in EDX:EAX (uint64). In 32-bit userland we only consume
+    // the low 32 bits, but still perform the 64-bit syscall and mask the result
+    // to avoid stale values if the high dword changes.
+    return (uint32_t)do_sys64_0(SYSTEM_TIME_MS);
 }
 
 static inline __attribute__((always_inline)) int system_thread_get_id(void)
@@ -307,6 +311,11 @@ static inline int system_process_spawn(const char *path, int argc, char **argv)
 static inline int system_wait_pid(int pid, int *status)
 {
     return do_sys(SYSTEM_WAIT_PID, pid, (int)status, 0, 0);
+}
+
+static inline int system_wait_pid_nohang(int pid, int *status)
+{
+    return do_sys(SYSTEM_WAIT_PID_NOHANG, pid, (int)status, 0, 0);
 }
 
 static inline int system_file_stat(const char *path, fs_stat_t *fs_stat)

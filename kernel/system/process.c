@@ -729,6 +729,73 @@ int system_wait_pid(int pid, int *u_status)
     return ret_pid;
 }
 
+// Non-blocking variant: reap child if already zombie, otherwise return 0
+int system_wait_pid_nohang(int pid, int *u_status)
+{
+    process_t *self  = process_current();
+    process_t *child = process_find_by_pid(pid);
+
+    if (!self || !child)
+    {
+        return -1;
+    }
+    if (child->parent != self)
+    {
+        return -1; // not your child
+    }
+
+    // Child still running; do not block.
+    if (child->state != PROCESS_ZOMBIE || child->live_threads != 0)
+    {
+        return 0;
+    }
+
+    // Reap any lingering zombie threads first.
+    scheduler_reap_owned_zombies(child);
+    if (child->live_threads != 0)
+    {
+        DDBG("[WAITPID][WARN][NOHANG] child live_threads=%d after reap; forcing zero\n", child->live_threads);
+        child->live_threads = 0;
+    }
+
+    const int status  = child->exit_code;
+    const int ret_pid = child->pid;
+
+    if (u_status)
+    {
+        int cpy_rc = 0;
+        uint32_t saved_cr3 = read_cr3_local();
+
+        if (saved_cr3 != self->cr3)
+        {
+            paging_switch_address_space(self->cr3);
+        }
+
+        cpy_rc = copy_to_user(u_status, &status, sizeof(status));
+
+        if (saved_cr3 != self->cr3)
+        {
+            paging_switch_address_space(saved_cr3);
+        }
+
+        if (cpy_rc != 0)
+        {
+            DDBG("[WAITPID][ERR][NOHANG] failed to copy status to user %p\n", u_status);
+            return -1;
+        }
+    }
+
+    if (child->cr3)
+    {
+        paging_free_all_user_in(child->cr3);
+    }
+
+    exl_invalidate_for_cr3(child->cr3);
+    process_destroy(child);
+
+    return ret_pid;
+}
+
 // Spawn a user process from a path and argv from userspace
 int system_process_spawn(const char *upath, int argc, char **uargv)
 {

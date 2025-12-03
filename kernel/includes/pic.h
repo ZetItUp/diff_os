@@ -28,7 +28,8 @@ void pic_send_eoi(unsigned char irq);
  */
 void pic_set_mask(uint8_t irq_line);
 
-/*
- * Unmask an IRQ line. (Enable it)
- */
+// Unmask an IRQ line. (Enable it)
 void pic_clear_mask(uint8_t irq_line);
+
+// Disable the PIC by masking all IRQs
+void pic_disable(void);

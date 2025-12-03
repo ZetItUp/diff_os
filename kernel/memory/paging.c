@@ -183,6 +183,21 @@ static inline void* kmap_phys(uint32_t phys, int slot)
 {
     uint32_t va = slot ? kmap_va2 : kmap_va1;
     uint32_t *pt = slot ? g_kmap_pt2 : g_kmap_pt1;
+    uint32_t di = (va >> 22) & 0x3FFu;
+
+    // Make sure the current page directory has a present PDE for this scratch VA,
+    // and refresh the cached PT pointer if the PDE points somewhere else.
+    uint32_t pde = page_directory[di];
+    uint32_t pde_phys = pde & 0xFFFFF000u;
+
+    if (!(pde & PAGE_PRESENT) || pt == NULL || (((uint32_t)(uintptr_t)pt) & 0xFFFFF000u) != pde_phys)
+    {
+        paging_ensure_pagetable(va, PAGE_PRESENT | PAGE_RW);
+        pde = page_directory[di];
+        pde_phys = pde & 0xFFFFF000u;
+        pt = (uint32_t*)(uintptr_t)pde_phys;
+        if (slot) g_kmap_pt2 = pt; else g_kmap_pt1 = pt;
+    }
 
     if (!pt)
     {
@@ -592,10 +607,9 @@ void init_paging(uint32_t ram_mb)
         phys_page_refcnt[i] = 1;
     }
 
-    // Scratch-VA nära slutet av ID-map
-    uint32_t kmap_base = id_end_plus + 2 * PAGE_SIZE_4KB;
-    kmap_va1 = kmap_base;
-    kmap_va2 = kmap_base + PAGE_SIZE_4KB;
+    // Dedikerade scratch-maps i hög kernel-VA så de inte krockar med identity-map.
+    kmap_va1 = KMAP_SCRATCH1;
+    kmap_va2 = KMAP_SCRATCH2;
 
     // Säkerställ egna PT för scratch-VAs och cache:a PT-pekare
     paging_ensure_pagetable(kmap_va1, PAGE_PRESENT | PAGE_RW);

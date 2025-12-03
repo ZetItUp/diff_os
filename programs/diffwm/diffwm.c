@@ -28,6 +28,7 @@ typedef struct wm_window
     uint32_t id;
     int handle;
     void *pixels;
+    int drew_once;
 
     int x;
     int y;
@@ -149,6 +150,7 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     window->pitch = desc->width * 4;
     window->mailbox = client_channel;
     window->wm_channel = g_mailbox;
+    window->drew_once = 0;
 
     wm_add_window(window);
     *out_id = window->id;
@@ -369,7 +371,7 @@ int main(void)
     system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
 
     /* Spawn a simple graphical terminal client */
-    const char *client_path = "/programs/gdterm/gdterm.dex";
+    const char *client_path = "/games/doom/doom.dex";
     spawn_process(client_path, 0, NULL);
 
     dwm_msg_t *msg = (dwm_msg_t *)malloc(sizeof(dwm_msg_t));

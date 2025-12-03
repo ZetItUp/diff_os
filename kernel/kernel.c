@@ -6,6 +6,7 @@
 #include "serial.h"
 #include "irq.h"
 #include "pic.h"
+#include "apic.h"
 #include "pci.h"
 #include "io.h"
 #include "timer.h"
@@ -77,9 +78,51 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
     process_init();
     idt_init();
     system_call_init();
-    pic_remap(0x20, 0x28);
-    irq_init();
-    timer_install();
+
+    // Try to use APIC if supported, otherwise fall back to PIC
+    if (apic_is_supported())
+    {
+        printf("[KERNEL] APIC supported, using APIC mode\n");
+        pic_remap(0x20, 0x28);  // Still remap PIC before disabling it
+        pic_disable();          // Disable PIC
+        apic_init();            // Initialize Local APIC
+        ioapic_init();          // Initialize I/O APIC
+        irq_init();             // Setup IDT entries
+        irq_set_use_apic(1);    // Use APIC for EOI
+
+        // Map legacy IRQs through I/O APIC
+        // Note: IRQ0 (PIT timer) is not used when APIC timer is active
+        ioapic_map_irq(0, 32, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH);  // Timer (PIT, not used)
+        ioapic_map_irq(1, 33, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH);  // Keyboard
+        ioapic_map_irq(2, 34, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH);  // Cascade
+        ioapic_map_irq(3, 35, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH);  // COM2
+        ioapic_map_irq(4, 36, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH);  // COM1
+        ioapic_map_irq(5, 37, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH);  // LPT2
+        ioapic_map_irq(6, 38, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH);  // Floppy
+        ioapic_map_irq(7, 39, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH);  // LPT1
+        ioapic_map_irq(8, 40, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH);  // RTC
+        ioapic_map_irq(9, 41, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH);  // ACPI
+        ioapic_map_irq(10, 42, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH); // Available
+        ioapic_map_irq(11, 43, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH); // Available
+        ioapic_map_irq(12, 44, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH); // PS/2 Mouse
+        ioapic_map_irq(13, 45, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH); // FPU
+        ioapic_map_irq(14, 46, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH); // Primary ATA
+        ioapic_map_irq(15, 47, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH); // Secondary ATA
+
+        timer_install_apic();   // Install APIC timer handler first
+        apic_timer_init(100);   // Initialize and start APIC timer at 100 Hz
+
+        // Unmask keyboard IRQ (IRQ1)
+        ioapic_unmask_irq(1);
+    }
+    else
+    {
+        printf("[KERNEL] APIC not supported, using PIC mode\n");
+        pic_remap(0x20, 0x28);
+        irq_init();
+        timer_install();        // Use PIT timer
+    }
+
     scheduler_init();
     /* init_thread walks drivers/FS/EXL and needs ample kernel stack; 4KB was overflowing into the heap metadata. */
     thread_create(init_thread, NULL, 32 * 1024);

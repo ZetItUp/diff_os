@@ -64,6 +64,7 @@ enum
     SYSTEM_TTY_READ = 51,
     SYSTEM_TTY_WRITE = 52,
     SYSTEM_CONSOLE_DISABLE = 54,
+    SYSTEM_WAIT_PID_NOHANG = 55,
 };
 
 struct syscall_frame 
@@ -132,6 +133,7 @@ void system_brk_init_window(uintptr_t image_base, uintptr_t image_size);
 
 int system_process_spawn(const char *upath, int argc, char **uargv);
 int system_wait_pid(int pid, int *u_status);
+int system_wait_pid_nohang(int pid, int *u_status);
 int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_wh);
 int system_video_mode_set(int w, int h, int bpp);
 int system_chdir(const char *path);

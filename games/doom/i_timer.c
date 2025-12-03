@@ -22,6 +22,7 @@
 #include "doomgeneric.h"
 
 #include <stdarg.h>
+#include <stdio.h>
 
 //#include <sys/time.h>
 //#include <unistd.h>
@@ -75,9 +76,6 @@ int I_GetTimeMS(void)
 
 void I_Sleep(int ms)
 {
-    //SDL_Delay(ms);
-    //usleep (ms * 1000);
-
 	DG_SleepMs(ms);
 }
 
@@ -93,4 +91,3 @@ void I_InitTimer(void)
 
     //SDL_Init(SDL_INIT_TIMER);
 }
-

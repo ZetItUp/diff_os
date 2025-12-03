@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <string.h>
 #include <syscall.h>
 #include <unistd.h>
 #include <diffgfx/graphics.h>
@@ -113,13 +114,27 @@ void DG_Init(void)
         chdir(exec_root);
     }
 
+    // Choose a position that fits the current video mode (fallback to 10,10).
+    int wx = 10;
+    int wy = 10;
+    video_mode_info_t mode;
+    if (system_video_mode_get(&mode) == 0)
+    {
+        wx = (mode.width  > w) ? (int)((mode.width  - w) / 2) : 0;
+        wy = (mode.height > h) ? (int)((mode.height - h) / 2) : 0;
+    }
+
     // Create a window for Doom
-    g_doom_window = window_create(200, 200, w, h, 0, "DOOM");
+    g_doom_window = window_create(wx, wy, w, h, 0, "DOOM");
     if (!g_doom_window)
     {
         printf("[DOOM] Failed to create window!\n");
         return;
     }
+
+    // Push an initial blank frame so the WM shows the window even before the first game draw.
+    memset(DG_ScreenBuffer, 0, (size_t)w * h * sizeof(pixel_t));
+    window_present(g_doom_window, DG_ScreenBuffer);
 
     I_AtExit(DG_Finish, true);
 }
@@ -141,7 +156,7 @@ void DG_SleepMs(uint32_t ms)
 
 uint32_t DG_GetTicksMs(void)
 {
-    return system_time_ms();
+    return (uint32_t)system_time_ms();
 }
 
 int DG_GetKey(int *pressed, unsigned char *key)
@@ -164,7 +179,7 @@ void DG_SetWindowTitle(const char *title)
 
 int main(int argc, char **argv)
 {
-    printf("[DOOM] Starting Doom...\n");
+    printf("Starting Doom...\n");
 
     doomgeneric_Create(argc, argv);
 

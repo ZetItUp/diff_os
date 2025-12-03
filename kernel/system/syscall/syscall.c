@@ -549,6 +549,23 @@ int system_call_dispatch(struct syscall_frame *f)
         {
             uint64_t now = timer_now_ms();
 
+            static int time_log_count = 0;
+            if (time_log_count < 20)
+            {
+                time_log_count++;
+                printf("[SYSCALL] TIME_MS now=%u (call #%d)\n",
+                       (uint32_t)now, time_log_count);
+            }
+
+            // Guarantee strictly monotonic returns even if multiple calls land
+            // in the same PIT tick.
+            static uint64_t last_sys_time = 0;
+            if (now <= last_sys_time)
+            {
+                now = last_sys_time + 1;
+            }
+            last_sys_time = now;
+
             f->eax = (uint32_t)(now & 0xFFFFFFFF);
             f->edx = (uint32_t)(now >> 32);
 
@@ -580,6 +597,15 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         } 
+        case SYSTEM_WAIT_PID_NOHANG:
+        {
+            int pid = arg0;
+            int *u_status = (int*)(uintptr_t)arg1;
+
+            ret = system_wait_pid_nohang(pid, u_status);
+
+            break;
+        }
         case SYSTEM_FILE_STAT:
         {
             ret = system_file_stat((const char*)arg0, (filesystem_stat_t*)arg1);
@@ -776,11 +802,17 @@ int system_call_dispatch(struct syscall_frame *f)
         }
     }
 
-    // Write return values unless already set in the frame
+    // Write return values unless already set in the frame.
+    // When regs_set is true, propagate the value in f->eax as the function return
+    // so the stub copies the intended value back to user EAX.
     if (!regs_set)
     {
         f->eax = (uint32_t)ret;
         f->edx = 0;
+    }
+    else
+    {
+        ret = (int)f->eax;
     }
 
     // Safety: never try to iret to a NULL EIP. If the saved user EIP
