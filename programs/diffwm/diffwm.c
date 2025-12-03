@@ -51,6 +51,9 @@ static video_mode_info_t g_mode;
 static uint32_t *g_backbuffer = NULL;
 static uint32_t g_backbuffer_stride = 0; // pixels per line
 
+// Dirty flag for optimized rendering
+static volatile int g_needs_redraw = 0;
+
 // Darken an ARGB pixel very slightly to simulate a subtle shadow (alpha over black).
 static inline uint32_t apply_shadow_20(uint32_t c)
 {
@@ -181,13 +184,20 @@ static void wm_draw_window(const dwm_msg_t *msg)
     uint32_t src_stride = (uint32_t)(window->pitch / 4);
     uint32_t *dst = g_backbuffer + (size_t)y0 * g_backbuffer_stride + (size_t)x0;
 
-    /* Shared memory is already mapped/pinned; use memcpy per row for speed. */
+    // Optimize: use single memcpy if possible
     size_t row_bytes = (size_t)max_x * sizeof(uint32_t);
-    for(int y = 0; y < max_y; ++y)
+    if(src_stride == (uint32_t)max_x && g_backbuffer_stride == (uint32_t)max_x)
     {
-        memcpy(dst, src, row_bytes);
-        src += src_stride;
-        dst += g_backbuffer_stride;
+        memcpy(dst, src, row_bytes * max_y);
+    }
+    else
+    {
+        for(int y = 0; y < max_y; ++y)
+        {
+            memcpy(dst, src, row_bytes);
+            src += src_stride;
+            dst += g_backbuffer_stride;
+        }
     }
 
     // Draw a simple 2px border around the window area (clipped)
@@ -277,8 +287,6 @@ static void wm_draw_window(const dwm_msg_t *msg)
             }
         }
     }
-
-    system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
 }
 
 static void wm_handle_message(const dwm_msg_t *msg)
@@ -320,6 +328,7 @@ static void wm_handle_message(const dwm_msg_t *msg)
         case DWM_MSG_DRAW:
             {
                 wm_draw_window(msg);
+                g_needs_redraw = 1;  // Mark as dirty for batched rendering
                 break;
             }
         case DWM_MSG_EVENT:
@@ -370,8 +379,7 @@ int main(void)
 
     system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
 
-    /* Spawn a simple graphical terminal client */
-    const char *client_path = "/games/doom/doom.dex";
+    const char *client_path = "/programs/gdterm/gdterm.dex";
     spawn_process(client_path, 0, NULL);
 
     dwm_msg_t *msg = (dwm_msg_t *)malloc(sizeof(dwm_msg_t));
@@ -380,16 +388,33 @@ int main(void)
         return -4;
     }
 
+    // Message handling loop with batched rendering
+    int msg_count = 0;
     for(;;)
     {
         int rcv = system_message_receive(g_mailbox, msg, sizeof(*msg));
         if (rcv > 0)
         {
             wm_handle_message(msg);
-            system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
+            msg_count++;
+
+            // Batch renders: only update screen every 4 messages or when explicitly needed
+            if (g_needs_redraw && (msg_count >= 4 || msg->type == DWM_MSG_DRAW))
+            {
+                system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
+                g_needs_redraw = 0;
+                msg_count = 0;
+            }
         }
         else
         {
+            // No messages - if we have pending updates, flush them now
+            if (g_needs_redraw)
+            {
+                system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
+                g_needs_redraw = 0;
+                msg_count = 0;
+            }
             thread_yield();
         }
     }

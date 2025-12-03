@@ -159,9 +159,17 @@ void window_present(window_t *window, const void *pixels)
 
     int pitch = window->base.width * 4;
 
-    for(int y = 0; y < window->base.height; y++)
+    // Optimize: if pitch matches, do a single memcpy instead of line-by-line
+    if(pitch == window->pitch)
     {
-        memcpy((uint8_t*)window->pixels + y * window->pitch, (const uint8_t*)pixels + y * pitch, pitch);
+        memcpy(window->pixels, pixels, (size_t)pitch * window->base.height);
+    }
+    else
+    {
+        for(int y = 0; y < window->base.height; y++)
+        {
+            memcpy((uint8_t*)window->pixels + y * window->pitch, (const uint8_t*)pixels + y * pitch, pitch);
+        }
     }
 
     dwm_msg_t msg =

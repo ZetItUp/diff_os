@@ -15,10 +15,28 @@
 void *memset(void *dst, int c, size_t n)
 {
     unsigned char *p = (unsigned char *)dst;
+    unsigned char uc = (unsigned char)c;
 
+    // Fast path: set in 32-bit chunks if aligned
+    if (n >= 32 && ((uintptr_t)p & 3) == 0)
+    {
+        uint32_t val = (uint32_t)uc | ((uint32_t)uc << 8) | ((uint32_t)uc << 16) | ((uint32_t)uc << 24);
+        uint32_t *p32 = (uint32_t *)p;
+        size_t chunks = n / 4;
+
+        for (size_t i = 0; i < chunks; i++)
+        {
+            p32[i] = val;
+        }
+
+        p += chunks * 4;
+        n -= chunks * 4;
+    }
+
+    // Set remaining bytes
     for (size_t i = 0; i < n; i++)
     {
-        p[i] = (unsigned char)c;
+        p[i] = uc;
     }
 
     return dst;
@@ -30,6 +48,25 @@ void *memcpy(void *dst, const void *src, size_t n)
     unsigned char *d = (unsigned char *)dst;
     const unsigned char *s = (const unsigned char *)src;
 
+    // Fast path: copy in 32-bit chunks if both src and dst are aligned
+    if (n >= 32 && ((uintptr_t)d & 3) == 0 && ((uintptr_t)s & 3) == 0)
+    {
+        uint32_t *d32 = (uint32_t *)d;
+        const uint32_t *s32 = (const uint32_t *)s;
+        size_t chunks = n / 4;
+
+        for (size_t i = 0; i < chunks; i++)
+        {
+            d32[i] = s32[i];
+        }
+
+        // Copy remaining bytes
+        d += chunks * 4;
+        s += chunks * 4;
+        n -= chunks * 4;
+    }
+
+    // Copy remaining bytes
     for (size_t i = 0; i < n; i++)
     {
         d[i] = s[i];
