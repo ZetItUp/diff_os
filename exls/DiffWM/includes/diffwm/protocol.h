@@ -7,7 +7,9 @@ typedef enum
 {
     DIFF_EVENT_NONE = 0,
     DIFF_EVENT_KEY,
-    DIFF_EVENT_MOUSE
+    DIFF_EVENT_MOUSE,
+    DIFF_EVENT_FOCUS_GAINED,
+    DIFF_EVENT_FOCUS_LOST
 } diff_event_type_t;
 
 typedef struct
@@ -27,7 +29,9 @@ typedef enum
     DWM_MSG_CREATE_WINDOW = 1,
     DWM_MSG_DESTROY_WINDOW,
     DWM_MSG_DRAW,
-    DWM_MSG_EVENT
+    DWM_MSG_EVENT,
+    DWM_MSG_REQUEST_FOCUS,
+    DWM_MSG_FOCUS_CHANGED
 } dwm_msg_type_t;
 
 typedef struct

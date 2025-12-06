@@ -34,16 +34,6 @@ static inline int is_user_va(uint32_t a)
     return (a >= USER_MIN) && (a < USER_MAX);
 }
 
-static void commit_initial_heap(uintptr_t base, uintptr_t size, uintptr_t want)
-{
-    if (want > size) 
-    {
-        want = size;
-    }
-    
-    system_brk_set((void *)(base + want));
-}
-
 // Safe range check for file sections
 static inline int in_range(uint32_t off, uint32_t sz, uint32_t max)
 {
@@ -152,13 +142,22 @@ static uint32_t build_user_stack(
     // mapped explicitly near USER_MAX with a 4 KB guard page above it.
     const uint32_t STK_SZ = 512 * 1024;
     const uint32_t GUARD  = PAGE_SIZE_4KB;
-    uint32_t stack_top  = USER_MAX;
+    const uint32_t stack_limit = USER_MAX - GUARD; // leave guard page unmapped
+    uint32_t stack_top  = stack_limit;
     uint32_t stack_base = stack_top - STK_SZ;
 
     if (stack_base < USER_MIN + (1u << 20)) // sanity: keep clear of image/heap
     {
         stack_base = USER_MIN + (1u << 20);
         stack_top  = stack_base + STK_SZ;
+        if (stack_top > stack_limit)
+        {
+            stack_top = stack_limit;
+            if (stack_top < stack_base)
+            {
+                stack_top = stack_base;
+            }
+        }
     }
 
     if (out_base)
@@ -501,7 +500,6 @@ static int relocate_image(
                 // Check if the RESULT looks like x86 code (common function prologues)
                 uint8_t byte0 = val & 0xFF;
                 uint8_t byte1 = (val >> 8) & 0xFF;
-                uint8_t byte2 = (val >> 16) & 0xFF;
                 // 0x55 = push ebp, 0x53 = push ebx, 0x56 = push esi, 0x57 = push edi, 0x83 = sub, 0x8b = mov
                 if ((byte0 == 0x55 || byte0 == 0x53 || byte0 == 0x56 || byte0 == 0x57) &&
                     (byte1 == 0x89 || byte1 == 0x8B || byte1 == 0x83 || byte1 == 0x56 || byte1 == 0x53))

@@ -86,14 +86,74 @@ static wm_window_t* wm_find(uint32_t id)
     return NULL;
 }
 
+// Send focus event to a window
+static void wm_send_focus_event(wm_window_t *window, int gained)
+{
+    if (!window) return;
+
+    dwm_msg_t ev_msg = {0};
+    ev_msg.type = DWM_MSG_EVENT;
+    ev_msg.window_id = window->id;
+    ev_msg.event.type = gained ? DIFF_EVENT_FOCUS_GAINED : DIFF_EVENT_FOCUS_LOST;
+
+    send_message(window->mailbox, &ev_msg, sizeof(ev_msg));
+}
+
+// Set focus to a specific window, sending events to old and new focused windows
+static void wm_set_focus(wm_window_t *window)
+{
+    if (g_focused == window) return;
+
+    // Notify old focused window it lost focus
+    if (g_focused)
+    {
+        wm_send_focus_event(g_focused, 0);
+    }
+
+    g_focused = window;
+
+    // Notify new focused window it gained focus
+    if (g_focused)
+    {
+        wm_send_focus_event(g_focused, 1);
+    }
+
+    g_needs_redraw = 1;  // Redraw to update focus visual
+}
+
 static void wm_add_window(wm_window_t *window)
 {
     window->next = g_windows;
     g_windows = window;
 
-    if (!g_focused)
+    // New windows automatically get focus, but don't send focus events yet
+    // (the client hasn't received its CREATE reply, so it can't handle events)
+    g_focused = window;
+    g_needs_redraw = 1;
+}
+
+// Clear a region of the backbuffer to the desktop background color
+static void wm_clear_region(int x, int y, int w, int h)
+{
+    if (!g_backbuffer) return;
+
+    const uint32_t bg = color_rgb(69, 67, 117);
+
+    // Clamp to screen bounds
+    int x0 = (x < 0) ? 0 : x;
+    int y0 = (y < 0) ? 0 : y;
+    int x1 = x + w;
+    int y1 = y + h;
+    if (x1 > (int)g_mode.width) x1 = (int)g_mode.width;
+    if (y1 > (int)g_mode.height) y1 = (int)g_mode.height;
+
+    for (int row = y0; row < y1; row++)
     {
-        g_focused = window;
+        uint32_t *dst = g_backbuffer + (size_t)row * g_backbuffer_stride + x0;
+        for (int col = x0; col < x1; col++)
+        {
+            *dst++ = bg;
+        }
     }
 }
 
@@ -106,17 +166,33 @@ static void wm_remove_window(uint32_t id)
         if((*winp)->id == id)
         {
             wm_window_t* window = *winp;
+
+            // Save window bounds before freeing (include border + shadow)
+            int wx = window->x - 2;  // Border is 2px
+            int wy = window->y - 2;
+            int ww = (int)window->width + 2 + 2 + 5 + 2;  // left border + right border + shadow + extra
+            int wh = (int)window->height + 2 + 2 + 5 + 2;
+
             *winp = window->next;
             shared_memory_unmap(window->handle);
             shared_memory_release(window->handle);
 
             if (g_focused == window)
             {
-                g_focused = g_windows; // Focus the next window in the list, if any
+                // Focus the next window in the list, if any
+                g_focused = NULL;
+                if (g_windows)
+                {
+                    wm_set_focus(g_windows);
+                }
             }
 
             free(window);
-            
+
+            // Clear the region where the window was and present immediately
+            wm_clear_region(wx, wy, ww, wh);
+            system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
+
             return;
         }
 
@@ -212,8 +288,10 @@ static void wm_draw_window(const dwm_msg_t *msg)
     }
 
     // Draw a simple 2px border around the window area (clipped)
+    // Use different colors for focused vs unfocused windows
     const int border = 2;
-    const uint32_t border_color = color_rgb(220, 220, 220);
+    const int is_focused = (window == g_focused);
+    const uint32_t border_color = is_focused ? color_rgb(100, 149, 237) : color_rgb(120, 120, 120);  // Cornflower blue for focused, gray for unfocused
     const int x1 = x0 + max_x - 1;
     const int y1 = y0 + max_y - 1;
 
@@ -344,7 +422,16 @@ static void wm_handle_message(const dwm_msg_t *msg)
             }
         case DWM_MSG_EVENT:
             {
-                // TODO: Implement
+                // Events are sent from WM to clients, not the other way
+                break;
+            }
+        case DWM_MSG_REQUEST_FOCUS:
+            {
+                wm_window_t *window = wm_find(msg->window_id);
+                if (window)
+                {
+                    wm_set_focus(window);
+                }
                 break;
             }
         default:

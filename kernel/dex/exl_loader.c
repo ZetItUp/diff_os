@@ -113,14 +113,6 @@ static int is_loading(const char *name)
     return 0;
 }
 
-static void dump_kcopy_bounds(const char *tag, const void *dst, size_t dst_sz,
-                              uint32_t off, uint32_t sz)
-{
-    if (!(g_debug_mask & DEBUG_AREA_EXL)) return;
-    printf("[EXL DEBUG] %s: dst=%p dst_sz=%u off=0x%08x sz=0x%08x\n",
-           tag, dst, (unsigned)dst_sz, off, sz);
-}
-
 static void push_loading(const char *name)
 {
     if (loading_depth < MAX_EXL_FILES)

@@ -22,15 +22,20 @@ if errorlevel 1 (
 
 echo Startar QEMU med snabbare grafik...
 
+REM Performance options:
+REM   -accel whpx      = Windows Hypervisor Platform (requires Hyper-V enabled)
+REM   -accel tcg,thread=multi = Multi-threaded TCG (fallback if WHPX unavailable)
+REM   -cpu max         = Use best available CPU features
+REM   Removed -d trace for better performance
+
 "C:\Program Files\qemu\qemu-system-i386.exe" ^
+    -accel tcg,thread=multi ^
     -monitor stdio ^
     -m 64M ^
     -serial file:"C:\temp\serial.log" ^
     -no-reboot ^
     -no-shutdown ^
-    -d guest_errors,trace:ioport_* ^
-    -D "C:\temp\qemu.log" ^
-    -drive id=disk,file="%DST%",if=ide,format=raw ^
+    -drive id=disk,file="%DST%",if=ide,format=raw,cache=writeback ^
     -chardev file,id=dbg,path="C:\temp\debugcon.log" ^
     -device isa-debugcon,iobase=0xe9,chardev=dbg ^
     -display sdl,gl=on ^

@@ -142,9 +142,8 @@ void threads_reap_one(thread_t *t)
         return;
     }
 
-    struct process *p = t->owner_process;
-
 #ifdef DIFF_DEBUG
+    struct process *p = t->owner_process;
     printf("[THREAD] reaping tid=%d pid=%d\n", t->thread_id, p ? p->pid : -1);
 #endif
 

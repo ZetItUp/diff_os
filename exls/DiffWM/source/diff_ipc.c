@@ -230,3 +230,19 @@ void window_destroy(window_t *window)
 
     free(window);
 }
+
+void window_request_focus(window_t *window)
+{
+    if(!window)
+    {
+        return;
+    }
+
+    dwm_msg_t msg =
+    {
+        .type = DWM_MSG_REQUEST_FOCUS,
+        .window_id = window->id,
+    };
+
+    send_message(window->wm_channel, &msg, sizeof(msg));
+}

@@ -582,7 +582,7 @@ void init_paging(uint32_t ram_mb)
 
     // Initialize kernel page table pool range
     kpt_start = (uint32_t)&kernel_page_tables[0][0];
-    kpt_end = (uint32_t)&kernel_page_tables[KERNEL_PT_POOL][0];
+    kpt_end = (uint32_t)((uintptr_t)kernel_page_tables + sizeof(kernel_page_tables));
 
     for (int i = 0; i < 1024; i++) page_directory[i] = 0;
     for (int i = 0; i < (int)((max_blocks + 31) / 32); i++) block_bitmap[i] = 0;
@@ -1664,11 +1664,10 @@ int paging_check_user_range(uint32_t addr, uint32_t size)
         {
             if (!reservations_contains(ALIGN_DOWN(va, PAGE_SIZE_4KB)))
             {
-                printf("[PG-FAIL][probe_pte] pid=%d cr3=%08x VA=%08x RA0=%p RA1=%p PDE not present\n",
+                printf("[PG-FAIL][probe_pte] pid=%d cr3=%08x VA=%08x RA0=%p PDE not present\n",
                        process_current() ? process_current()->pid : -1,
                        read_cr3_local(), va,
-                       __builtin_return_address(0),
-                       __builtin_return_address(1));
+                       __builtin_return_address(0));
                 return -1;
             }
             continue;
@@ -1678,11 +1677,10 @@ int paging_check_user_range(uint32_t addr, uint32_t size)
         {
             if (!reservations_contains(ALIGN_DOWN(va, PAGE_SIZE_4KB)))
             {
-                printf("[PG-FAIL][check_pde] pid=%d cr3=%08x VA=%08x RA0=%p RA1=%p PDE not present\n",
+                printf("[PG-FAIL][check_pde] pid=%d cr3=%08x VA=%08x RA0=%p PDE not present\n",
                        process_current() ? process_current()->pid : -1,
                        read_cr3_local(), va,
-                       __builtin_return_address(0),
-                       __builtin_return_address(1));
+                       __builtin_return_address(0));
                 return -1;
             }
             continue;

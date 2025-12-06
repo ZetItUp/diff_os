@@ -5,6 +5,8 @@
 #include <syscall.h>
 #include <unistd.h>
 #include <diffgfx/graphics.h>
+#include <diffwm/protocol.h>
+#include <diffwm/diff_ipc.h>
 #include "doomkeys.h"
 #include "m_argv.h"
 #include "doomgeneric.h"
@@ -85,10 +87,20 @@ static unsigned char dg_translate_key(unsigned char raw)
 
 static void dg_poll_keys(void)
 {
-    system_key_event_t ev;
-
-    while (system_keyboard_event_try(&ev))
+    if (!g_doom_window)
     {
+        return;
+    }
+
+    diff_event_t ev;
+
+    while (window_poll_event(g_doom_window, &ev))
+    {
+        if (ev.type != DIFF_EVENT_KEY)
+        {
+            continue;
+        }
+
         unsigned char mapped = dg_translate_key(ev.key);
 
         if (mapped == 0)
@@ -96,7 +108,7 @@ static void dg_poll_keys(void)
             continue;
         }
 
-        dg_queue_push(ev.pressed ? 1 : 0, mapped);
+        dg_queue_push(ev.key_pressed ? 1 : 0, mapped);
     }
 }
 
@@ -187,6 +199,8 @@ int main(int argc, char **argv)
     {
         doomgeneric_Tick();
     }
+
+    DG_Finish();
 
     return 0;
 }

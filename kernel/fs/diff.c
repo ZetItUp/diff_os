@@ -1941,7 +1941,6 @@ static int write_at_entry(FileEntry* fe, uint32_t offset, const void* buffer, ui
 
             // Try to allocate contiguous sectors right after the current file
             uint32_t expected_sector = fe->start_sector + fe->sector_count;
-            uint32_t new_start;
 
             // Check if the next sectors are free
             int can_extend_contiguous = 1;

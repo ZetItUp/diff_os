@@ -29,7 +29,6 @@ static thread_t *g_run_queue_tail  = NULL; // ready queue tail
 static thread_t *g_zombie_head     = NULL; // zombie list
 static thread_t *g_idle            = NULL; // idle thread
 static volatile int g_need_resched = 0;    // preempt flag from timer
-static int g_in_resched            = 0;
 
 // -----------------------------------------------------------------------------
 // Helpers

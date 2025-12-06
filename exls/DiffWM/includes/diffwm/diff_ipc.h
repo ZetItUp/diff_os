@@ -18,3 +18,6 @@ void window_destroy(window_t *window);
 /* Window operations */
 void window_present(window_t *window, const void *pixels);
 int window_poll_event(window_t *window, diff_event_t *event);
+
+/* Focus management */
+void window_request_focus(window_t *window);
