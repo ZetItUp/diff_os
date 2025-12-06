@@ -109,3 +109,4 @@ const char *process_exec_root(const process_t *p);
 void process_set_exec_root(process_t *p, const char *abs_dir);
 void process_set_user_stack(process_t *p, uintptr_t base, uintptr_t top, size_t size);
 void process_set_kernel_stack(process_t *p, uintptr_t base, uintptr_t top, size_t size);
+int system_thread_create_user(uintptr_t user_eip, uintptr_t user_esp, size_t kstack_bytes);

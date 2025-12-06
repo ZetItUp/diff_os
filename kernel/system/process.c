@@ -492,7 +492,7 @@ process_t *process_create_user(uint32_t user_eip,
                                size_t user_stack_size,
                                uintptr_t heap_base,
                                uintptr_t heap_end,
-                               uintptr_t heap_max)
+                                uintptr_t heap_max)
 {
     uint32_t new_cr3 = paging_new_address_space();
 
@@ -512,6 +512,55 @@ process_t *process_create_user(uint32_t user_eip,
                                         heap_base,
                                         heap_end,
                                         heap_max);
+}
+
+// Create an additional user thread in the current process
+int system_thread_create_user(uintptr_t user_eip, uintptr_t user_esp, size_t kstack_bytes)
+{
+    process_t *p = process_current();
+    if (!p)
+    {
+        return -1;
+    }
+
+    if (user_eip == 0 || user_esp == 0)
+    {
+        return -1;
+    }
+
+    // Basic userspace validation: ensure entry and stack are in user VA and readable
+    if (paging_check_user_range((uint32_t)user_eip, 1) != 0)
+    {
+        return -1;
+    }
+    if (paging_check_user_range((uint32_t)(user_esp - 1), 1) != 0)
+    {
+        return -1;
+    }
+
+    user_boot_args_t *args = (user_boot_args_t *)kmalloc(sizeof(user_boot_args_t));
+    if (!args)
+    {
+        return -2;
+    }
+
+    args->eip = (uint32_t)user_eip;
+    args->esp = (uint32_t)user_esp;
+    args->cr3 = p->cr3;
+
+    size_t kstack = kstack_bytes;
+    if (kstack < 4096)
+    {
+        kstack = 4096;
+    }
+
+    int tid = thread_create_for_process(p, user_bootstrap, args, kstack);
+    if (tid < 0)
+    {
+        kfree(args);
+    }
+
+    return tid;
 }
 
 // Exit current process via its last thread

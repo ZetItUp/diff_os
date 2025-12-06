@@ -65,6 +65,8 @@ enum
     SYSTEM_TTY_WRITE = 52,
     SYSTEM_CONSOLE_DISABLE = 54,
     SYSTEM_WAIT_PID_NOHANG = 55,
+    SYSTEM_THREAD_CREATE = 56,
+    SYSTEM_THREAD_EXIT   = 57,
 };
 
 struct syscall_frame 

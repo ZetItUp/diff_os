@@ -67,6 +67,8 @@ enum
     SYSTEM_TTY_WRITE = 52,
     SYSTEM_CONSOLE_DISABLE = 54,
     SYSTEM_WAIT_PID_NOHANG = 55,
+    SYSTEM_THREAD_CREATE = 56,
+    SYSTEM_THREAD_EXIT   = 57,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -301,6 +303,20 @@ static inline __attribute__((always_inline)) uint64_t system_time_ms(void)
 static inline __attribute__((always_inline)) int system_thread_get_id(void)
 {
     return do_sys(SYSTEM_THREAD_GET_ID, 0, 0, 0, 0);
+}
+
+static inline __attribute__((always_inline)) int system_thread_create(void *entry, void *user_stack_top, size_t kernel_stack_bytes)
+{
+    return do_sys(SYSTEM_THREAD_CREATE,
+                  (int)(uintptr_t)entry,
+                  (int)(uintptr_t)user_stack_top,
+                  (int)kernel_stack_bytes,
+                  0);
+}
+
+static inline __attribute__((always_inline)) void system_thread_exit(void)
+{
+    (void)do_sys(SYSTEM_THREAD_EXIT, 0, 0, 0, 0);
 }
 
 static inline int system_process_spawn(const char *path, int argc, char **argv)

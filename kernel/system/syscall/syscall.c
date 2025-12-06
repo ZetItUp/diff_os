@@ -576,6 +576,19 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_THREAD_CREATE:
+        {
+            ret = system_thread_create_user((uint32_t)(uintptr_t)arg0,
+                                            (uint32_t)(uintptr_t)arg1,
+                                            (size_t)arg2);
+            break;
+        }
+        case SYSTEM_THREAD_EXIT:
+        {
+            thread_exit();
+            /* not reached */
+            break;
+        }
         case SYSTEM_PROCESS_SPAWN:
         {
             ret = system_process_spawn((const char*)arg0, arg1, (char**)arg2);
