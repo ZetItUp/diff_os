@@ -190,7 +190,7 @@ int window_poll_event(window_t *window, diff_event_t *event)
 {
     dwm_msg_t msg;
 
-    if(receive_message(window->mailbox, &msg, sizeof(msg)) < 0)
+    if(try_receive_message(window->mailbox, &msg, sizeof(msg)) <= 0)
     {
         return 0;
     }

@@ -196,7 +196,6 @@ static int system_exit(struct syscall_frame *f, int code)
     if (p && p->pid != 0)
     {
 #ifdef DIFF_DEBUG
-        printf("[SYSCALL] EXIT pid=%d code=%d\n", p->pid, code);
 #endif
         process_exit_current(code);
 
@@ -548,14 +547,6 @@ int system_call_dispatch(struct syscall_frame *f)
         case SYSTEM_TIME_MS:
         {
             uint64_t now = timer_now_ms();
-
-            static int time_log_count = 0;
-            if (time_log_count < 20)
-            {
-                time_log_count++;
-                printf("[SYSCALL] TIME_MS now=%u (call #%d)\n",
-                       (uint32_t)now, time_log_count);
-            }
 
             // Guarantee strictly monotonic returns even if multiple calls land
             // in the same PIT tick.

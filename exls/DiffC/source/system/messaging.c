@@ -19,3 +19,8 @@ int receive_message(int id, void *buffer, uint32_t buffer_len)
 {
     return system_message_receive(id, buffer, buffer_len);
 }
+
+int try_receive_message(int id, void *buffer, uint32_t buffer_len)
+{
+    return system_message_try_receive(id, buffer, buffer_len);
+}

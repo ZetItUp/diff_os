@@ -4,6 +4,7 @@
 #include <diffwm/text_utils.h>
 #include <difffonts/fonts.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #define TERM_MAX_LINES 128
 #define TERM_MAX_COLS 80
@@ -41,6 +42,8 @@ typedef struct terminal_component_t
     term_color_t current_color;
     term_color_t bg_color;
     uint32_t selection_color;
+
+    int view_offset;   // 0 = bottom, >0 scrolls up by that many lines
 } terminal_component_t;
 
 // Initialize terminal component
@@ -52,6 +55,8 @@ void terminal_puts(terminal_component_t *term, const char *s);
 void terminal_set_color(terminal_component_t *term, term_color_t color);
 void terminal_clear(terminal_component_t *term);
 void terminal_backspace(terminal_component_t *term);
+void terminal_scroll(terminal_component_t *term, int delta_lines);
+void terminal_scroll_to_bottom(terminal_component_t *term);
 
 // Polymorphic methods
 void terminal_component_update(window_component_t *self);

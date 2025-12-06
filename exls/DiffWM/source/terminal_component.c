@@ -2,6 +2,17 @@
 #include <diffwm/window_component.h>
 #include <string.h>
 
+#include <stdbool.h>
+
+static int terminal_max_visible_lines(const terminal_component_t *term, int fh, int height)
+{
+    int usable = height - 8; // leave top padding
+    int max_visible_lines = usable / fh;
+    if (max_visible_lines < 1) max_visible_lines = 1;
+    if (max_visible_lines > TERM_MAX_LINES) max_visible_lines = TERM_MAX_LINES;
+    return max_visible_lines;
+}
+
 static void ensure_line(terminal_component_t *term, int y)
 {
     if (!term)
@@ -78,6 +89,8 @@ void terminal_component_init(terminal_component_t *term, int x, int y, int width
 
     term->selection_color = 0xFF3366CC;
 
+    term->view_offset = 0;
+
     // Initialize selection
     text_selection_init(&term->selection);
 
@@ -106,6 +119,7 @@ void terminal_putchar(terminal_component_t *term, char c)
 
     putc_at(term, term->cursor_x, term->cursor_y, c, term->current_color);
     term->cursor_x++;
+    term->view_offset = 0; // auto-scroll to bottom on new text
 
     if (term->cursor_x >= TERM_MAX_COLS)
     {
@@ -141,6 +155,7 @@ void terminal_clear(terminal_component_t *term)
     term->line_count = 0;
     term->cursor_x = 0;
     term->cursor_y = 0;
+    term->view_offset = 0;
     text_selection_clear(&term->selection);
 }
 
@@ -175,6 +190,8 @@ void terminal_backspace(terminal_component_t *term)
             }
         }
     }
+
+    term->view_offset = 0;
 }
 
 void terminal_component_update(window_component_t *self)
@@ -199,6 +216,12 @@ void terminal_component_render(terminal_component_t *term, uint32_t *pixels, int
     int height = term->base.height;
     int fh = font_height(term->font);
     int fw = font_width(term->font);
+    int max_visible_lines = terminal_max_visible_lines(term, fh, height);
+
+    // Clamp view_offset to available history
+    if (term->view_offset < 0) term->view_offset = 0;
+    int max_scroll = (term->line_count > max_visible_lines) ? (term->line_count - max_visible_lines) : 0;
+    if (term->view_offset > max_scroll) term->view_offset = max_scroll;
 
     // Clear background to bg_color
     uint32_t bg = (term->bg_color.a << 24) | (term->bg_color.r << 16) |
@@ -215,8 +238,15 @@ void terminal_component_render(terminal_component_t *term, uint32_t *pixels, int
     //                      &term->selection, 8, 8, term->font, term->selection_color);
 
     // Render text lines
+    int start_line = 0;
+    if (term->line_count > max_visible_lines)
+    {
+        start_line = term->line_count - max_visible_lines - term->view_offset;
+        if (start_line < 0) start_line = 0;
+    }
+
     int y_pos = 8;
-    for (int i = 0; i < term->line_count && i < TERM_MAX_LINES; i++)
+    for (int i = start_line; i < term->line_count && i < TERM_MAX_LINES; i++)
     {
         int x_pos = 8;
         for (int j = 0; j < term->lines[i].len && j < TERM_MAX_COLS; j++)
@@ -233,9 +263,9 @@ void terminal_component_render(terminal_component_t *term, uint32_t *pixels, int
     }
 
     // Draw cursor as underscore
-    if (term->cursor_y >= 0 && term->cursor_y < term->line_count)
+    if (term->cursor_y >= start_line && term->cursor_y < term->line_count)
     {
-        int cursor_screen_y = 8 + term->cursor_y * fh;
+        int cursor_screen_y = 8 + (term->cursor_y - start_line) * fh;
         int cursor_screen_x = 8 + term->cursor_x * fw;
 
         if (cursor_screen_y < height - fh)
@@ -255,4 +285,25 @@ void terminal_component_render(terminal_component_t *term, uint32_t *pixels, int
             }
         }
     }
+}
+
+void terminal_scroll(terminal_component_t *term, int delta_lines)
+{
+    if (!term || !term->font)
+        return;
+
+    int fh = font_height(term->font);
+    int max_visible_lines = terminal_max_visible_lines(term, fh, term->base.height);
+    int max_scroll = (term->line_count > max_visible_lines) ? (term->line_count - max_visible_lines) : 0;
+
+    term->view_offset += delta_lines;
+    if (term->view_offset < 0) term->view_offset = 0;
+    if (term->view_offset > max_scroll) term->view_offset = max_scroll;
+}
+
+void terminal_scroll_to_bottom(terminal_component_t *term)
+{
+    if (!term)
+        return;
+    term->view_offset = 0;
 }

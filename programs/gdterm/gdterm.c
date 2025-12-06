@@ -65,6 +65,8 @@ static char g_cwd[256] = "/";
 #define MAX_CHILDREN 32
 static int g_children[MAX_CHILDREN];
 static int g_child_count = 0;
+static bool g_prompt_blocked = false;
+static bool g_need_prompt = false;
 
 static void term_puts_colored(const char *s, term_color_t color)
 {
@@ -154,6 +156,10 @@ static int bi_cd(int argc, char **argv)
         g_cwd[sizeof(g_cwd) - 1] = '\0';
     }
 
+    /* Ensure initial color is the desired default (not the inherited tty attr). */
+    g_terminal.current_color = default_color;
+    g_terminal.bg_color = (term_color_t){0, 0, 0, 0xFF};
+
     return 0;
 }
 
@@ -230,7 +236,8 @@ static bool drain_tty_output(void)
         seen = true;
         for (int i = 0; i < n; i++)
         {
-            terminal_set_color(&g_terminal, vga_attr_to_color(attrs[i]));
+            term_color_t c = (attrs[i] == 0x07) ? default_color : vga_attr_to_color(attrs[i]);
+            terminal_set_color(&g_terminal, c);
             terminal_putchar(&g_terminal, buf[i]);
         }
     }
@@ -260,16 +267,20 @@ static void reap_children(int *dirty_flag)
         {
             g_last_status = status;
 
-            char buf[128];
-            snprintf(buf, sizeof(buf), "[SYSTEM] pid %d exited with %d\n", rc, status);
-            terminal_puts(&g_terminal, buf);
-
             g_children[i] = g_children[g_child_count - 1];
             g_child_count--;
 
             if (dirty_flag)
             {
                 *dirty_flag = 1;
+            }
+
+            if (g_child_count == 0)
+            {
+                g_prompt_blocked = false;
+                // Insert a blank line after process completion before the next prompt
+                terminal_putchar(&g_terminal, '\n');
+                g_need_prompt = true;
             }
             continue;
         }
@@ -325,6 +336,8 @@ static int run_external(int argc, char **argv, int *dirty_flag)
     }
 
     remember_child(pid);
+    g_prompt_blocked = true;
+    g_need_prompt = false;
 
     // Mark dirty so the prompt repaints after launching.
     if (dirty_flag)
@@ -401,6 +414,13 @@ int main(void)
         }
 
         reap_children(&dirty);
+        if (!g_prompt_blocked && g_need_prompt)
+        {
+            snprintf(prompt, sizeof(prompt), "%s> ", g_cwd);
+            terminal_puts(&g_terminal, prompt);
+            dirty = 1;
+            g_need_prompt = false;
+        }
 
         // Read from tty
         int n = system_tty_read(tty_buf, (uint32_t)sizeof(tty_buf), TTY_READ_MODE_INPUT, NULL);
@@ -436,10 +456,16 @@ int main(void)
                     input_pos = 0;
                     input_line[0] = '\0';
 
-                    // Display new prompt
-                    terminal_putchar(&g_terminal, '\n');
-                    snprintf(prompt, sizeof(prompt), "%s> ", g_cwd);
-                    terminal_puts(&g_terminal, prompt);
+                    // Mark that we need to show the next prompt (after child completion)
+                    if (!g_prompt_blocked)
+                    {
+                        snprintf(prompt, sizeof(prompt), "%s> ", g_cwd);
+                        terminal_puts(&g_terminal, prompt);
+                    }
+                    else
+                    {
+                        g_need_prompt = true;
+                    }
                     dirty = 1;
                 }
                 else if (c == '\b' || c == 127) // Backspace

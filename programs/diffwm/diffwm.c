@@ -369,12 +369,11 @@ int main(void)
     }
 
     /* Fill background to a known color before any client draws */
-    for(uint32_t y = 0; y < g_mode.height; ++y)
+    const uint32_t bg = color_rgb(69, 67, 117);
+    size_t total = (size_t)g_backbuffer_stride * g_mode.height;
+    for (size_t i = 0; i < total; ++i)
     {
-        for(uint32_t x = 0; x < g_mode.width; ++x)
-        {
-            g_backbuffer[y * g_backbuffer_stride + x] = color_rgb(69, 67, 117);
-        }
+        g_backbuffer[i] = bg;
     }
 
     system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
@@ -392,11 +391,14 @@ int main(void)
     int msg_count = 0;
     for(;;)
     {
-        int rcv = system_message_receive(g_mailbox, msg, sizeof(*msg));
-        if (rcv > 0)
+        int handled = 0;
+
+        // Drain any pending messages quickly
+        while (system_message_try_receive(g_mailbox, msg, sizeof(*msg)) > 0)
         {
             wm_handle_message(msg);
             msg_count++;
+            handled = 1;
 
             // Batch renders: only update screen every 4 messages or when explicitly needed
             if (g_needs_redraw && (msg_count >= 4 || msg->type == DWM_MSG_DRAW))
@@ -406,16 +408,19 @@ int main(void)
                 msg_count = 0;
             }
         }
-        else
+
+        // No more messages - flush any pending redraw
+        if (g_needs_redraw)
         {
-            // No messages - if we have pending updates, flush them now
-            if (g_needs_redraw)
-            {
-                system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
-                g_needs_redraw = 0;
-                msg_count = 0;
-            }
-            thread_yield();
+            system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
+            g_needs_redraw = 0;
+            msg_count = 0;
+            handled = 1;
+        }
+
+        if (!handled)
+        {
+            thread_sleep_ms(1); // avoid tight polling when idle
         }
     }
 
