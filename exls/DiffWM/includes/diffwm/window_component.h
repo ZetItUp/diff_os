@@ -2,10 +2,14 @@
 
 #include <stdbool.h>
 
+struct window_t;
+typedef struct window_t window_t;
+
 typedef struct window_component_t window_component_t;
 
 struct window_component_t
 {
+    window_t *parent; // owning window, set when attached
     int x;
     int y;
     int width;

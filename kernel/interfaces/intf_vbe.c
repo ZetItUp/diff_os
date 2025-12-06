@@ -113,6 +113,17 @@ int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_
     uint8_t *dst_base = (uint8_t*)g_vbe.frame_buffer;
     const uint8_t *src_user = (const uint8_t*)user_ptr;
 
+    // Fast path: exact pitch/height match -> single copy_from_user
+    if (row_bytes == g_vbe.pitch && pitch_bytes == (int)g_vbe.pitch && max_h == g_vbe.height)
+    {
+        size_t total = (size_t)g_vbe.pitch * max_h;
+        if (copy_from_user(dst_base, src_user, total) != 0)
+        {
+            return -1;
+        }
+        return 0;
+    }
+
     for (uint32_t y = 0; y < max_h; y++)
     {
         void *dst = dst_base + y * g_vbe.pitch;

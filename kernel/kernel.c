@@ -110,7 +110,7 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
         ioapic_map_irq(15, 47, IOAPIC_TRIGGER_EDGE | IOAPIC_POLARITY_HIGH); // Secondary ATA
 
         timer_install_apic();   // Install APIC timer handler first
-        apic_timer_init(100);   // Initialize and start APIC timer at 100 Hz
+        apic_timer_init(100);  // Initialize and start APIC timer at 100 Hz for smoother timing
 
         // Unmask keyboard IRQ (IRQ1)
         ioapic_unmask_irq(1);
@@ -124,7 +124,6 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
     }
 
     scheduler_init();
-    /* init_thread walks drivers/FS/EXL and needs ample kernel stack; 4KB was overflowing into the heap metadata. */
     thread_create(init_thread, NULL, 32 * 1024);
 
     asm volatile("sti");

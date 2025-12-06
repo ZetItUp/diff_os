@@ -32,6 +32,8 @@ void window_add_component(window_t *window, window_component_t *component)
     if (!window || !component)
         return;
 
+    component->parent = window;
+
     if (window->child_count < WINDOW_MAX_CHILDREN)
     {
         window->children[window->child_count++] = component;

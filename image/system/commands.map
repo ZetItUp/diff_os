@@ -17,6 +17,7 @@ filetest=/programs/filetest/filetest.dex
 wad=/programs/testwad/testwad.dex
 wrtest=/programs/writetest/writetest.dex
 gdterm=/programs/gdterm/gdterm.dex
+fpstest=/programs/fpstest/fpstest.dex
 
 # Games
 doom=/games/doom/doom.dex

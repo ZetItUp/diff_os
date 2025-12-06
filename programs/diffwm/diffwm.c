@@ -49,8 +49,11 @@ static wm_window_t *g_focused = NULL;
 
 // Video mode and backbuffer
 static video_mode_info_t g_mode;
+static uint32_t *g_buffers[2] = { NULL, NULL };
+static int g_active_fb = 0;
 static uint32_t *g_backbuffer = NULL;
 static uint32_t g_backbuffer_stride = 0; // pixels per line
+static size_t g_backbuffer_bytes = 0;
 
 // Dirty flag for optimized rendering
 static volatile int g_needs_redraw = 0;
@@ -461,6 +464,18 @@ static void wm_dispatch_key_events(void)
     }
 }
 
+// Present with simple frame pacing to avoid pegging CPU when clients spam DRAW.
+static void wm_present_if_needed(void)
+{
+    if (!g_needs_redraw)
+    {
+        return;
+    }
+
+    system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
+    g_needs_redraw = 0;
+}
+
 int main(void)
 {
     vbe_toggle_graphics_mode();
@@ -473,12 +488,18 @@ int main(void)
 
     g_backbuffer_stride = (uint32_t)(g_mode.pitch / 4);
     if (g_backbuffer_stride < g_mode.width) g_backbuffer_stride = g_mode.width;
-    g_backbuffer = calloc((size_t)g_backbuffer_stride * g_mode.height, sizeof(uint32_t));
+    g_backbuffer_bytes = (size_t)g_backbuffer_stride * g_mode.height * sizeof(uint32_t);
 
-    if(!g_backbuffer)
+    // Allocate double buffers and start drawing into buffer 0.
+    for (int i = 0; i < 2; ++i)
     {
-        return -2;
+        g_buffers[i] = calloc((size_t)g_backbuffer_stride * g_mode.height, sizeof(uint32_t));
+        if (!g_buffers[i])
+        {
+            return -2;
+        }
     }
+    g_backbuffer = g_buffers[g_active_fb];
 
 
     g_mailbox = create_message_channel(DWM_MAILBOX_ID);
@@ -491,9 +512,12 @@ int main(void)
     /* Fill background to a known color before any client draws */
     const uint32_t bg = color_rgb(69, 67, 117);
     size_t total = (size_t)g_backbuffer_stride * g_mode.height;
-    for (size_t i = 0; i < total; ++i)
+    for (int b = 0; b < 2; ++b)
     {
-        g_backbuffer[i] = bg;
+        for (size_t i = 0; i < total; ++i)
+        {
+            g_buffers[b][i] = bg;
+        }
     }
 
     system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
@@ -513,8 +537,8 @@ int main(void)
     {
         int handled = 0;
 
-        // Drain any pending messages quickly
-        while (system_message_try_receive(g_mailbox, msg, sizeof(*msg)) > 0)
+        // Drain a bounded number of messages to avoid starving input under heavy draw spam
+        for (int i = 0; i < 64 && system_message_try_receive(g_mailbox, msg, sizeof(*msg)) > 0; ++i)
         {
             wm_handle_message(msg);
             msg_count++;
@@ -523,8 +547,7 @@ int main(void)
             // Batch renders: only update screen every 4 messages or when explicitly needed
             if (g_needs_redraw && (msg_count >= 4 || msg->type == DWM_MSG_DRAW))
             {
-                system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
-                g_needs_redraw = 0;
+                wm_present_if_needed();
                 msg_count = 0;
             }
         }
@@ -532,8 +555,7 @@ int main(void)
         // No more messages - flush any pending redraw
         if (g_needs_redraw)
         {
-            system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
-            g_needs_redraw = 0;
+            wm_present_if_needed();
             msg_count = 0;
             handled = 1;
         }
