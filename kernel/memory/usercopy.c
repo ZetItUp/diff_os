@@ -30,18 +30,22 @@ static int ensure_user_readable(uintptr_t uaddr)
 
     paging_update_flags(page_base, PAGE_SIZE_4KB, PAGE_USER, 0);
 
+    // Fast path: already mapped and user-readable
     if (paging_check_user_range(page_base, 1) == 0)
     {
         return 0;
     }
 
-    if (paging_handle_demand_fault(page_base) == 0)
+    // Try to fault in an existing reservation (stack/heap demand paging)
+    if (paging_handle_demand_fault(page_base) == 0 &&
+        paging_check_user_range(page_base, 1) == 0)
     {
-        return (paging_check_user_range(page_base, 1) == 0) ? 0 : -1;
+        return 0;
     }
 
-    // Last fallback: try to map fresh page
-    if (paging_map_user_range(page_base, PAGE_SIZE_4KB, 0) == 0)
+    // Last fallback: map a fresh readable page if nothing was reserved
+    if (paging_map_user_range(page_base, PAGE_SIZE_4KB, 0) == 0 &&
+        paging_check_user_range(page_base, 1) == 0)
     {
         return 0;
     }
@@ -61,13 +65,15 @@ static int ensure_user_writable(uintptr_t uaddr)
         return 0;
     }
 
-    if (paging_handle_demand_fault(page_base) == 0)
+    if (paging_handle_demand_fault(page_base) == 0 &&
+        paging_check_user_range_writable(page_base, 1) == 0)
     {
-        return (paging_check_user_range_writable(page_base, 1) == 0) ? 0 : -1;
+        return 0;
     }
 
     // Last fallback: try to map fresh writable page
-    if (paging_map_user_range(page_base, PAGE_SIZE_4KB, 1) == 0)
+    if (paging_map_user_range(page_base, PAGE_SIZE_4KB, 1) == 0 &&
+        paging_check_user_range_writable(page_base, 1) == 0)
     {
         return 0;
     }

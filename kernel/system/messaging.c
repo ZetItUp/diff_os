@@ -66,6 +66,15 @@ int system_msg_send(int channel_id, const void *buffer, uint32_t len)
         return -2;
     }
 
+    // Copy out of userspace before taking locks (kernel always owns its queue payload)
+    uint8_t tmp[MESSAGES_MAX];
+    if (copy_from_user(tmp, buffer, len) != 0)
+    {
+        printf("[MSG] send: EFAULT pid=%d va=%p len=%u\n",
+               process_current() ? process_current()->pid : -1, buffer, len);
+        return -4; // EFAULT
+    }
+
     // Get current thread
     thread_t *self = current_thread();
 
@@ -89,14 +98,8 @@ int system_msg_send(int channel_id, const void *buffer, uint32_t len)
             uint16_t slot = channel->tail;
             channel->sizes[slot] = (uint16_t)len;
 
-            // Copy data safe from userspace
-            if(copy_from_user(channel->messages[slot], buffer, len) != 0)
-            {
-                spin_unlock_irqrestore(&channel->lock, flags);
-                
-                // Bad user buffer
-                return -4;
-            }
+            // Copy from the staged kernel buffer into the channel slot
+            memcpy(channel->messages[slot], tmp, len);
 
             channel->tail = (uint16_t)((channel->tail + 1) % MESSAGES_QUEUE_LEN);
             channel->count++;

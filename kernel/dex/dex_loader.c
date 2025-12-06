@@ -147,31 +147,42 @@ static uint32_t build_user_stack(
     uint32_t *out_size
 )
 {
-    const uint32_t STK_SZ = 64 * 1024;
+    // Place the user stack high in the user address space to avoid collisions
+    // with the user heap that grows up from USER_MIN. Use a fixed 512 KB stack
+    // mapped explicitly near USER_MAX with a 4 KB guard page above it.
+    const uint32_t STK_SZ = 512 * 1024;
+    const uint32_t GUARD  = PAGE_SIZE_4KB;
+    uint32_t stack_top  = USER_MAX;
+    uint32_t stack_base = stack_top - STK_SZ;
+
+    if (stack_base < USER_MIN + (1u << 20)) // sanity: keep clear of image/heap
+    {
+        stack_base = USER_MIN + (1u << 20);
+        stack_top  = stack_base + STK_SZ;
+    }
 
     if (out_base)
     {
-        *out_base = 0;
+        *out_base = stack_base;
     }
     if (out_size)
     {
-        *out_size = 0;
+        *out_size = STK_SZ;
     }
 
-    uint8_t *stk = umalloc(STK_SZ);
-    if (!stk)
+    // Reserve the entire stack range so demand faults can grow it.
+    paging_reserve_range(stack_base, STK_SZ);
+
+    // Eagerly map the top 32 KB to cover initial frames/argv and avoid faults
+    // near the very top of the stack.
+    const uint32_t PREFAULT = 32 * 1024;
+    uint32_t prefault_base = (stack_top > PREFAULT) ? (stack_top - PREFAULT) : stack_base;
+    if (paging_map_user_range(prefault_base, stack_top - prefault_base, 1) != 0)
     {
-        DEX_DBG("[DEX] Stack alloc failed %u bytes\n", STK_SZ);
+        DEX_DBG("[DEX] Stack map failed base=%08x sz=%u\n", prefault_base, (unsigned)(stack_top - prefault_base));
         return 0;
     }
-
-    paging_reserve_range((uintptr_t)stk, STK_SZ);
-    paging_update_flags(
-        (uint32_t)stk,
-        STK_SZ,
-        PAGE_PRESENT | PAGE_USER | PAGE_RW,
-        0
-    );
+    memset((void *)prefault_base, 0, stack_top - prefault_base);
 
     int argc = (argc_in > 0 && argv_in) ? argc_in : 1;
 
@@ -184,16 +195,8 @@ static uint32_t build_user_stack(
         return 0;
     }
 
-    uint32_t sp = (uint32_t)stk + STK_SZ;
-    if (out_base)
-    {
-        *out_base = (uint32_t)(uintptr_t)stk;
-    }
-    if (out_size)
-    {
-        *out_size = STK_SZ;
-    }
-    uint32_t base = (uint32_t)stk;
+    uint32_t sp = stack_top;
+    uint32_t base = stack_base;
 
     for (int i = argc - 1; i >= 0; --i)
     {

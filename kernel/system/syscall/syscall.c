@@ -244,8 +244,11 @@ int system_call_dispatch(struct syscall_frame *f)
         case SYSTEM_EXIT:
         {
             ret = system_exit(f, arg0);
-
-            break;
+            /* Should never return; if it does, halt this thread. */
+            for (;;)
+            {
+                asm volatile("hlt");
+            }
         }
         case SYSTEM_PUTCHAR:
         {

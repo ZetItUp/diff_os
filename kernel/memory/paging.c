@@ -17,6 +17,9 @@
 #define KMAP_TEMP_VA 0x003FF000u // Temporary mapping page (low VA)
 #endif
 
+// Debug aid: last VA seen in paging_check_user_range
+uint32_t g_last_paging_check_va = 0;
+
 // Legacy high-VA scratch (not used early anymore, kept for later if you want)
 #define KMAP_SCRATCH1 0xFFCFF000
 #define KMAP_SCRATCH2 0xFFCFE000
@@ -1654,13 +1657,18 @@ int paging_check_user_range(uint32_t addr, uint32_t size)
 
     for (uint32_t va = start; va < end; va += PAGE_SIZE_4KB)
     {
+        g_last_paging_check_va = va; // debug aid
         uint32_t pde = 0, pte = 0;
 
         if (paging_probe_pde_pte(va, &pde, &pte) != 0)
         {
             if (!reservations_contains(ALIGN_DOWN(va, PAGE_SIZE_4KB)))
             {
-                printf("[PG-FAIL] VA=%08x PDE not present\n", va);
+                printf("[PG-FAIL][probe_pte] pid=%d cr3=%08x VA=%08x RA0=%p RA1=%p PDE not present\n",
+                       process_current() ? process_current()->pid : -1,
+                       read_cr3_local(), va,
+                       __builtin_return_address(0),
+                       __builtin_return_address(1));
                 return -1;
             }
             continue;
@@ -1670,7 +1678,11 @@ int paging_check_user_range(uint32_t addr, uint32_t size)
         {
             if (!reservations_contains(ALIGN_DOWN(va, PAGE_SIZE_4KB)))
             {
-                printf("[PG-FAIL] VA=%08x PDE not present\n", va);
+                printf("[PG-FAIL][check_pde] pid=%d cr3=%08x VA=%08x RA0=%p RA1=%p PDE not present\n",
+                       process_current() ? process_current()->pid : -1,
+                       read_cr3_local(), va,
+                       __builtin_return_address(0),
+                       __builtin_return_address(1));
                 return -1;
             }
             continue;
@@ -1682,7 +1694,7 @@ int paging_check_user_range(uint32_t addr, uint32_t size)
             {
                 if (!reservations_contains(ALIGN_DOWN(va, PAGE_SIZE_4KB)))
                 {
-                    printf("[PG-FAIL] VA=%08x 4MB page not USER\n", va);
+                    printf("[PG-FAIL][check] VA=%08x 4MB page not USER\n", va);
                     return -1;
                 }
             }
@@ -1693,7 +1705,7 @@ int paging_check_user_range(uint32_t addr, uint32_t size)
         {
             if (!reservations_contains(ALIGN_DOWN(va, PAGE_SIZE_4KB)))
             {
-                printf("[PG-FAIL] VA=%08x PTE not present\n", va);
+                printf("[PG-FAIL][check] VA=%08x PTE not present\n", va);
                 return -1;
             }
             continue;
@@ -1890,11 +1902,40 @@ uint32_t paging_new_address_space(void)
         return 0;
     }
 
-    uint32_t pt_phys = pde & 0xFFFFF000u;
-    uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
-    pt[ti] = (pd_phys & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW;
+    // BUG FIX: Instead of modifying the shared kernel PT, allocate a private
+    // copy of the PT for this process. Otherwise all processes would share
+    // the same mapping for `page_directory` VA, pointing to whichever PD
+    // was created most recently. When that PD is freed, all processes
+    // (including the parent) would then access freed memory.
+    uint32_t kernel_pt_phys = pde & 0xFFFFF000u;
 
+    // Allocate a new PT for this process
+    uint32_t new_pt_phys = alloc_phys_page();
+    if (!new_pt_phys)
+    {
+        printf("[PAGING] new_address_space: no phys page for private PT\n");
+        kunmap_phys(0);
+        free_phys_page(pd_phys);
+        return 0;
+    }
+
+    // Copy the kernel PT contents to the new private PT
+    uint32_t *kernel_pt = (uint32_t*)kmap_phys(kernel_pt_phys, 1);
+    uint32_t *new_pt = (uint32_t*)kmap_phys(new_pt_phys, 0);
+    for (int i = 0; i < 1024; i++)
+        new_pt[i] = kernel_pt[i];
     kunmap_phys(1);
+
+    // Now modify only this process's private PT to map page_directory VA
+    // to this process's own PD
+    new_pt[ti] = (pd_phys & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW;
+    kunmap_phys(0);
+
+    // Update the new process's PDE to point to its private PT
+    new_pd = (uint32_t*)kmap_phys(pd_phys, 0);
+    uint32_t pde_flags = pde & 0xFFFu;  // Preserve flags from original PDE
+    new_pd[di] = (new_pt_phys & 0xFFFFF000u) | pde_flags;
+
     kunmap_phys(0);
     return pd_phys;
 }
@@ -1916,6 +1957,32 @@ void paging_destroy_address_space(uint32_t cr3_phys)
         printf("[PAGING] destroy_address_space: refusing to free active CR3\n");
         return;
     }
+
+    // Free the private PT that was allocated for this process's page_directory mapping.
+    // The private PT is at the directory index for page_directory VA.
+    uint32_t pd_va = (uint32_t)(uintptr_t)page_directory;
+    uint32_t pd_di = pd_va >> 22;
+
+    // Get the kernel's PT for comparison
+    uint32_t kernel_pt_phys = page_directory[pd_di] & 0xFFFFF000u;
+
+    // Map the target PD to read its PDEs
+    uint32_t *target_pd = (uint32_t*)kmap_phys(cr3_phys, 0);
+    uint32_t target_pde = target_pd[pd_di];
+    kunmap_phys(0);
+
+    if ((target_pde & PAGE_PRESENT) && !(target_pde & PAGE_PS))
+    {
+        uint32_t target_pt_phys = target_pde & 0xFFFFF000u;
+
+        // If the process has a private PT (different from kernel's), free it
+        if (target_pt_phys != kernel_pt_phys &&
+            !(target_pt_phys >= kpt_start && target_pt_phys < kpt_end))
+        {
+            free_phys_page(target_pt_phys);
+        }
+    }
+
     free_phys_page(cr3_phys);
 }
 

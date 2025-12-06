@@ -730,6 +730,18 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     if (paging_check_user_range((uint32_t)image, total_sz) != 0)
         printf("[EXL] WARN: not all pages are USER\n");
 
+    // Ensure the full image region is faulted in up front so subsequent copies/relocs
+    // don't hit missing PDEs/PTEs on demand.
+    if (paging_map_user_range((uint32_t)image, total_sz, 1) != 0)
+    {
+        printf("[EXL] failed to pre-map image region\n");
+        ufree(image, total_sz);
+        ufree(filebuf, sz);
+        if (heap_validate() != 0) heap_dump();
+        pop_loading(tmp_name);
+        return NULL;
+    }
+
     /* Kopiera symbol- och strtab till kernel (små, persistenta) */
     dex_symbol_t *symtab_copy = NULL;
     char *strtab_copy = NULL;

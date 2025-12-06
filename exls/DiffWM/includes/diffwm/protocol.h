@@ -14,6 +14,7 @@ typedef struct
 {
     diff_event_type_t type;
     uint8_t key;
+    uint8_t key_pressed;
     int16_t mouse_x;
     int16_t mouse_y;
     uint8_t mouse_buttons;

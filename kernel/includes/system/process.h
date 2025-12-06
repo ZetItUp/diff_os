@@ -63,6 +63,7 @@ typedef struct process
     struct tty *tty_out;
     struct tty *tty_in;
     uint8_t   tty_attr;
+    uint8_t   resources_cleaned;
 } process_t;
 
 typedef struct user_boot_args
@@ -82,7 +83,7 @@ process_t *process_create_user(uint32_t user_eip,
                                uintptr_t heap_base,
                                uintptr_t heap_end,
                                uintptr_t heap_max);
-void process_exit_current(int exit_code);
+void __attribute__((noreturn)) process_exit_current(int exit_code);
 process_t *process_current(void);
 int process_pid(const process_t *p);
 void process_destroy(process_t *p);

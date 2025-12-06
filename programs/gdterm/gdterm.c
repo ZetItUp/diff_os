@@ -402,7 +402,6 @@ int main(void)
         dirty = 1;
     }
 
-    char tty_buf[256];
     int input_pos = 0;
     char input_line[512] = {0};
 
@@ -422,25 +421,26 @@ int main(void)
             g_need_prompt = false;
         }
 
-        // Read from tty
-        int n = system_tty_read(tty_buf, (uint32_t)sizeof(tty_buf), TTY_READ_MODE_INPUT, NULL);
-
-        if (n > 0)
+        diff_event_t ev;
+        while (window_poll_event(win, &ev))
         {
-            for (int i = 0; i < n; i++)
+            if (ev.type != DIFF_EVENT_KEY || !ev.key_pressed)
             {
-                char c = tty_buf[i];
+                continue;
+            }
 
-                if (c == '\n' || c == '\r')
+            char c = (char)ev.key;
+
+            if (c == '\n' || c == '\r')
+            {
+                // Execute command
+                terminal_putchar(&g_terminal, '\n');
+                input_line[input_pos] = '\0';
+
+                if (input_pos > 0)
                 {
-                    // Execute command
-                    terminal_putchar(&g_terminal, '\n');
-                    input_line[input_pos] = '\0';
-
-                    if (input_pos > 0)
-                    {
-                        char *argv[16];
-                        int argc = tokenize(input_line, argv, 16);
+                    char *argv[16];
+                    int argc = tokenize(input_line, argv, 16);
 
                     if (argc > 0)
                     {
@@ -450,42 +450,41 @@ int main(void)
                             run_external(argc, argv, &dirty);
                         }
                     }
-                    }
+                }
 
-                    // Reset input
-                    input_pos = 0;
-                    input_line[0] = '\0';
+                // Reset input
+                input_pos = 0;
+                input_line[0] = '\0';
 
-                    // Mark that we need to show the next prompt (after child completion)
-                    if (!g_prompt_blocked)
-                    {
-                        snprintf(prompt, sizeof(prompt), "%s> ", g_cwd);
-                        terminal_puts(&g_terminal, prompt);
-                    }
-                    else
-                    {
-                        g_need_prompt = true;
-                    }
+                // Mark that we need to show the next prompt (after child completion)
+                if (!g_prompt_blocked)
+                {
+                    snprintf(prompt, sizeof(prompt), "%s> ", g_cwd);
+                    terminal_puts(&g_terminal, prompt);
+                }
+                else
+                {
+                    g_need_prompt = true;
+                }
+                dirty = 1;
+            }
+            else if (c == '\b' || c == 127) // Backspace
+            {
+                if (input_pos > 0)
+                {
+                    input_pos--;
+                    input_line[input_pos] = '\0';
+                    terminal_backspace(&g_terminal);
                     dirty = 1;
                 }
-                else if (c == '\b' || c == 127) // Backspace
+            }
+            else if (c >= 32 && c < 127) // Printable character
+            {
+                if (input_pos < (int)sizeof(input_line) - 1)
                 {
-                    if (input_pos > 0)
-                    {
-                        input_pos--;
-                        input_line[input_pos] = '\0';
-                        terminal_backspace(&g_terminal);
-                        dirty = 1;
-                    }
-                }
-                else if (c >= 32 && c < 127) // Printable character
-                {
-                    if (input_pos < (int)sizeof(input_line) - 1)
-                    {
-                        input_line[input_pos++] = c;
-                        terminal_putchar(&g_terminal, c);
-                        dirty = 1;
-                    }
+                    input_line[input_pos++] = c;
+                    terminal_putchar(&g_terminal, c);
+                    dirty = 1;
                 }
             }
         }

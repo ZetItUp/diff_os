@@ -151,6 +151,35 @@ static void process_unlink_from_all(process_t *p)
     proc_list_unlock(f);
 }
 
+// Clean up per-process resources that are not automatically reaped by wait().
+static void process_cleanup_resources(process_t *p)
+{
+    if (!p || p->resources_cleaned)
+    {
+        return;
+    }
+
+    p->resources_cleaned = 1;
+
+    // Tear down IPC and shared memory owned by the process so other tasks
+    // can't keep talking to a dead client.
+    messaging_cleanup_process(p->pid);
+    shared_memory_cleanup_process(p->pid);
+    vbe_release_owner(p->pid);
+
+    // Drop TTY endpoints (refcounted, so shared consoles stay alive).
+    if (p->tty_out)
+    {
+        tty_destroy(p->tty_out);
+        p->tty_out = NULL;
+    }
+    if (p->tty_in)
+    {
+        tty_destroy(p->tty_in);
+        p->tty_in = NULL;
+    }
+}
+
 // Destroy process and free resources (kernel side only)
 void process_destroy(process_t *p)
 {
@@ -185,16 +214,7 @@ void process_destroy(process_t *p)
     }
 
     // Fria PCB
-    if (p->tty_out)
-    {
-        tty_destroy(p->tty_out);
-        p->tty_out = NULL;
-    }
-    if (p->tty_in)
-    {
-        tty_destroy(p->tty_in);
-        p->tty_in = NULL;
-    }
+    process_cleanup_resources(p);
 
     kfree(p);
 
@@ -495,7 +515,7 @@ process_t *process_create_user(uint32_t user_eip,
 }
 
 // Exit current process via its last thread
-void process_exit_current(int exit_code)
+void __attribute__((noreturn)) process_exit_current(int exit_code)
 {
     process_t *p = process_current();
 
@@ -504,10 +524,7 @@ void process_exit_current(int exit_code)
         // Store exit code for wait()
         p->exit_code = exit_code;
 
-        int pid = p->pid;
-        messaging_cleanup_process(pid);
-        shared_memory_cleanup_process(pid);
-        vbe_release_owner(pid);
+        process_cleanup_resources(p);
     }
 
     // Restore console/video to default state before ending the process
@@ -515,6 +532,12 @@ void process_exit_current(int exit_code)
 
     // End current thread, scheduler will handle process state
     thread_exit();
+
+    // Should never return
+    for (;;)
+    {
+        asm volatile("hlt");
+    }
 }
 
 // Get current process

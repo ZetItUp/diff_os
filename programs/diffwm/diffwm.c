@@ -45,6 +45,7 @@ typedef struct wm_window
 static wm_window_t *g_windows = NULL;
 static uint32_t g_next_id = 1;
 static int g_mailbox = -1;
+static wm_window_t *g_focused = NULL;
 
 // Video mode and backbuffer
 static video_mode_info_t g_mode;
@@ -89,6 +90,11 @@ static void wm_add_window(wm_window_t *window)
 {
     window->next = g_windows;
     g_windows = window;
+
+    if (!g_focused)
+    {
+        g_focused = window;
+    }
 }
 
 static void wm_remove_window(uint32_t id)
@@ -103,6 +109,11 @@ static void wm_remove_window(uint32_t id)
             *winp = window->next;
             shared_memory_unmap(window->handle);
             shared_memory_release(window->handle);
+
+            if (g_focused == window)
+            {
+                g_focused = g_windows; // Focus the next window in the list, if any
+            }
 
             free(window);
             
@@ -341,6 +352,28 @@ static void wm_handle_message(const dwm_msg_t *msg)
     }
 }
 
+static void wm_dispatch_key_events(void)
+{
+    system_key_event_t kev;
+
+    while (system_keyboard_event_try(&kev))
+    {
+        if (!g_focused)
+        {
+            continue;
+        }
+
+        dwm_msg_t ev_msg = {0};
+        ev_msg.type = DWM_MSG_EVENT;
+        ev_msg.window_id = g_focused->id;
+        ev_msg.event.type = DIFF_EVENT_KEY;
+        ev_msg.event.key = kev.key;
+        ev_msg.event.key_pressed = kev.pressed;
+
+        send_message(g_focused->mailbox, &ev_msg, sizeof(ev_msg));
+    }
+}
+
 int main(void)
 {
     vbe_toggle_graphics_mode();
@@ -417,6 +450,9 @@ int main(void)
             msg_count = 0;
             handled = 1;
         }
+
+        // Deliver keyboard events to the currently focused window only
+        wm_dispatch_key_events();
 
         if (!handled)
         {
