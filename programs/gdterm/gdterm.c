@@ -67,6 +67,7 @@ static int g_children[MAX_CHILDREN];
 static int g_child_count = 0;
 static bool g_prompt_blocked = false;
 static bool g_need_prompt = false;
+static bool g_should_quit = false;
 
 static void term_puts_colored(const char *s, term_color_t color)
 {
@@ -134,7 +135,7 @@ static int bi_exit(int argc, char **argv)
     (void)argc;
     (void)argv;
 
-    exit(0);
+    g_should_quit = true;
     return 0;
 }
 
@@ -405,7 +406,7 @@ int main(void)
     int input_pos = 0;
     char input_line[512] = {0};
 
-    while (1)
+    while (!g_should_quit)
     {
         if (drain_tty_output())
         {
