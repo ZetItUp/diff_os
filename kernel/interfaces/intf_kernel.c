@@ -24,4 +24,5 @@ kernel_exports_t g_exports =
     .pci_config_write32 = pci_interface_config_write32,
     .pci_enable_device = pci_interface_enable_device,
     .pci_get_bar = pci_interface_get_bar,
+    .mouse_register = mouse_register,
 };

@@ -20,6 +20,11 @@ int receive_message(int id, void *buffer, uint32_t buffer_len)
     return system_message_receive(id, buffer, buffer_len);
 }
 
+int receive_message_timeout(int id, void *buffer, uint32_t buffer_len, uint32_t timeout_ms)
+{
+    return system_message_receive_timeout(id, buffer, buffer_len, timeout_ms);
+}
+
 int try_receive_message(int id, void *buffer, uint32_t buffer_len)
 {
     return system_message_try_receive(id, buffer, buffer_len);

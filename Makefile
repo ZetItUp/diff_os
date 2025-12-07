@@ -85,6 +85,7 @@ KERNEL_SRC = \
 KERNEL_SRC += \
 	kernel/interfaces/intf_kernel.c \
 	kernel/interfaces/intf_keyboard.c \
+	kernel/interfaces/intf_mouse.c \
 	kernel/interfaces/intf_memory.c \
 	kernel/interfaces/intf_vbe.c \
 	kernel/interfaces/intf_pci.c \

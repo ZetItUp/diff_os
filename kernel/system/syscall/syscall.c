@@ -280,7 +280,8 @@ int system_call_dispatch(struct syscall_frame *f)
         {
             keyboard_event_t ev;
             keyboard_get_event(&ev);
-            ret = ((int)ev.pressed << 8) | (int)ev.key;
+            // Pack: modifiers in bits 16-23, pressed in bit 8, key in bits 0-7
+            ret = ((int)ev.modifiers << 16) | ((int)ev.pressed << 8) | (int)ev.key;
 
             break;
         }
@@ -290,7 +291,7 @@ int system_call_dispatch(struct syscall_frame *f)
 
             if (keyboard_try_get_event(&ev))
             {
-                ret = ((int)ev.pressed << 8) | (int)ev.key;
+                ret = ((int)ev.modifiers << 16) | ((int)ev.pressed << 8) | (int)ev.key;
             }
             else
             {
@@ -805,6 +806,42 @@ int system_call_dispatch(struct syscall_frame *f)
         {
             console_disable();
             ret = 0;
+
+            break;
+        }
+        case SYSTEM_MOUSE_EVENT_GET:
+        {
+            mouse_packet_t pkt;
+            mouse_get_packet(&pkt);
+            // Pack: buttons in bits 16-23, dy in bits 8-15, dx in bits 0-7
+            ret = ((int)(pkt.buttons & 0xFF) << 16) |
+                  ((int)(pkt.dy & 0xFF) << 8) |
+                  ((int)(pkt.dx & 0xFF));
+
+            break;
+        }
+        case SYSTEM_MOUSE_EVENT_TRY:
+        {
+            mouse_packet_t pkt;
+
+            if (mouse_try_get_packet(&pkt))
+            {
+                ret = ((int)(pkt.buttons & 0xFF) << 16) |
+                      ((int)(pkt.dy & 0xFF) << 8) |
+                      ((int)(pkt.dx & 0xFF));
+            }
+            else
+            {
+                // Use bit 31 as "no event" flag since dx/dy/buttons could all be 0
+                ret = (int)0x80000000;
+            }
+
+            break;
+        }
+        case SYSTEM_MESSAGE_RECEIVE_TIMEOUT:
+        {
+            // arg0 = channel_id, arg1 = buffer, arg2 = buf_len, arg3 = timeout_ms
+            ret = system_msg_recv_timeout(arg0, (void*)arg1, (uint32_t)arg2, (uint32_t)arg3);
 
             break;
         }

@@ -4,6 +4,14 @@
 #include "stdarg.h"
 #include "pci.h"
 
+// Mouse packet (relative movement + buttons)
+typedef struct mouse_packet
+{
+    int8_t dx;
+    int8_t dy;
+    uint8_t buttons; // bit0=L, bit1=R, bit2=M
+} __attribute__((packed)) mouse_packet_t;
+
 // Exposed kernel function hooks (used by drivers)
 typedef struct kernel_exports
 {
@@ -30,6 +38,7 @@ typedef struct kernel_exports
     void (*pci_config_write32)(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t value);
     void (*pci_enable_device)(const pci_device_t *dev);
     int (*pci_get_bar)(const pci_device_t *dev, uint8_t bar_index, uint32_t *out_base, uint32_t *out_size, int *is_mmio);
+    void (*mouse_register)(int (*read_fn)(mouse_packet_t*), int (*read_block_fn)(mouse_packet_t*)); // Plug mouse backend
 } __attribute__((packed)) kernel_exports_t;
 
 // Keyboard-facing exports
@@ -39,10 +48,17 @@ typedef struct keyboard_exports
     uint8_t (*keyboard_read_blocking)(void);
 } __attribute__((packed)) keyboard_exports_t;
 
+// Modifier key flags
+#define KB_MOD_SHIFT  0x01
+#define KB_MOD_CTRL   0x02
+#define KB_MOD_ALT    0x04
+#define KB_MOD_CAPS   0x08
+
 typedef struct keyboard_event
 {
     uint8_t pressed;
     uint8_t key;
+    uint8_t modifiers;  // KB_MOD_* flags
 } keyboard_event_t;
 
 // Shared VBE info
@@ -59,6 +75,20 @@ typedef struct vbe_exports
 
 // Kernel exports instance
 extern kernel_exports_t g_exports;
+
+// Mouse-facing exports
+typedef struct mouse_exports
+{
+    int (*mouse_read)(mouse_packet_t *out);
+    int (*mouse_read_blocking)(mouse_packet_t *out);
+} __attribute__((packed)) mouse_exports_t;
+
+extern mouse_exports_t g_mouse;
+void mouse_register(int (*read_fn)(mouse_packet_t*), int (*read_block_fn)(mouse_packet_t*));
+void mouse_init(void);
+void mouse_drain(void);
+int mouse_try_get_packet(mouse_packet_t *packet);
+int mouse_get_packet(mouse_packet_t *packet);
 
 // Memory helpers
 extern void* kernel_map_physical_addr(uint32_t phys, uint32_t size, uint32_t flags);

@@ -626,6 +626,7 @@ static void wm_dispatch_key_events(void)
         ev_msg.event.type = DIFF_EVENT_KEY;
         ev_msg.event.key = kev.key;
         ev_msg.event.key_pressed = kev.pressed;
+        ev_msg.event.modifiers = kev.modifiers;  // Pass modifier flags to client
 
         send_message(g_focused->mailbox, &ev_msg, sizeof(ev_msg));
     }
@@ -698,45 +699,47 @@ int main(void)
         return -4;
     }
 
-    // Message handling loop with batched rendering
+    // Message handling loop with blocking receive + timeout
+    // This avoids busy-polling: we block until a message arrives or timeout expires.
+    // Timeout allows us to periodically check for keyboard events even when no messages.
     int msg_count = 0;
+    const uint32_t RECV_TIMEOUT_MS = 16; // ~60 FPS max, allows keyboard polling
+
     for(;;)
     {
-        int handled = 0;
+        // Block until message arrives or timeout (16ms = ~60Hz input polling)
+        int rc = receive_message_timeout(g_mailbox, msg, sizeof(*msg), RECV_TIMEOUT_MS);
 
-        // Drain a bounded number of messages to avoid starving input under heavy draw spam
-        for (int i = 0; i < 64 && system_message_try_receive(g_mailbox, msg, sizeof(*msg)) > 0; ++i)
+        if (rc > 0)
         {
+            // Got a message - process it
             wm_handle_message(msg);
             msg_count++;
-            handled = 1;
 
-            // Batch renders: only update screen every 4 messages or when explicitly needed
-            if (g_needs_redraw && (msg_count >= 4 || msg->type == DWM_MSG_DRAW))
+            // Drain any additional queued messages without blocking
+            while (msg_count < 64 && try_receive_message(g_mailbox, msg, sizeof(*msg)) > 0)
             {
-                handled |= wm_try_present();
-                msg_count = 0;
+                wm_handle_message(msg);
+                msg_count++;
+
+                // Batch renders: update screen every 4 messages or on explicit draw
+                if (g_needs_redraw && (msg_count >= 4 || msg->type == DWM_MSG_DRAW))
+                {
+                    wm_try_present();
+                    msg_count = 0;
+                }
             }
         }
 
-        // No more messages - flush any pending redraw
+        // Flush any pending redraw (either from messages or timeout)
         if (g_needs_redraw)
         {
-            int presented = wm_try_present();
-            if (presented)
-            {
-                handled = 1;
-            }
+            wm_try_present();
             msg_count = 0;
         }
 
-        // Deliver keyboard events to the currently focused window only
+        // Deliver keyboard events to the currently focused window
         wm_dispatch_key_events();
-
-        if (!handled)
-        {
-            thread_sleep_ms(1); // avoid tight polling when idle
-        }
     }
 
     free(g_backbuffer);

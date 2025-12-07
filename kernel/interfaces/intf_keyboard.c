@@ -60,17 +60,19 @@ static inline int ch_pop(uint8_t *out)
     return 1;
 }
 
-static int keyboard_try_pop_event(uint8_t *pressed, uint8_t *key)
+static int keyboard_try_pop_event(uint8_t *pressed, uint8_t *key, uint8_t *modifiers)
 {
-    if (ch_count() < 2)
+    if (ch_count() < 3)
     {
         return 0;
     }
 
     uint8_t state = 0;
     uint8_t code = 0;
+    uint8_t mods = 0;
     ch_pop(&state);
     ch_pop(&code);
+    ch_pop(&mods);
 
     if (pressed)
     {
@@ -80,6 +82,11 @@ static int keyboard_try_pop_event(uint8_t *pressed, uint8_t *key)
     if (key)
     {
         *key = code;
+    }
+
+    if (modifiers)
+    {
+        *modifiers = mods;
     }
 
     return 1;
@@ -182,12 +189,24 @@ static const uint8_t shift_map[128] =
 
 static int shift, caps, ctrl, alt, e0, num_lock;
 
-// Helper to push a key event (press or release) as 2 bytes
+// Build current modifier flags
+static uint8_t get_modifiers(void)
+{
+    uint8_t mods = 0;
+    if (shift) mods |= KB_MOD_SHIFT;
+    if (ctrl)  mods |= KB_MOD_CTRL;
+    if (alt)   mods |= KB_MOD_ALT;
+    if (caps)  mods |= KB_MOD_CAPS;
+    return mods;
+}
+
+// Helper to push a key event (press or release) as 3 bytes
 // The WM will dispatch these events to the focused window
 static void push_key_event(int pressed, uint8_t key)
 {
     ch_push(pressed ? 1 : 0);
     ch_push(key);
+    ch_push(get_modifiers());
 }
 
 static void keyboard_process_scancode(uint8_t sc)
@@ -477,8 +496,9 @@ int keyboard_try_get_event(keyboard_event_t *event)
 
     uint8_t pressed = 0;
     uint8_t key = 0;
+    uint8_t modifiers = 0;
 
-    if (!keyboard_try_pop_event(&pressed, &key))
+    if (!keyboard_try_pop_event(&pressed, &key, &modifiers))
     {
         return 0;
     }
@@ -487,6 +507,7 @@ int keyboard_try_get_event(keyboard_event_t *event)
     {
         event->pressed = pressed ? 1 : 0;
         event->key = key;
+        event->modifiers = modifiers;
     }
 
     return 1;

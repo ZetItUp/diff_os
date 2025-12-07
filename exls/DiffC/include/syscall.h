@@ -70,6 +70,9 @@ enum
     SYSTEM_THREAD_CREATE = 56,
     SYSTEM_THREAD_EXIT   = 57,
     SYSTEM_VIDEO_PRESENT_REGION = 58,
+    SYSTEM_MOUSE_EVENT_GET = 59,
+    SYSTEM_MOUSE_EVENT_TRY = 60,
+    SYSTEM_MESSAGE_RECEIVE_TIMEOUT = 61,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -153,10 +156,17 @@ static inline __attribute__((always_inline)) int system_trygetch(uint8_t *out)
     return 1;
 }
 
+// Modifier key flags (matches kernel KB_MOD_*)
+#define KB_MOD_SHIFT  0x01
+#define KB_MOD_CTRL   0x02
+#define KB_MOD_ALT    0x04
+#define KB_MOD_CAPS   0x08
+
 typedef struct system_key_event
 {
     uint8_t pressed;
     uint8_t key;
+    uint8_t modifiers;  // KB_MOD_* flags
 } system_key_event_t;
 
 static inline __attribute__((always_inline)) system_key_event_t system_keyboard_event_get(void)
@@ -164,6 +174,7 @@ static inline __attribute__((always_inline)) system_key_event_t system_keyboard_
     int r = do_sys(SYSTEM_KEYBOARD_EVENT_GET, 0, 0, 0, 0);
 
     system_key_event_t ev;
+    ev.modifiers = (uint8_t)((r >> 16) & 0xFF);
     ev.pressed = (uint8_t)((r >> 8) & 0xFF);
     ev.key = (uint8_t)(r & 0xFF);
 
@@ -181,6 +192,7 @@ static inline __attribute__((always_inline)) int system_keyboard_event_try(syste
 
     if (out)
     {
+        out->modifiers = (uint8_t)((r >> 16) & 0xFF);
         out->pressed = (uint8_t)((r >> 8) & 0xFF);
         out->key = (uint8_t)(r & 0xFF);
     }
@@ -432,6 +444,11 @@ static inline int system_message_try_receive(int channel_id, void *buffer, uint3
     return do_sys(SYSTEM_MESSAGE_TRY_RECEIVE, channel_id, (int)(uintptr_t)buffer, (int)buf_len, 0);
 }
 
+static inline int system_message_receive_timeout(int channel_id, void *buffer, uint32_t buf_len, uint32_t timeout_ms)
+{
+    return do_sys(SYSTEM_MESSAGE_RECEIVE_TIMEOUT, channel_id, (int)(uintptr_t)buffer, (int)buf_len, (int)timeout_ms);
+}
+
 static inline int system_shared_memory_create(uint32_t size_bytes)
 {
     return do_sys(SYSTEM_SHARED_MEMORY_CREATE, (int)size_bytes, 0, 0, 0);
@@ -468,4 +485,50 @@ static inline int system_tty_read(void *buf, uint32_t len, int mode, void *color
 static inline int system_tty_write(const void *buf, uint32_t len)
 {
     return do_sys(SYSTEM_TTY_WRITE, (int)(uintptr_t)buf, (int)len, 0, 0);
+}
+
+// Mouse button flags
+#define MOUSE_BTN_LEFT   0x01
+#define MOUSE_BTN_RIGHT  0x02
+#define MOUSE_BTN_MIDDLE 0x04
+
+typedef struct system_mouse_event
+{
+    int8_t dx;       // Relative X movement
+    int8_t dy;       // Relative Y movement
+    uint8_t buttons; // MOUSE_BTN_* flags
+} system_mouse_event_t;
+
+// Blocking: waits until a mouse packet is available
+static inline __attribute__((always_inline)) system_mouse_event_t system_mouse_event_get(void)
+{
+    int r = do_sys(SYSTEM_MOUSE_EVENT_GET, 0, 0, 0, 0);
+
+    system_mouse_event_t ev;
+    ev.buttons = (uint8_t)((r >> 16) & 0xFF);
+    ev.dy = (int8_t)((r >> 8) & 0xFF);
+    ev.dx = (int8_t)(r & 0xFF);
+
+    return ev;
+}
+
+// Non-blocking: returns 1 if event available, 0 otherwise
+static inline __attribute__((always_inline)) int system_mouse_event_try(system_mouse_event_t *out)
+{
+    int r = do_sys(SYSTEM_MOUSE_EVENT_TRY, 0, 0, 0, 0);
+
+    // Bit 31 set means no event available
+    if (r & 0x80000000)
+    {
+        return 0;
+    }
+
+    if (out)
+    {
+        out->buttons = (uint8_t)((r >> 16) & 0xFF);
+        out->dy = (int8_t)((r >> 8) & 0xFF);
+        out->dx = (int8_t)(r & 0xFF);
+    }
+
+    return 1;
 }

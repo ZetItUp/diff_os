@@ -490,3 +490,42 @@ void scheduler_reap_all_zombies(void)
     reap_zombies();
     irq_restore(f);
 }
+
+// Block current thread with timeout (using ktimer)
+#include "timer.h"
+
+typedef struct timeout_helper {
+    struct ktimer timer;
+    volatile int woke;
+    void *owner;
+} timeout_helper_t;
+
+static void timeout_cb(void *arg)
+{
+    timeout_helper_t *h = (timeout_helper_t *)arg;
+    h->woke = 1;
+    if (h->owner) {
+        scheduler_wake_owner(h->owner);
+    }
+}
+
+void scheduler_block_current_timeout(uint32_t timeout_ms)
+{
+    thread_t *self = g_current;
+    if (!self) return;
+
+    timeout_helper_t helper;
+    helper.woke = 0;
+    helper.owner = self;
+
+    // Set up timer to wake us after timeout
+    ktimer_add_once(&helper.timer, timeout_ms, timeout_cb, &helper, self);
+
+    // Block until woken (either by message or timeout)
+    scheduler_block_current_until_wakeup();
+
+    // Cancel timer if we were woken early (by message arrival)
+    if (!helper.woke) {
+        ktimer_cancel(&helper.timer);
+    }
+}

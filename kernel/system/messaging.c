@@ -194,6 +194,85 @@ int system_msg_recv(int channel_id, void *buffer, uint32_t buf_len)
     }
 }
 
+// Blocking receive with timeout: returns -5 on timeout, 0 if no message and timeout=0
+int system_msg_recv_timeout(int channel_id, void *buffer, uint32_t buf_len, uint32_t timeout_ms)
+{
+    if(channel_id < 0 || channel_id >= MESSAGES_MAX_CHANNELS)
+    {
+        return -1;
+    }
+
+    // Get current thread
+    thread_t *self = current_thread();
+    uint64_t deadline = timer_now_ms() + timeout_ms;
+
+    for(;;)
+    {
+        uint32_t flags;
+        msg_channel_t *channel = &g_channels[channel_id];
+
+        // Lock channel
+        spin_lock_irqsave(&channel->lock, &flags);
+
+        if(!channel->used)
+        {
+            spin_unlock_irqrestore(&channel->lock, flags);
+            return -1;
+        }
+
+        if(channel->count == 0)
+        {
+            // Check timeout
+            uint64_t now = timer_now_ms();
+            if(now >= deadline)
+            {
+                spin_unlock_irqrestore(&channel->lock, flags);
+                return -5; // Timeout
+            }
+
+            // Calculate remaining time
+            uint32_t remaining = (uint32_t)(deadline - now);
+
+            // Set up waiter and sleep with timeout
+            channel->recv_waiter = self;
+            spin_unlock_irqrestore(&channel->lock, flags);
+
+            // Sleep for remaining time or until woken
+            scheduler_block_current_timeout(remaining);
+            continue;
+        }
+
+        uint16_t slot = channel->head;
+        uint16_t msg_len = channel->sizes[slot];
+
+        if(buf_len < msg_len)
+        {
+            spin_unlock_irqrestore(&channel->lock, flags);
+            return -3; // Buffer too small
+        }
+
+        if(copy_to_user(buffer, channel->messages[slot], msg_len) != 0)
+        {
+            spin_unlock_irqrestore(&channel->lock, flags);
+            return -4; // Bad user buffer
+        }
+
+        channel->head = (uint16_t)((channel->head + 1) % MESSAGES_QUEUE_LEN);
+        channel->count--;
+
+        // Wake send_waiter if blocked
+        if(channel->send_waiter)
+        {
+            scheduler_wake_owner(channel->send_waiter);
+            channel->send_waiter = NULL;
+        }
+
+        spin_unlock_irqrestore(&channel->lock, flags);
+
+        return (int)msg_len;
+    }
+}
+
 // Non-blocking receive: returns 0 if no message available
 int system_msg_try_recv(int channel_id, void *buffer, uint32_t buf_len)
 {

@@ -21,6 +21,9 @@ static unsigned short g_key_queue[KEYQUEUE_SIZE];
 static unsigned int g_kq_head = 0;
 static unsigned int g_kq_tail = 0;
 
+// Track last known modifier state to detect changes
+static uint8_t g_last_modifiers = 0;
+
 static void dg_queue_push(int pressed, unsigned char key)
 {
     unsigned int next = (g_kq_tail + 1u) % KEYQUEUE_SIZE;
@@ -60,7 +63,8 @@ static unsigned char dg_translate_key(unsigned char raw)
 {
     switch (raw)
     {
-        case 0x01:       return KEY_FIRE;
+        // 0x01 was a workaround for ctrl - now handled via modifiers
+        case 0x01:       return 0;  // Ignore legacy ctrl key code
         case ' ':        return KEY_USE;
         case '\b':
         case 0x7f:       return KEY_BACKSPACE;
@@ -100,6 +104,30 @@ static void dg_poll_keys(void)
         {
             continue;
         }
+
+        // Check for modifier state changes and generate synthetic key events
+        uint8_t mods = ev.modifiers;
+        uint8_t changed = mods ^ g_last_modifiers;
+
+        if (changed & DIFF_MOD_SHIFT)
+        {
+            int pressed = (mods & DIFF_MOD_SHIFT) ? 1 : 0;
+            dg_queue_push(pressed, KEY_RSHIFT);
+        }
+
+        if (changed & DIFF_MOD_CTRL)
+        {
+            int pressed = (mods & DIFF_MOD_CTRL) ? 1 : 0;
+            dg_queue_push(pressed, KEY_FIRE);  // Ctrl = fire in Doom
+        }
+
+        if (changed & DIFF_MOD_ALT)
+        {
+            int pressed = (mods & DIFF_MOD_ALT) ? 1 : 0;
+            dg_queue_push(pressed, KEY_RALT);
+        }
+
+        g_last_modifiers = mods;
 
         unsigned char mapped = dg_translate_key(ev.key);
 

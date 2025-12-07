@@ -11,6 +11,7 @@ void scheduler_init(void);
 void scheduler_start(void);
 void thread_yield(void);
 void scheduler_block_current_until_wakeup(void);
+void scheduler_block_current_timeout(uint32_t timeout_ms);
 void scheduler_wake_owner(void *owner);
 void scheduler_reap_owned_zombies(struct process *p);
 void scheduler_reap_all_zombies(void);

@@ -12,11 +12,18 @@ typedef enum
     DIFF_EVENT_FOCUS_LOST
 } diff_event_type_t;
 
+// Modifier key flags (matches kernel KB_MOD_*)
+#define DIFF_MOD_SHIFT  0x01
+#define DIFF_MOD_CTRL   0x02
+#define DIFF_MOD_ALT    0x04
+#define DIFF_MOD_CAPS   0x08
+
 typedef struct
 {
     diff_event_type_t type;
     uint8_t key;
     uint8_t key_pressed;
+    uint8_t modifiers;      // DIFF_MOD_* flags
     int16_t mouse_x;
     int16_t mouse_y;
     uint8_t mouse_buttons;
