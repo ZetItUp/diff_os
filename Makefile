@@ -20,6 +20,7 @@ NASMFLAGS = -f bin
 
 # mkdiffos tool
 MKDIFFOS = $(BUILD)/mkdiffos
+MKISOFS = mkisofs
 TOOLS_DIR = tools
 DRIVERS_DIR = drivers
 IMAGE = $(TARGET)
@@ -104,10 +105,11 @@ KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))
 
 # Targets
 TARGET = $(BUILD)/diffos.img
+ISO = $(BUILD)/diffos.iso
 
-.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean
+.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean iso vdi vmdk
 
-all: tools drivers $(TARGET)
+all: tools drivers $(ISO)
 
 tools:
 	@echo "[TOOLS] Making tools..."
@@ -123,6 +125,33 @@ $(TARGET): tools exls $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel
 	@cp $(BUILD)/kernel.bin image/system/kernel.bin
 	@$(MKDIFFOS) $(TARGET) 64 $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] OS image created: $@"
+
+# VirtualBox VDI format
+$(BUILD)/diffos.vdi: $(TARGET)
+	@echo "[VDI] Creating VirtualBox disk image"
+	@rm -f $@
+	@VBoxManage convertfromraw --format VDI $(TARGET) $@ 2>/dev/null || \
+		qemu-img convert -f raw -O vdi $(TARGET) $@
+	@echo "[VDI] VirtualBox image created: $@"
+
+# VMware VMDK format
+$(BUILD)/diffos.vmdk: $(TARGET)
+	@echo "[VMDK] Creating VMware disk image"
+	@rm -f $@
+	@qemu-img convert -f raw -O vmdk $(TARGET) $@
+	@echo "[VMDK] VMware image created: $@"
+
+# Hybrid ISO (boots as CD-ROM or raw disk via USB/direct)
+$(ISO): $(TARGET)
+	@echo "[ISO] Creating hybrid ISO"
+	@cp $(TARGET) $@
+	@# Rename to .iso - the raw image already has a valid MBR and can boot directly
+	@echo "[ISO] Hybrid image created: $@"
+	@echo "[ISO] Use with: -cdrom (CD boot) or -hda (disk boot)"
+
+iso: $(ISO)
+vdi: $(BUILD)/diffos.vdi
+vmdk: $(BUILD)/diffos.vmdk
 
 # Bootloader Stages
 $(BUILD)/boot.bin: $(BOOT_STAGE1)
@@ -219,23 +248,24 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 
-# Run in QEMU
-run: all
+# Run in QEMU (using hard disk boot - more reliable than CD-ROM)
+run: tools drivers $(TARGET)
 	@echo "[QEMU] Starting OS"
-	@# @VBoxManage convertfromraw --format VDI build/diffos.img build/diffos.vdi
 	$(QEMU) \
 		-monitor stdio \
 		-m 64M \
 		-serial file:serial.log \
 		-no-reboot -no-shutdown \
 		-d guest_errors,trace:ioport_* -D qemu.log \
-		-drive id=disk,file=build/diffos.img,if=ide,format=raw \
+		-boot c \
+		-hda $(TARGET) \
 		-chardev file,id=dbg,path=/home/zet/os/debugcon.log \
 		-device isa-debugcon,iobase=0xe9,chardev=dbg
+
 # Debug in QEMU with GDB
-debug: all
+debug: tools drivers $(TARGET)
 	@echo "[QEMU] Starting in debug mode"
-	@$(QEMU) -monitor stdio -m 64M -vga std -drive format=raw,file=$(TARGET) -s -S &
+	@$(QEMU) -monitor stdio -m 64M -vga std -boot c -hda $(TARGET) -s -S &
 	@echo "[GDB] Starting debugger"
 	@gdb -x 1kernel.gdb
 

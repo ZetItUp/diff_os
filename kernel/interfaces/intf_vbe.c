@@ -139,6 +139,50 @@ int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_
     return 0;
 }
 
+// Present a rectangular region of the screen (for dirty rect optimization)
+int system_video_present_region_user(const void *user_ptr, int pitch_bytes,
+                                      int dest_x, int dest_y, int w, int h)
+{
+    if (g_vbe.frame_buffer == NULL || g_vbe.bpp != 32)
+    {
+        return -1;
+    }
+
+    if (vbe_ensure_owner() != 0)
+    {
+        return -1;
+    }
+
+    if (w <= 0 || h <= 0 || pitch_bytes <= 0)
+    {
+        return -1;
+    }
+
+    // Clamp region to screen bounds
+    if (dest_x < 0) { w += dest_x; user_ptr = (const uint8_t*)user_ptr - dest_x * 4; dest_x = 0; }
+    if (dest_y < 0) { h += dest_y; user_ptr = (const uint8_t*)user_ptr - dest_y * pitch_bytes; dest_y = 0; }
+    if (dest_x + w > (int)g_vbe.width) w = (int)g_vbe.width - dest_x;
+    if (dest_y + h > (int)g_vbe.height) h = (int)g_vbe.height - dest_y;
+    if (w <= 0 || h <= 0) return 0;
+
+    uint32_t row_bytes = (uint32_t)w * 4u;
+    uint8_t *dst_base = (uint8_t*)g_vbe.frame_buffer + (uint32_t)dest_y * g_vbe.pitch + (uint32_t)dest_x * 4;
+    const uint8_t *src_user = (const uint8_t*)user_ptr;
+
+    for (int y = 0; y < h; y++)
+    {
+        void *dst = dst_base + (uint32_t)y * g_vbe.pitch;
+        const void *src = src_user + (uint32_t)y * (uint32_t)pitch_bytes;
+
+        if (copy_from_user(dst, src, row_bytes) != 0)
+        {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 void vbe_register(uint32_t phys_base, uint32_t width, uint32_t height, uint32_t bpp, uint32_t pitch)
 {
     uint64_t fb_bytes = (uint64_t)pitch * (uint64_t)height;

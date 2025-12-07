@@ -67,6 +67,7 @@ enum
     SYSTEM_WAIT_PID_NOHANG = 55,
     SYSTEM_THREAD_CREATE = 56,
     SYSTEM_THREAD_EXIT   = 57,
+    SYSTEM_VIDEO_PRESENT_REGION = 58,
 };
 
 struct syscall_frame 
@@ -137,6 +138,7 @@ int system_process_spawn(const char *upath, int argc, char **uargv);
 int system_wait_pid(int pid, int *u_status);
 int system_wait_pid_nohang(int pid, int *u_status);
 int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_wh);
+int system_video_present_region_user(const void *user_ptr, int pitch_bytes, int x, int y, int w, int h);
 int system_video_mode_set(int w, int h, int bpp);
 int system_chdir(const char *path);
 int system_getcwd(char *out, size_t out_sz);

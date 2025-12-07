@@ -207,6 +207,22 @@ void terminal_component_paint(window_component_t *self)
     (void)self;
 }
 
+// Fast 32-bit memset for terminal
+static void term_memset32(uint32_t *dst, uint32_t val, size_t count)
+{
+    while (count >= 8)
+    {
+        dst[0] = val; dst[1] = val; dst[2] = val; dst[3] = val;
+        dst[4] = val; dst[5] = val; dst[6] = val; dst[7] = val;
+        dst += 8;
+        count -= 8;
+    }
+    while (count--)
+    {
+        *dst++ = val;
+    }
+}
+
 void terminal_component_render(terminal_component_t *term, uint32_t *pixels, int pitch_pixels)
 {
     if (!term || !pixels || !term->font)
@@ -223,15 +239,12 @@ void terminal_component_render(terminal_component_t *term, uint32_t *pixels, int
     int max_scroll = (term->line_count > max_visible_lines) ? (term->line_count - max_visible_lines) : 0;
     if (term->view_offset > max_scroll) term->view_offset = max_scroll;
 
-    // Clear background to bg_color
+    // Clear background to bg_color (fast path)
     uint32_t bg = (term->bg_color.a << 24) | (term->bg_color.r << 16) |
                   (term->bg_color.g << 8) | term->bg_color.b;
 
     size_t total = (size_t)width * height;
-    for (size_t i = 0; i < total; i++)
-    {
-        pixels[i] = bg;
-    }
+    term_memset32(pixels, bg, total);
 
     // Render selection highlight (if any)
     // text_render_selection(pixels, pitch_pixels, width, height,

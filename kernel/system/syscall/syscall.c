@@ -632,6 +632,17 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_VIDEO_PRESENT_REGION:
+        {
+            // arg0 = user ptr, arg1 = pitch bytes, arg2 = (x << 16) | y, arg3 = (w << 16) | h
+            int x = (arg2 >> 16) & 0xFFFF;
+            int y = arg2 & 0xFFFF;
+            int w = (arg3 >> 16) & 0xFFFF;
+            int h = arg3 & 0xFFFF;
+            ret = system_video_present_region_user((const void*)arg0, arg1, x, y, w, h);
+
+            break;
+        }
         case SYSTEM_VIDEO_MODE_SET:
         {
             ret = system_video_mode_set((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2);

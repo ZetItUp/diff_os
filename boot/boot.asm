@@ -1,6 +1,10 @@
 [BITS 16]
 [ORG 0x7C00]
 
+SEARCH_2048_INCREMENT equ 4
+SEARCH_2048_LIMIT     equ 64
+SEARCH_2048_START     equ SEARCH_2048_INCREMENT
+
 entry:
     cli                                 ; Stop interrupts on the CPU
     xor ax, ax
@@ -22,23 +26,29 @@ entry:
     jmp error
 .a20ok:
 
-    ; Load Stage 2 from disk (4 sectors) to 0x0000:0x8000
-    mov byte [dap], 0x10                ; Size of DAP
-    mov byte [dap+1], 0x00
-    mov word [dap+2], 32                ; Stage 2 Loader = 32 sectors
-    mov word [dap+4], 0x8000            ; Offset
-    mov word [dap+6], 0x0000            ; Segment
-    mov dword [dap+8], 1                ; LBA after boot sector
-    mov dword [dap+12], 0
-    mov si, dap
-    mov dl, [boot_drive]
-    mov ah, 0x42
-    int 0x13
-    jc .fail_stage2
+    mov word [dap+8], 1                  ; Try 512-byte LBA=1 first
+    mov word [dap+10], 0
+    call load_stage2
+    jc .search_stage2_2048
+    jmp .stage2_loaded
 
+.search_stage2_2048:
+    mov bx, SEARCH_2048_START
+    mov byte [stage2_search_counter], SEARCH_2048_LIMIT
+.stage2_search_loop:
+    mov word [dap+8], bx
+    mov word [dap+10], 0
+    call load_stage2
+    jnc .stage2_loaded
+    add bx, SEARCH_2048_INCREMENT
+    dec byte [stage2_search_counter]
+    jnz .stage2_search_loop
+    jmp .fail_stage2
+
+.stage2_loaded:
     mov al, [boot_drive]
     mov [0x8000], al
-    jmp 0x0000:0x8000                   ; Jump to Stage 2
+    jmp 0x0000:0x8000
 
 .fail_stage2:
     mov si, msg_load_fail
@@ -110,8 +120,19 @@ msg_halt        db 'System Halted',0
 
 boot_drive      db 0                    ; Holds the boot drive number
 dap: times 16 db 0
+stage2_search_counter db 0
 
+load_stage2:
+    mov byte [dap], 0x10                ; Size of DAP
+    mov byte [dap+1], 0x00
+    mov word [dap+2], 32                ; Stage 2 is 32 sectors
+    mov word [dap+4], 0x8000            ; Load to 0x0000:0x8000
+    mov word [dap+6], 0x0000
+    mov si, dap
+    mov dl, [boot_drive]
+    mov ah, 0x42
+    int 0x13
+    ret
 ; Fill in the rest of the file with zeros and add the mandatory boot magic number at the end
 times 510-($-$$) db 0
 dw 0xAA55
-

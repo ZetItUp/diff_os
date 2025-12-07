@@ -69,6 +69,7 @@ enum
     SYSTEM_WAIT_PID_NOHANG = 55,
     SYSTEM_THREAD_CREATE = 56,
     SYSTEM_THREAD_EXIT   = 57,
+    SYSTEM_VIDEO_PRESENT_REGION = 58,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -349,6 +350,16 @@ static inline int system_video_present(const void *argb32, int pitch_bytes, int 
     int packed = ((w & 0xFFFF) << 16) | (h & 0xFFFF);
 
     return do_sys(SYSTEM_VIDEO_PRESENT, (int)(uintptr_t)argb32, pitch_bytes, packed, 0);
+}
+
+// Present a rectangular region (dirty rect optimization)
+static inline int system_video_present_region(const void *argb32, int pitch_bytes,
+                                               int x, int y, int w, int h)
+{
+    int packed_xy = ((x & 0xFFFF) << 16) | (y & 0xFFFF);
+    int packed_wh = ((w & 0xFFFF) << 16) | (h & 0xFFFF);
+
+    return do_sys(SYSTEM_VIDEO_PRESENT_REGION, (int)(uintptr_t)argb32, pitch_bytes, packed_xy, packed_wh);
 }
 
 static inline int system_video_mode_set(int w, int h, int bpp)

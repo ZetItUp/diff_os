@@ -46,6 +46,7 @@ static wm_window_t *g_windows = NULL;
 static uint32_t g_next_id = 1;
 static int g_mailbox = -1;
 static wm_window_t *g_focused = NULL;
+static void wm_draw_window(const dwm_msg_t *msg);
 
 // Video mode and backbuffer
 static video_mode_info_t g_mode;
@@ -54,26 +55,128 @@ static int g_active_fb = 0;
 static uint32_t *g_backbuffer = NULL;
 static uint32_t g_backbuffer_stride = 0; // pixels per line
 static size_t g_backbuffer_bytes = 0;
+static wm_window_t *g_prev_focus = NULL;
+static volatile int g_focus_dirty = 0;
+static uint64_t g_last_present_ms = 0;
 
-// Dirty flag for optimized rendering
+// Dirty rectangle tracking
+#define MAX_DIRTY_RECTS 16
+typedef struct {
+    int x, y, w, h;
+} dirty_rect_t;
+
+static dirty_rect_t g_dirty_rects[MAX_DIRTY_RECTS];
+static int g_dirty_count = 0;
 static volatile int g_needs_redraw = 0;
+static void wm_redraw_focus_dirty(void);
+
+// Add a dirty rectangle (will be merged/clipped later)
+static void wm_add_dirty_rect(int x, int y, int w, int h)
+{
+    // Clamp to screen
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > (int)g_mode.width) w = (int)g_mode.width - x;
+    if (y + h > (int)g_mode.height) h = (int)g_mode.height - y;
+    if (w <= 0 || h <= 0) return;
+
+    // If full, just mark entire screen dirty
+    if (g_dirty_count >= MAX_DIRTY_RECTS)
+    {
+        g_dirty_rects[0].x = 0;
+        g_dirty_rects[0].y = 0;
+        g_dirty_rects[0].w = (int)g_mode.width;
+        g_dirty_rects[0].h = (int)g_mode.height;
+        g_dirty_count = 1;
+        return;
+    }
+
+    g_dirty_rects[g_dirty_count].x = x;
+    g_dirty_rects[g_dirty_count].y = y;
+    g_dirty_rects[g_dirty_count].w = w;
+    g_dirty_rects[g_dirty_count].h = h;
+    g_dirty_count++;
+    g_needs_redraw = 1;
+}
 
 // Darken an ARGB pixel very slightly to simulate a subtle shadow (alpha over black).
+// Optimized: use shift instead of division (inv=224 ≈ 7/8)
 static inline uint32_t apply_shadow_20(uint32_t c)
 {
-    const uint32_t alpha = 32u;           // ~12.5% black
-    const uint32_t inv   = 255u - alpha;  // ~87.5% original
-
     uint32_t a = c & 0xFF000000u;
     uint32_t r = (c >> 16) & 0xFFu;
     uint32_t g = (c >> 8) & 0xFFu;
     uint32_t b = c & 0xFFu;
 
-    r = (r * inv + 127u) / 255u;
-    g = (g * inv + 127u) / 255u;
-    b = (b * inv + 127u) / 255u;
+    // Multiply by 7/8 using shift: (x * 7) >> 3
+    r = (r * 7) >> 3;
+    g = (g * 7) >> 3;
+    b = (b * 7) >> 3;
 
     return a | (r << 16) | (g << 8) | b;
+}
+
+// Present only dirty region (bounding box of all dirty rects) to the screen
+static void wm_request_present(void)
+{
+    if (!g_backbuffer || g_backbuffer_bytes == 0 || g_dirty_count == 0)
+    {
+        return;
+    }
+
+    // Calculate bounding box of all dirty rects
+    int min_x = g_dirty_rects[0].x;
+    int min_y = g_dirty_rects[0].y;
+    int max_x = g_dirty_rects[0].x + g_dirty_rects[0].w;
+    int max_y = g_dirty_rects[0].y + g_dirty_rects[0].h;
+
+    for (int i = 1; i < g_dirty_count; i++)
+    {
+        dirty_rect_t *r = &g_dirty_rects[i];
+        if (r->x < min_x) min_x = r->x;
+        if (r->y < min_y) min_y = r->y;
+        if (r->x + r->w > max_x) max_x = r->x + r->w;
+        if (r->y + r->h > max_y) max_y = r->y + r->h;
+    }
+
+    int w = max_x - min_x;
+    int h = max_y - min_y;
+
+    // Copy only the dirty region to framebuffer
+    // Calculate pointer to start of dirty region in backbuffer
+    uint32_t *src = g_backbuffer + (size_t)min_y * g_backbuffer_stride + min_x;
+
+    // Use syscall with offset pointer and adjusted dimensions
+    // The pitch stays the same (full row width), but we start from offset
+    system_video_present_region(src, (int)g_mode.pitch, min_x, min_y, w, h);
+
+    g_dirty_count = 0;
+    g_needs_redraw = 0;
+}
+
+// Try to present, rate-limited to ~60 FPS (16ms). Returns 1 if presented.
+static int wm_try_present(void)
+{
+    if (!g_needs_redraw)
+    {
+        return 0;
+    }
+
+    uint64_t now = monotonic_ms();
+    if (now < g_last_present_ms)
+    {
+        g_last_present_ms = now;
+    }
+    // Rate limit to ~60 FPS (16ms between frames)
+    if (now - g_last_present_ms < 16)
+    {
+        return 0;
+    }
+
+    wm_redraw_focus_dirty();
+    wm_request_present();
+    g_last_present_ms = now;
+    return 1;
 }
 
 static wm_window_t* wm_find(uint32_t id)
@@ -107,6 +210,8 @@ static void wm_set_focus(wm_window_t *window)
 {
     if (g_focused == window) return;
 
+    wm_window_t *old_focus = g_focused;
+
     // Notify old focused window it lost focus
     if (g_focused)
     {
@@ -121,7 +226,9 @@ static void wm_set_focus(wm_window_t *window)
         wm_send_focus_event(g_focused, 1);
     }
 
-    g_needs_redraw = 1;  // Redraw to update focus visual
+    g_prev_focus = old_focus;
+    g_focus_dirty = 1; // Need to repaint borders for focus change
+    g_needs_redraw = 1;
 }
 
 static void wm_add_window(wm_window_t *window)
@@ -133,6 +240,21 @@ static void wm_add_window(wm_window_t *window)
     // (the client hasn't received its CREATE reply, so it can't handle events)
     g_focused = window;
     g_needs_redraw = 1;
+}
+
+// Fast inline memset32 for WM
+static inline void wm_memset32(uint32_t *dst, uint32_t val, size_t count)
+{
+    while (count >= 4)
+    {
+        dst[0] = val; dst[1] = val; dst[2] = val; dst[3] = val;
+        dst += 4;
+        count -= 4;
+    }
+    while (count--)
+    {
+        *dst++ = val;
+    }
 }
 
 // Clear a region of the backbuffer to the desktop background color
@@ -150,14 +272,43 @@ static void wm_clear_region(int x, int y, int w, int h)
     if (x1 > (int)g_mode.width) x1 = (int)g_mode.width;
     if (y1 > (int)g_mode.height) y1 = (int)g_mode.height;
 
+    int row_width = x1 - x0;
+    int row_height = y1 - y0;
+    if (row_width <= 0 || row_height <= 0) return;
+
     for (int row = y0; row < y1; row++)
     {
         uint32_t *dst = g_backbuffer + (size_t)row * g_backbuffer_stride + x0;
-        for (int col = x0; col < x1; col++)
-        {
-            *dst++ = bg;
-        }
+        wm_memset32(dst, bg, (size_t)row_width);
     }
+
+    // Mark cleared region as dirty
+    wm_add_dirty_rect(x0, y0, row_width, row_height);
+}
+
+// Refresh only focus-related borders to avoid full redraws.
+static void wm_redraw_focus_dirty(void)
+{
+    if (!g_focus_dirty)
+    {
+        return;
+    }
+
+    if (g_prev_focus)
+    {
+        dwm_msg_t msg = {0};
+        msg.window_id = g_prev_focus->id;
+        wm_draw_window(&msg);
+    }
+
+    if (g_focused)
+    {
+        dwm_msg_t msg = {0};
+        msg.window_id = g_focused->id;
+        wm_draw_window(&msg);
+    }
+
+    g_focus_dirty = 0;
 }
 
 static void wm_remove_window(uint32_t id)
@@ -189,12 +340,16 @@ static void wm_remove_window(uint32_t id)
                     wm_set_focus(g_windows);
                 }
             }
+            if (g_prev_focus == window)
+            {
+                g_prev_focus = NULL;
+            }
 
             free(window);
 
             // Clear the region where the window was and present immediately
             wm_clear_region(wx, wy, ww, wh);
-            system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
+            wm_request_present();
 
             return;
         }
@@ -321,63 +476,75 @@ static void wm_draw_window(const dwm_msg_t *msg)
         }
     }
 
-    // Shadow on right and bottom (5px, 20% alpha black)
+    // Shadow only needs to be drawn once (it's on the background, not the window)
     const int shadow = 5;
-    int shadow_x0 = x0 + max_x;
-    int shadow_y0 = y0 + max_y;
-
-    int shadow_x1 = shadow_x0 + shadow;
-    int shadow_y1 = shadow_y0 + shadow;
-
-    if (shadow_x0 < (int)g_mode.width)
+    if (!window->drew_once)
     {
-        int sx1 = (shadow_x1 < (int)g_mode.width) ? shadow_x1 : (int)g_mode.width;
-        int sy0 = y0;
-        int sy1 = y0 + max_y + shadow;
-        if (sy0 < 0) sy0 = 0;
-        if (sy1 > (int)g_mode.height) sy1 = (int)g_mode.height;
+        int shadow_x0 = x0 + max_x;
+        int shadow_y0 = y0 + max_y;
+        int shadow_x1 = shadow_x0 + shadow;
+        int shadow_y1 = shadow_y0 + shadow;
 
-        for (int y = sy0; y < sy1; ++y)
+        if (shadow_x0 < (int)g_mode.width)
         {
-            uint32_t *row = g_backbuffer + (size_t)y * g_backbuffer_stride;
-            int y_off = y - y0;
-            for (int x = shadow_x0; x < sx1; ++x)
+            int sx1 = (shadow_x1 < (int)g_mode.width) ? shadow_x1 : (int)g_mode.width;
+            int sy0 = y0;
+            int sy1 = y0 + max_y + shadow;
+            if (sy0 < 0) sy0 = 0;
+            if (sy1 > (int)g_mode.height) sy1 = (int)g_mode.height;
+
+            for (int y = sy0; y < sy1; ++y)
             {
-                // Bevel top of right shadow so inner edge meets the corner and fans outward.
-                if (y_off < shadow)
+                uint32_t *row = g_backbuffer + (size_t)y * g_backbuffer_stride;
+                int y_off = y - y0;
+                for (int x = shadow_x0; x < sx1; ++x)
                 {
-                    int max_w = y_off + 1; // start with 1px at the top, grow downward
-                    if (x >= shadow_x0 + max_w) continue;
+                    if (y_off < shadow)
+                    {
+                        int max_w = y_off + 1;
+                        if (x >= shadow_x0 + max_w) continue;
+                    }
+                    row[x] = apply_shadow_20(row[x]);
                 }
-                row[x] = apply_shadow_20(row[x]);
             }
         }
+
+        if (shadow_y0 < (int)g_mode.height)
+        {
+            int sy1 = (shadow_y1 < (int)g_mode.height) ? shadow_y1 : (int)g_mode.height;
+            int sx0 = x0;
+            int sx1 = x0 + max_x + shadow;
+            if (sx0 < 0) sx0 = 0;
+            if (sx1 > (int)g_mode.width) sx1 = (int)g_mode.width;
+
+            for (int y = shadow_y0; y < sy1; ++y)
+            {
+                uint32_t *row = g_backbuffer + (size_t)y * g_backbuffer_stride;
+                int y_off = y - shadow_y0;
+                for (int x = sx0; x < sx1; ++x)
+                {
+                    int x_off = x - x0;
+                    if (x_off < shadow)
+                    {
+                        int max_h = x_off + 1;
+                        if (y_off >= max_h) continue;
+                    }
+                    row[x] = apply_shadow_20(row[x]);
+                }
+            }
+        }
+
+        window->drew_once = 1;
+
+        // First draw includes shadow region
+        wm_add_dirty_rect(x0 - border, y0 - border,
+                          max_x + border * 2 + shadow,
+                          max_y + border * 2 + shadow);
     }
-
-    if (shadow_y0 < (int)g_mode.height)
+    else
     {
-        int sy1 = (shadow_y1 < (int)g_mode.height) ? shadow_y1 : (int)g_mode.height;
-        int sx0 = x0;
-        int sx1 = x0 + max_x + shadow;
-        if (sx0 < 0) sx0 = 0;
-        if (sx1 > (int)g_mode.width) sx1 = (int)g_mode.width;
-
-        for (int y = shadow_y0; y < sy1; ++y)
-        {
-            uint32_t *row = g_backbuffer + (size_t)y * g_backbuffer_stride;
-            int y_off = y - shadow_y0;
-            for (int x = sx0; x < sx1; ++x)
-            {
-                // Bevel bottom shadow near left: inner edge touches corner, height grows to the right.
-                int x_off = x - x0;
-                if (x_off < shadow)
-                {
-                    int max_h = x_off + 1; // start with 1px height at left corner
-                    if (y_off >= max_h) continue;
-                }
-                row[x] = apply_shadow_20(row[x]);
-            }
-        }
+        // Subsequent draws only mark the window itself (no shadow)
+        wm_add_dirty_rect(x0, y0, max_x, max_y);
     }
 }
 
@@ -464,18 +631,6 @@ static void wm_dispatch_key_events(void)
     }
 }
 
-// Present with simple frame pacing to avoid pegging CPU when clients spam DRAW.
-static void wm_present_if_needed(void)
-{
-    if (!g_needs_redraw)
-    {
-        return;
-    }
-
-    system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
-    g_needs_redraw = 0;
-}
-
 int main(void)
 {
     vbe_toggle_graphics_mode();
@@ -514,13 +669,25 @@ int main(void)
     size_t total = (size_t)g_backbuffer_stride * g_mode.height;
     for (int b = 0; b < 2; ++b)
     {
-        for (size_t i = 0; i < total; ++i)
+        uint32_t *dst = g_buffers[b];
+        size_t n = total;
+        // Fast unrolled fill
+        while (n >= 8)
         {
-            g_buffers[b][i] = bg;
+            dst[0] = bg; dst[1] = bg; dst[2] = bg; dst[3] = bg;
+            dst[4] = bg; dst[5] = bg; dst[6] = bg; dst[7] = bg;
+            dst += 8;
+            n -= 8;
+        }
+        while (n--)
+        {
+            *dst++ = bg;
         }
     }
 
+    // Initial full-screen present
     system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
+    g_last_present_ms = monotonic_ms();
 
     const char *client_path = "/programs/gdterm/gdterm.dex";
     spawn_process(client_path, 0, NULL);
@@ -547,7 +714,7 @@ int main(void)
             // Batch renders: only update screen every 4 messages or when explicitly needed
             if (g_needs_redraw && (msg_count >= 4 || msg->type == DWM_MSG_DRAW))
             {
-                wm_present_if_needed();
+                handled |= wm_try_present();
                 msg_count = 0;
             }
         }
@@ -555,9 +722,12 @@ int main(void)
         // No more messages - flush any pending redraw
         if (g_needs_redraw)
         {
-            wm_present_if_needed();
+            int presented = wm_try_present();
+            if (presented)
+            {
+                handled = 1;
+            }
             msg_count = 0;
-            handled = 1;
         }
 
         // Deliver keyboard events to the currently focused window only

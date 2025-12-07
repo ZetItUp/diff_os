@@ -2,7 +2,7 @@
 setlocal
 
 REM Källa: WSL UNC-path
-set SRC=\\wsl.localhost\kali-linux\home\zet\os\build\diffos.img
+set SRC=Z:\home\zet\os\build\diffos.img
 
 REM Mål: lokal NTFS-path
 set DST=C:\temp\diffos.img
@@ -26,7 +26,6 @@ REM Performance options:
 REM   -accel whpx      = Windows Hypervisor Platform (requires Hyper-V enabled)
 REM   -accel tcg,thread=multi = Multi-threaded TCG (fallback if WHPX unavailable)
 REM   -cpu max         = Use best available CPU features
-REM   Removed -d trace for better performance
 
 "C:\Program Files\qemu\qemu-system-i386.exe" ^
     -accel tcg,thread=multi ^
@@ -35,7 +34,8 @@ REM   Removed -d trace for better performance
     -serial file:"C:\temp\serial.log" ^
     -no-reboot ^
     -no-shutdown ^
-    -drive id=disk,file="%DST%",if=ide,format=raw,cache=writeback ^
+    -boot c ^
+    -hda "%DST%" ^
     -chardev file,id=dbg,path="C:\temp\debugcon.log" ^
     -device isa-debugcon,iobase=0xe9,chardev=dbg ^
     -display sdl,gl=on ^

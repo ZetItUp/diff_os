@@ -54,6 +54,24 @@ void window_update(window_component_t *self)
     }
 }
 
+// Fast 32-bit memset
+static void memset32(uint32_t *dst, uint32_t val, size_t count)
+{
+    while (count >= 4)
+    {
+        dst[0] = val;
+        dst[1] = val;
+        dst[2] = val;
+        dst[3] = val;
+        dst += 4;
+        count -= 4;
+    }
+    while (count--)
+    {
+        *dst++ = val;
+    }
+}
+
 void window_paint(window_component_t *self)
 {
     window_t *window = (window_t*)self;
@@ -61,12 +79,9 @@ void window_paint(window_component_t *self)
     if (!self->visible || !window->backbuffer)
         return;
 
-    // Clear backbuffer to black
-    int total = self->width * self->height;
-    for (int i = 0; i < total; i++)
-    {
-        window->backbuffer[i] = 0xFF000000; // Black with alpha
-    }
+    // Clear backbuffer to black (fast path)
+    size_t total = (size_t)self->width * self->height;
+    memset32(window->backbuffer, 0xFF000000, total);
 
     // Render all child components
     for (int i = 0; i < window->child_count; i++)
