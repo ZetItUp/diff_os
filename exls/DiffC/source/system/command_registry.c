@@ -16,6 +16,11 @@ static size_t g_count = 0;
 // https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function
 static uint32_t hash_str(const char *str)
 {
+    if (!str)
+    {
+        return 0;
+    }
+
     uint32_t hash = 2166136261u;
 
     for(; *str; ++str)
@@ -99,6 +104,12 @@ static bool validate_table(void)
 
 static size_t find_slot(const char *name, bool *found)
 {
+    if (!g_table || !name || !*name)
+    {
+        if (found) *found = false;
+        return (size_t)-1;
+    }
+
     uint32_t hash = hash_str(name);
     size_t i = hash % g_capacity;
 
@@ -179,7 +190,7 @@ const char *cmdreg_lookup(const char *name)
     bool found = false;
     size_t idx = find_slot(name, &found);
 
-    if(!found)
+    if(idx == (size_t)-1 || !found)
     {
         return NULL;
     }

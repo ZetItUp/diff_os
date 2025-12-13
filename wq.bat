@@ -38,7 +38,7 @@ REM   -cpu max         = Use best available CPU features
     -hda "%DST%" ^
     -chardev file,id=dbg,path="C:\temp\debugcon.log" ^
     -device isa-debugcon,iobase=0xe9,chardev=dbg ^
-    -display sdl,gl=on ^
+    -display sdl,gl=on,show-cursor=off ^
     -vga std
 
 endlocal

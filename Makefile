@@ -256,6 +256,7 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 run: tools drivers $(TARGET)
 	@echo "[QEMU] Starting OS"
 	$(QEMU) \
+		-display default,show-cursor=off \
 		-monitor stdio \
 		-m 64M \
 		-serial file:serial.log \
@@ -269,7 +270,7 @@ run: tools drivers $(TARGET)
 # Debug in QEMU with GDB
 debug: tools drivers $(TARGET)
 	@echo "[QEMU] Starting in debug mode"
-	@$(QEMU) -monitor stdio -m 64M -vga std -boot c -hda $(TARGET) -s -S &
+	@$(QEMU) -display default,show-cursor=off -monitor stdio -m 64M -vga std -boot c -hda $(TARGET) -s -S &
 	@echo "[GDB] Starting debugger"
 	@gdb -x 1kernel.gdb
 

@@ -6,8 +6,10 @@
 #include <syscall.h>
 #include <diffwm/diffwm.h>
 #include <diffwm/terminal_component.h>
+#include <diffwm/picture_component.h>
 #include <diffgfx/draw.h>
 #include <difffonts/fonts.h>
+#include <difftga.h>
 #include <system/threads.h>
 #include <system/command_registry.h>
 #include <system/process.h>
@@ -61,6 +63,10 @@ static const unsigned g_ver_minor = 0;
 static const term_color_t default_color = {203, 219, 252, 0xFF};
 static int g_last_status = 0;
 static char g_cwd[256] = "/";
+static bool g_logo_enabled = true;
+static tga_image_t *g_logo_img = NULL;
+static picture_component_t g_logo_picture;
+static int g_logo_dirty = 0;
 
 #define MAX_CHILDREN 32
 static int g_children[MAX_CHILDREN];
@@ -98,6 +104,7 @@ static int bi_help(int argc, char **argv)
     terminal_puts(&g_terminal, " echo  \t- Print its arguments\n");
     terminal_puts(&g_terminal, " ver   \t- Show shell version\n");
     terminal_puts(&g_terminal, " exit  \t- Exit the shell\n");
+    terminal_puts(&g_terminal, " logo  \t- Toggle logo overlay (logo on|off)\n");
     terminal_puts(&g_terminal, "\n");
 
     return 0;
@@ -164,6 +171,39 @@ static int bi_cd(int argc, char **argv)
     return 0;
 }
 
+static int bi_logo(int argc, char **argv)
+{
+    if (!g_logo_img)
+    {
+        terminal_puts(&g_terminal, "Logo not loaded.\n");
+        return 0;
+    }
+
+    if (argc < 2)
+    {
+        terminal_puts(&g_terminal, g_logo_enabled ? "Logo: on\n" : "Logo: off\n");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "on") == 0)
+    {
+    g_logo_enabled = true;
+    }
+    else if (strcmp(argv[1], "off") == 0)
+    {
+        g_logo_enabled = false;
+    }
+    else
+    {
+        terminal_puts(&g_terminal, "Usage: logo on|off\n");
+        return 0;
+    }
+
+    g_logo_picture.base.visible = g_logo_enabled;
+    g_logo_dirty = 1;
+    return 0;
+}
+
 static int tokenize(char *line, char **argv, int maxv)
 {
     int argc = 0;
@@ -217,6 +257,9 @@ static int run_builtin(int argc, char **argv)
 
     if (strcmp(argv[0], "exit") == 0)
         return bi_exit(argc, argv);
+
+    if (strcmp(argv[0], "logo") == 0)
+        return bi_logo(argc, argv);
 
     return 1; // Not a builtin
 }
@@ -369,6 +412,31 @@ int main(void)
     // Add terminal to window
     window_add_component(win, &g_terminal.base);
 
+    // Load and add logo picture (drawn after terminal so it overlays text)
+    g_logo_img = tga_load("/system/graphics/Logo.tga");
+    if (g_logo_img && g_logo_img->pixels)
+    {
+        int logo_x = WIN_W - (int)g_logo_img->width - 10;
+        if (logo_x < 0) 
+            logo_x = 0;
+        
+        int logo_y = 5;
+
+        picture_component_init(&g_logo_picture,
+                               logo_x,
+                               logo_y,
+                               (int)g_logo_img->width,
+                               (int)g_logo_img->height,
+                               g_logo_img->pixels,
+                               (int)g_logo_img->width);
+        g_logo_picture.base.visible = g_logo_enabled;
+        window_add_component(win, &g_logo_picture.base);
+    }
+    else
+    {
+        g_logo_enabled = false;
+    }
+
     // Initialize command registry
     if (!cmdreg_init("/system/commands.map"))
     {
@@ -411,6 +479,12 @@ int main(void)
         if (drain_tty_output())
         {
             dirty = 1;
+        }
+
+        if (g_logo_dirty)
+        {
+            dirty = 1;
+            g_logo_dirty = 0;
         }
 
         reap_children(&dirty);
@@ -502,6 +576,10 @@ int main(void)
     }
 
     font_destroy(font);
+    if (g_logo_img)
+    {
+        tga_free(g_logo_img);
+    }
     window_destroy(win);
     return 0;
 }

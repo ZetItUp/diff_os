@@ -54,7 +54,6 @@ static uint32_t g_next_id = 1;
 static int g_mailbox = -1;
 static wm_window_t *g_focused = NULL;
 static void wm_draw_window(const dwm_msg_t *msg);
-static void wm_draw_logo(void);
 static void wm_draw_cursor(void);
 static void wm_update_mouse(void);
 
@@ -68,11 +67,6 @@ static size_t g_backbuffer_bytes = 0;
 static wm_window_t *g_prev_focus = NULL;
 static volatile int g_focus_dirty = 0;
 static uint64_t g_last_present_ms = 0;
-
-// Desktop logo
-static tga_image_t *g_logo = NULL;
-static int g_logo_x = 0;
-static int g_logo_y = 0;
 
 // Cursor theme and state
 static cursor_theme_t g_cursor_theme;
@@ -211,16 +205,6 @@ static void wm_fill_bg_region(int x, int y, int w, int h)
         }
     }
 
-    // Redraw logo if overlapping this region
-    if (g_logo)
-    {
-        int logo_w = (int)g_logo->width;
-        int logo_h = (int)g_logo->height;
-        if (rects_intersect(x, y, w, h, g_logo_x, g_logo_y, logo_w, logo_h))
-        {
-            wm_draw_logo();
-        }
-    }
 }
 
 // Repaint background and any windows intersecting the current dirty area
@@ -466,78 +450,8 @@ static void wm_clear_region(int x, int y, int w, int h)
         wm_memset32(dst, bg, (size_t)row_width);
     }
 
-    // Redraw logo if the cleared region overlaps with it
-    if (g_logo)
-    {
-        int logo_x1 = g_logo_x + (int)g_logo->width;
-        int logo_y1 = g_logo_y + (int)g_logo->height;
-        if (x0 < logo_x1 && x1 > g_logo_x && y0 < logo_y1 && y1 > g_logo_y)
-        {
-            wm_draw_logo();
-        }
-    }
-
     // Mark cleared region as dirty
     wm_add_dirty_rect(x0, y0, row_width, row_height);
-}
-
-// Draw the desktop logo to the backbuffer (top-right corner)
-static void wm_draw_logo(void)
-{
-    if (!g_logo || !g_logo->pixels || !g_backbuffer) return;
-
-    int logo_w = (int)g_logo->width;
-    int logo_h = (int)g_logo->height;
-
-    // Clamp to screen bounds
-    int x0 = g_logo_x;
-    int y0 = g_logo_y;
-    int x1 = x0 + logo_w;
-    int y1 = y0 + logo_h;
-
-    if (x0 < 0) x0 = 0;
-    if (y0 < 0) y0 = 0;
-    if (x1 > (int)g_mode.width) x1 = (int)g_mode.width;
-    if (y1 > (int)g_mode.height) y1 = (int)g_mode.height;
-
-    int draw_w = x1 - x0;
-    int draw_h = y1 - y0;
-    if (draw_w <= 0 || draw_h <= 0) return;
-
-    // Offset into source image if x0/y0 were clamped
-    int src_x = x0 - g_logo_x;
-    int src_y = y0 - g_logo_y;
-
-    for (int y = 0; y < draw_h; y++)
-    {
-        uint32_t *dst = g_backbuffer + (size_t)(y0 + y) * g_backbuffer_stride + x0;
-        uint32_t *src = g_logo->pixels + (size_t)(src_y + y) * logo_w + src_x;
-
-        for (int x = 0; x < draw_w; x++)
-        {
-            uint32_t pixel = src[x];
-            uint8_t alpha = (pixel >> 24) & 0xFF;
-
-            if (alpha == 0xFF)
-            {
-                // Fully opaque
-                dst[x] = pixel;
-            }
-            else if (alpha > 0)
-            {
-                // Alpha blend
-                uint32_t bg = dst[x];
-                uint32_t inv = 255 - alpha;
-
-                uint32_t r = (((pixel >> 16) & 0xFF) * alpha + ((bg >> 16) & 0xFF) * inv) / 255;
-                uint32_t g = (((pixel >> 8) & 0xFF) * alpha + ((bg >> 8) & 0xFF) * inv) / 255;
-                uint32_t b = ((pixel & 0xFF) * alpha + (bg & 0xFF) * inv) / 255;
-
-                dst[x] = 0xFF000000 | (r << 16) | (g << 8) | b;
-            }
-            // alpha == 0: transparent, leave background
-        }
-    }
 }
 
 // Draw the mouse cursor at the current position
@@ -1016,15 +930,6 @@ int main(void)
     }
     g_backbuffer = g_buffers[g_active_fb];
 
-    // Load desktop logo
-    g_logo = tga_load("/system/graphics/Logo.tga");
-    if (g_logo)
-    {
-        // Position in top-right corner with 10px margin
-        g_logo_x = (int)g_mode.width - (int)g_logo->width - 10;
-        g_logo_y = 10;
-    }
-
     // Load cursor theme
     if (theme_load(&g_cursor_theme, "/system/themes/default.theme") < 0)
     {
@@ -1064,9 +969,7 @@ int main(void)
             *dst++ = bg;
         }
 
-        // Draw logo to this buffer
         g_backbuffer = g_buffers[b];
-        wm_draw_logo();
     }
     g_backbuffer = g_buffers[g_active_fb];
 
