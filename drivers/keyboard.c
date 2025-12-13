@@ -325,7 +325,7 @@ void ddf_driver_init(kernel_exports_t *exports)
     i8042_service(); // Pull any pending bytes into FIFO
     kernel->keyboard_register(keyboard_read_byte, keyboard_read_byte_blocking);
     kernel->pic_clear_mask(1); // Unmask IRQ1
-    kernel->printf("[DRIVER] PS2 Keyboard Installed\n");
+    kernel->printf("[DRIVER] PS2 Keyboard Driver Installed\n");
 }
 
 // Driver exit called by loader
@@ -333,7 +333,7 @@ __attribute__((section(".text")))
 void ddf_driver_exit(void)
 {
     kernel->pic_set_mask(1); // Mask IRQ1
-    kernel->printf("[DRIVER] PS2 Keyboard Uninstalled\n");
+    kernel->printf("[DRIVER] PS2 Keyboard Driver Uninstalled\n");
 }
 
 // IRQ handler

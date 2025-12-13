@@ -73,6 +73,12 @@ enum
     SYSTEM_MOUSE_EVENT_GET = 59,
     SYSTEM_MOUSE_EVENT_TRY = 60,
     SYSTEM_MESSAGE_RECEIVE_TIMEOUT = 61,
+    SYSTEM_MOUSE_GET_POS = 62,
+    SYSTEM_MOUSE_SET_POS = 63,
+    SYSTEM_MOUSE_SET_BOUNDS = 64,
+    SYSTEM_MOUSE_GET_BUTTONS_DOWN = 65,
+    SYSTEM_MOUSE_GET_BUTTONS_PRESSED = 66,
+    SYSTEM_MOUSE_GET_BUTTONS_CLICKED = 67,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -531,4 +537,44 @@ static inline __attribute__((always_inline)) int system_mouse_event_try(system_m
     }
 
     return 1;
+}
+
+// Get mouse position (updates state from pending events)
+static inline __attribute__((always_inline)) void system_mouse_get_pos(int *x, int *y)
+{
+    int r = do_sys(SYSTEM_MOUSE_GET_POS, 0, 0, 0, 0);
+    if (x) *x = (r >> 16) & 0xFFFF;
+    if (y) *y = r & 0xFFFF;
+}
+
+// Set mouse position
+static inline __attribute__((always_inline)) void system_mouse_set_pos(int x, int y)
+{
+    int packed = ((x & 0xFFFF) << 16) | (y & 0xFFFF);
+    (void)do_sys(SYSTEM_MOUSE_SET_POS, packed, 0, 0, 0);
+}
+
+// Set mouse bounds (screen resolution for clamping)
+static inline __attribute__((always_inline)) void system_mouse_set_bounds(int max_x, int max_y)
+{
+    int packed = ((max_x & 0xFFFF) << 16) | (max_y & 0xFFFF);
+    (void)do_sys(SYSTEM_MOUSE_SET_BOUNDS, packed, 0, 0, 0);
+}
+
+// Get current button state (which buttons are currently held down)
+static inline __attribute__((always_inline)) uint8_t system_mouse_get_buttons_down(void)
+{
+    return (uint8_t)do_sys(SYSTEM_MOUSE_GET_BUTTONS_DOWN, 0, 0, 0, 0);
+}
+
+// Get buttons that were just pressed (rising edge, clears on read)
+static inline __attribute__((always_inline)) uint8_t system_mouse_get_buttons_pressed(void)
+{
+    return (uint8_t)do_sys(SYSTEM_MOUSE_GET_BUTTONS_PRESSED, 0, 0, 0, 0);
+}
+
+// Get buttons that were just released/clicked (falling edge, clears on read)
+static inline __attribute__((always_inline)) uint8_t system_mouse_get_buttons_clicked(void)
+{
+    return (uint8_t)do_sys(SYSTEM_MOUSE_GET_BUTTONS_CLICKED, 0, 0, 0, 0);
 }

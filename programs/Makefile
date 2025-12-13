@@ -3,6 +3,7 @@ PYTHON    := python3
 
 CFLAGS    := -ffreestanding -nostdlib -O0 -m32 -fno-pic -no-pie \
              -I../exls/DiffC/include -I../exls/DiffWM/includes -I../exls/DiffFonts/include \
+             -I../exls/DiffTGA/include \
              -Wall -Wextra -fno-pic
 
 ELFDUMP   := ../tools/elfdump
@@ -11,7 +12,8 @@ GEN_IMPORTS := ../tools/gen_imports.py
 
 OUT_ROOT  := ../image/programs
 
-PROGRAMS := $(basename $(notdir $(wildcard */*.c)))
+# Only build directories where <dir>/<dir>.c exists (ignores helper files like theme.c)
+PROGRAMS := $(foreach d,$(patsubst %/,%,$(wildcard */)),$(if $(wildcard $d/$d.c),$d))
 
 LIBMAP   := libmap.json
 DEFAULT_EXL := diffc.exl

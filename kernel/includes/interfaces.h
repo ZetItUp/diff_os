@@ -90,6 +90,15 @@ void mouse_drain(void);
 int mouse_try_get_packet(mouse_packet_t *packet);
 int mouse_get_packet(mouse_packet_t *packet);
 
+// Mouse state tracking
+void mouse_update_state(void);
+int mouse_get_pos(void);
+void mouse_set_pos(int x, int y);
+void mouse_set_bounds(int max_x, int max_y);
+uint8_t mouse_get_buttons_down(void);
+uint8_t mouse_get_buttons_pressed(void);
+uint8_t mouse_get_buttons_clicked(void);
+
 // Memory helpers
 extern void* kernel_map_physical_addr(uint32_t phys, uint32_t size, uint32_t flags);
 

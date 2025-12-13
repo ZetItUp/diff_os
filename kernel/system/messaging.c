@@ -226,6 +226,11 @@ int system_msg_recv_timeout(int channel_id, void *buffer, uint32_t buf_len, uint
             uint64_t now = timer_now_ms();
             if(now >= deadline)
             {
+                // Clear ourselves as waiter if we were set
+                if (channel->recv_waiter == self)
+                {
+                    channel->recv_waiter = NULL;
+                }
                 spin_unlock_irqrestore(&channel->lock, flags);
                 return -5; // Timeout
             }
@@ -239,6 +244,15 @@ int system_msg_recv_timeout(int channel_id, void *buffer, uint32_t buf_len, uint
 
             // Sleep for remaining time or until woken
             scheduler_block_current_timeout(remaining);
+
+            // After waking up, clear ourselves as waiter (we may have been woken by timeout)
+            spin_lock_irqsave(&channel->lock, &flags);
+            if (channel->recv_waiter == self)
+            {
+                channel->recv_waiter = NULL;
+            }
+            spin_unlock_irqrestore(&channel->lock, flags);
+
             continue;
         }
 

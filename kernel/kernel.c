@@ -112,8 +112,9 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
         timer_install_apic();   // Install APIC timer handler first
         apic_timer_init(100);  // Initialize and start APIC timer at 100 Hz for smoother timing
 
-        // Unmask keyboard IRQ (IRQ1)
+        // Unmask keyboard (IRQ1) and mouse (IRQ12) so PS/2 input works in APIC mode
         ioapic_unmask_irq(1);
+        ioapic_unmask_irq(12);
     }
     else
     {

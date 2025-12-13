@@ -1359,6 +1359,28 @@ int paging_ensure_pagetable(uint32_t va, uint32_t flags)
         return 0;
     }
 
+    // For user-space addresses, allocate page table dynamically
+    if (is_user_addr_inline(va))
+    {
+        uint32_t pt_phys = alloc_phys_page();
+        if (!pt_phys)
+        {
+            printf("[PAGING] ensure_pagetable: alloc_phys_page failed for va=%08x\n", va);
+            return -1;
+        }
+
+        // Zero out the new page table via temporary mapping
+        uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 0);
+        memset(pt, 0, PAGE_SIZE_4KB);
+        kunmap_phys(0);
+
+        // Install the page table in the directory
+        page_directory[di] = pt_phys | PAGE_PRESENT | PAGE_RW | (flags & (PAGE_USER | PAGE_PCD | PAGE_PWT));
+        flush_tlb();
+        return 0;
+    }
+
+    // For kernel-space, use static pool
     if (pt_next >= (int)(sizeof(kernel_page_tables) / sizeof(kernel_page_tables[0]))) return -1;
     uint32_t *table = kernel_page_tables[pt_next++];
     alloc_page_table_with_flags(di, table, flags);
@@ -1375,13 +1397,25 @@ int paging_map_user_range(uintptr_t vaddr, size_t bytes, int writable)
 
     for (uint32_t va = start; va < end; va += PAGE_SIZE_4KB)
     {
-        if (paging_ensure_pagetable(va, flags) != 0) return -1;
+        if (paging_ensure_pagetable(va, flags) != 0)
+        {
+            printf("[PAGING] map_user_range: ensure_pagetable failed va=%08x\n", va);
+            return -1;
+        }
 
         if (!page_is_present(va))
         {
             uint32_t phys = alloc_phys_page();
-            if (!phys) return -1;
-            if (map_4kb_page_flags(va, phys, flags) != 0) return -1;
+            if (!phys)
+            {
+                printf("[PAGING] map_user_range: alloc_phys_page failed va=%08x\n", va);
+                return -1;
+            }
+            if (map_4kb_page_flags(va, phys, flags) != 0)
+            {
+                printf("[PAGING] map_user_range: map_4kb_page_flags failed va=%08x phys=%08x\n", va, phys);
+                return -1;
+            }
             memset((void*)va, 0, PAGE_SIZE_4KB);
         }
         else
@@ -1956,18 +1990,58 @@ void paging_destroy_address_space(uint32_t cr3_phys)
         return;
     }
 
+    // Free all user-space pages in this address space
+    uint32_t udi_start = (USER_MIN >> 22);
+    uint32_t udi_end   = ((USER_MAX - 1) >> 22);
+
+    // Map the target PD
+    uint32_t *target_pd = (uint32_t*)kmap_phys(cr3_phys, 0);
+
+    for (uint32_t di = udi_start; di <= udi_end; di++)
+    {
+        uint32_t pde = target_pd[di];
+        if (!(pde & PAGE_PRESENT)) continue;
+
+        if (pde & PAGE_PS)
+        {
+            // 4MB page - free the block
+            uint32_t phys_addr = pde & 0xFFC00000u;
+            int block = (int)(phys_addr / BLOCK_SIZE);
+            clear_block(block);
+            target_pd[di] = 0;
+            continue;
+        }
+
+        // 4KB pages - iterate page table
+        uint32_t pt_phys = pde & 0xFFFFF000u;
+        uint32_t *pt = (uint32_t*)kmap_phys(pt_phys, 1);
+
+        for (int ti = 0; ti < 1024; ti++)
+        {
+            uint32_t pte = pt[ti];
+            if (!(pte & PAGE_PRESENT)) continue;
+
+            uint32_t pa = pte & 0xFFFFF000u;
+            int idx = phys_idx_from_pa(pa);
+            phys_ref_dec_idx(idx);
+            pt[ti] = 0;
+        }
+
+        kunmap_phys(1);
+        target_pd[di] = 0;
+
+        // Free the page table itself if it's not from kernel static pool
+        if (!(pt_phys >= kpt_start && pt_phys < kpt_end))
+        {
+            free_phys_page(pt_phys);
+        }
+    }
+
     // Free the private PT that was allocated for this process's page_directory mapping.
-    // The private PT is at the directory index for page_directory VA.
     uint32_t pd_va = (uint32_t)(uintptr_t)page_directory;
     uint32_t pd_di = pd_va >> 22;
-
-    // Get the kernel's PT for comparison
     uint32_t kernel_pt_phys = page_directory[pd_di] & 0xFFFFF000u;
-
-    // Map the target PD to read its PDEs
-    uint32_t *target_pd = (uint32_t*)kmap_phys(cr3_phys, 0);
     uint32_t target_pde = target_pd[pd_di];
-    kunmap_phys(0);
 
     if ((target_pde & PAGE_PRESENT) && !(target_pde & PAGE_PS))
     {
@@ -1981,6 +2055,7 @@ void paging_destroy_address_space(uint32_t cr3_phys)
         }
     }
 
+    kunmap_phys(0);
     free_phys_page(cr3_phys);
 }
 

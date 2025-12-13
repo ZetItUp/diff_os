@@ -26,6 +26,7 @@ static volatile unsigned mouse_tail = 0;
 
 static uint8_t packet_buf[3];
 static int packet_index = 0;
+// Debug: capture a limited number of packets to verify activity
 
 static inline int fifo_empty(void)
 {
@@ -235,6 +236,11 @@ static int mouse_send_cmd_with_arg(uint8_t cmd, uint8_t arg)
 
 static int mouse_hw_init(void)
 {
+    // Disable interrupts during init so ACK bytes aren't stolen by the IRQ handler
+    uint32_t eflags;
+    asm volatile("pushf; pop %0; cli" : "=r"(eflags));
+    int ints_were_enabled = (eflags & (1u << 9)) != 0;
+
     flush_output_buffer();
 
     if(wait_input_clear() != 0)
@@ -244,7 +250,7 @@ static int mouse_hw_init(void)
 
     // Enable AUX port
     kernel->outb(PS2_COMMAND_PORT, 0xA8);
-    
+
     if(wait_input_clear() != 0)
     {
         return -1;
@@ -266,29 +272,30 @@ static int mouse_hw_init(void)
 
     // Enable IRQ 12
     cmd_byte |= 0x02;
-    // Disable translation
-    cmd_byte &= (uint8_t)~0x20;
+    // Enable mouse clock and disable translation
+    cmd_byte &= (uint8_t)~0x20; // clear disable-mouse/port2 clock bit (enable AUX)
 
     if(wait_input_clear() != 0)
     {
-        return -1;
+        goto fail;
     }
 
     kernel->outb(PS2_COMMAND_PORT, 0x60);
 
     if(wait_input_clear() != 0)
     {
-        return -1;
+        goto fail;
     }
 
     kernel->outb(PS2_DATA_PORT, cmd_byte);
+
 
     flush_output_buffer();
 
     // Set defaults
     if(mouse_send_cmd(0xF6) != 0)
     {
-        return -1;
+        goto fail;
     }
 
     // Resolution (4 counts / mm)
@@ -301,13 +308,18 @@ static int mouse_hw_init(void)
     // Enable data reporting
     if(mouse_send_cmd(0xF4) != 0)
     {
-        return -1;
+        goto fail;
     }
 
     packet_index = 0;
     flush_output_buffer();
 
+    if (ints_were_enabled) asm volatile("sti");
     return 0;
+
+fail:
+    if (ints_were_enabled) asm volatile("sti");
+    return -1;
 }
 
 static void handle_packet_byte(uint8_t byte)

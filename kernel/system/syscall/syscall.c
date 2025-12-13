@@ -845,6 +845,45 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_MOUSE_GET_POS:
+        {
+            // Returns packed x,y: x in high 16 bits, y in low 16 bits
+            ret = mouse_get_pos();
+            break;
+        }
+        case SYSTEM_MOUSE_SET_POS:
+        {
+            // arg0 = packed x,y (x in high 16 bits, y in low 16 bits)
+            int x = (arg0 >> 16) & 0xFFFF;
+            int y = arg0 & 0xFFFF;
+            mouse_set_pos(x, y);
+            ret = 0;
+            break;
+        }
+        case SYSTEM_MOUSE_SET_BOUNDS:
+        {
+            // arg0 = packed max_x,max_y (max_x in high 16 bits, max_y in low 16 bits)
+            int max_x = (arg0 >> 16) & 0xFFFF;
+            int max_y = arg0 & 0xFFFF;
+            mouse_set_bounds(max_x, max_y);
+            ret = 0;
+            break;
+        }
+        case SYSTEM_MOUSE_GET_BUTTONS_DOWN:
+        {
+            ret = mouse_get_buttons_down();
+            break;
+        }
+        case SYSTEM_MOUSE_GET_BUTTONS_PRESSED:
+        {
+            ret = mouse_get_buttons_pressed();
+            break;
+        }
+        case SYSTEM_MOUSE_GET_BUTTONS_CLICKED:
+        {
+            ret = mouse_get_buttons_clicked();
+            break;
+        }
         default:
         {
             puts("[System Call] Unknown number: ");

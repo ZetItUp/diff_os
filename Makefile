@@ -108,7 +108,7 @@ KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))
 TARGET = $(BUILD)/diffos.img
 ISO = $(BUILD)/diffos.iso
 
-.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean iso vdi vmdk
+.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean iso vdi vmdk graphics
 
 all: tools drivers $(ISO)
 
@@ -120,8 +120,11 @@ drivers:
 	@echo "[DRIVERS] Creating Drivers...i"
 	@$(MAKE) -C $(DRIVERS_DIR) all --no-print-directory
 
+graphics:
+	@$(MAKE) -C graphics --no-print-directory
+
 # Main OS image
-$(TARGET): tools exls $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
+$(TARGET): tools exls graphics $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] Creating OS image"
 	@cp $(BUILD)/kernel.bin image/system/kernel.bin
 	@$(MKDIFFOS) $(TARGET) 64 $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
@@ -314,4 +317,5 @@ clean:
 	@echo "[CLEAN] Removing tools build files"
 	@$(MAKE) -C $(TOOLS_DIR) clean --no-print-directory
 	@$(MAKE) -C $(DRIVERS_DIR) clean --no-print-directory
+	@$(MAKE) -C graphics clean --no-print-directory
 	@rm -rf $(BUILD)

@@ -12,5 +12,10 @@
     "fseek",
     "ftell",
     "fgets"
+  ],
+  "difftga.exl": [
+    "tga_load",
+    "tga_load_mem",
+    "tga_free"
   ]
 }

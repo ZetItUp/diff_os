@@ -17,6 +17,13 @@
 #include <diffgfx/graphics.h>
 #include <diffgfx/draw.h>
 
+// DiffTGA for loading TGA images
+#include <difftga.h>
+
+// Theme system for cursors
+#include "theme.h"
+#include "theme.c"
+
 /*
  * Window Manager Internal Window Tracking
  *
@@ -47,6 +54,9 @@ static uint32_t g_next_id = 1;
 static int g_mailbox = -1;
 static wm_window_t *g_focused = NULL;
 static void wm_draw_window(const dwm_msg_t *msg);
+static void wm_draw_logo(void);
+static void wm_draw_cursor(void);
+static void wm_update_mouse(void);
 
 // Video mode and backbuffer
 static video_mode_info_t g_mode;
@@ -59,6 +69,19 @@ static wm_window_t *g_prev_focus = NULL;
 static volatile int g_focus_dirty = 0;
 static uint64_t g_last_present_ms = 0;
 
+// Desktop logo
+static tga_image_t *g_logo = NULL;
+static int g_logo_x = 0;
+static int g_logo_y = 0;
+
+// Cursor theme and state
+static cursor_theme_t g_cursor_theme;
+static cursor_type_t g_current_cursor = CURSOR_NORMAL;
+static int g_mouse_x = 0;
+static int g_mouse_y = 0;
+static int g_prev_mouse_x = -1;
+static int g_prev_mouse_y = -1;
+
 // Dirty rectangle tracking
 #define MAX_DIRTY_RECTS 16
 typedef struct {
@@ -69,10 +92,16 @@ static dirty_rect_t g_dirty_rects[MAX_DIRTY_RECTS];
 static int g_dirty_count = 0;
 static volatile int g_needs_redraw = 0;
 static void wm_redraw_focus_dirty(void);
+static int g_disable_dirty_mark = 0;
 
 // Add a dirty rectangle (will be merged/clipped later)
 static void wm_add_dirty_rect(int x, int y, int w, int h)
 {
+    if (g_disable_dirty_mark)
+    {
+        return;
+    }
+
     // Clamp to screen
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
@@ -154,6 +183,133 @@ static void wm_request_present(void)
     g_needs_redraw = 0;
 }
 
+static int rects_intersect(int ax, int ay, int aw, int ah, int bx, int by, int bw, int bh)
+{
+    return aw > 0 && ah > 0 && bw > 0 && bh > 0 &&
+           ax < bx + bw && ax + aw > bx &&
+           ay < by + bh && ay + ah > by;
+}
+
+static void wm_fill_bg_region(int x, int y, int w, int h)
+{
+    if (!g_backbuffer) return;
+
+    // Clamp
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > (int)g_mode.width) w = (int)g_mode.width - x;
+    if (y + h > (int)g_mode.height) h = (int)g_mode.height - y;
+    if (w <= 0 || h <= 0) return;
+
+    const uint32_t bg = color_rgb(69, 67, 117);
+    for (int row = y; row < y + h; row++)
+    {
+        uint32_t *dst = g_backbuffer + (size_t)row * g_backbuffer_stride + x;
+        for (int col = 0; col < w; col++)
+        {
+            dst[col] = bg;
+        }
+    }
+
+    // Redraw logo if overlapping this region
+    if (g_logo)
+    {
+        int logo_w = (int)g_logo->width;
+        int logo_h = (int)g_logo->height;
+        if (rects_intersect(x, y, w, h, g_logo_x, g_logo_y, logo_w, logo_h))
+        {
+            wm_draw_logo();
+        }
+    }
+}
+
+// Repaint background and any windows intersecting the current dirty area
+static void wm_repaint_dirty_region(void)
+{
+    if (g_dirty_count == 0)
+    {
+        return;
+    }
+
+    // Compute bounding box of current dirty rects
+    int min_x = g_dirty_rects[0].x;
+    int min_y = g_dirty_rects[0].y;
+    int max_x = g_dirty_rects[0].x + g_dirty_rects[0].w;
+    int max_y = g_dirty_rects[0].y + g_dirty_rects[0].h;
+
+    for (int i = 1; i < g_dirty_count; i++)
+    {
+        dirty_rect_t *r = &g_dirty_rects[i];
+        if (r->x < min_x) min_x = r->x;
+        if (r->y < min_y) min_y = r->y;
+        if (r->x + r->w > max_x) max_x = r->x + r->w;
+        if (r->y + r->h > max_y) max_y = r->y + r->h;
+    }
+
+    int dirty_w = max_x - min_x;
+    int dirty_h = max_y - min_y;
+
+    // Temporarily suppress dirty marking during repaint
+    g_disable_dirty_mark = 1;
+
+    wm_fill_bg_region(min_x, min_y, dirty_w, dirty_h);
+
+    // Collect windows so we can paint bottom-to-top (oldest first).
+    wm_window_t *win_stack[128];
+    int win_count = 0;
+    for (wm_window_t *win = g_windows; win && win_count < 128; win = win->next)
+    {
+        win_stack[win_count++] = win;
+    }
+
+    // Paint all non-focused windows first (oldest → newest)
+    for (int i = win_count - 1; i >= 0; --i)
+    {
+        wm_window_t *win = win_stack[i];
+        if (win == g_focused)
+        {
+            continue;
+        }
+        int wx = win->x - 2;
+        int wy = win->y - 2;
+        int ww = (int)win->width + 2 + 2 + 5 + 2;
+        int wh = (int)win->height + 2 + 2 + 5 + 2;
+
+        if (rects_intersect(min_x, min_y, dirty_w, dirty_h, wx, wy, ww, wh))
+        {
+            dwm_msg_t msg = {0};
+            msg.window_id = win->id;
+            wm_draw_window(&msg);
+        }
+    }
+
+    // Draw focused window last so its border stays on top.
+    if (g_focused)
+    {
+        wm_window_t *fwin = g_focused;
+        int wx = fwin->x - 2;
+        int wy = fwin->y - 2;
+        int ww = (int)fwin->width + 2 + 2 + 5 + 2;
+        int wh = (int)fwin->height + 2 + 2 + 5 + 2;
+
+        if (rects_intersect(min_x, min_y, dirty_w, dirty_h, wx, wy, ww, wh))
+        {
+            dwm_msg_t msg = {0};
+            msg.window_id = fwin->id;
+            wm_draw_window(&msg);
+        }
+    }
+
+    g_disable_dirty_mark = 0;
+
+    // Collapse dirty list to the bounding box we just repainted
+    g_dirty_rects[0].x = min_x;
+    g_dirty_rects[0].y = min_y;
+    g_dirty_rects[0].w = dirty_w;
+    g_dirty_rects[0].h = dirty_h;
+    g_dirty_count = 1;
+}
+
 // Try to present, rate-limited to ~60 FPS (16ms). Returns 1 if presented.
 static int wm_try_present(void)
 {
@@ -174,6 +330,8 @@ static int wm_try_present(void)
     }
 
     wm_redraw_focus_dirty();
+    wm_repaint_dirty_region();
+    wm_draw_cursor();  // Draw cursor on top of everything
     wm_request_present();
     g_last_present_ms = now;
     return 1;
@@ -229,6 +387,32 @@ static void wm_set_focus(wm_window_t *window)
     g_prev_focus = old_focus;
     g_focus_dirty = 1; // Need to repaint borders for focus change
     g_needs_redraw = 1;
+
+    // Force both old and new focused windows to redraw borders in the next repaint
+    if (old_focus)
+    {
+        dwm_msg_t msg = {0};
+        msg.window_id = old_focus->id;
+        wm_draw_window(&msg);
+        wm_add_dirty_rect(old_focus->x - 2, old_focus->y - 2,
+                          (int)old_focus->width + 2 + 2 + 5 + 2,
+                          (int)old_focus->height + 2 + 2 + 5 + 2);
+
+        // Force a repaint of the old focus border immediately
+        wm_repaint_dirty_region();
+    }
+    if (g_focused)
+    {
+        dwm_msg_t msg = {0};
+        msg.window_id = g_focused->id;
+        wm_draw_window(&msg);
+        wm_add_dirty_rect(g_focused->x - 2, g_focused->y - 2,
+                          (int)g_focused->width + 2 + 2 + 5 + 2,
+                          (int)g_focused->height + 2 + 2 + 5 + 2);
+    }
+
+    // Immediately refresh the affected regions so borders update without waiting for cursor movement
+    wm_repaint_dirty_region();
 }
 
 static void wm_add_window(wm_window_t *window)
@@ -282,8 +466,172 @@ static void wm_clear_region(int x, int y, int w, int h)
         wm_memset32(dst, bg, (size_t)row_width);
     }
 
+    // Redraw logo if the cleared region overlaps with it
+    if (g_logo)
+    {
+        int logo_x1 = g_logo_x + (int)g_logo->width;
+        int logo_y1 = g_logo_y + (int)g_logo->height;
+        if (x0 < logo_x1 && x1 > g_logo_x && y0 < logo_y1 && y1 > g_logo_y)
+        {
+            wm_draw_logo();
+        }
+    }
+
     // Mark cleared region as dirty
     wm_add_dirty_rect(x0, y0, row_width, row_height);
+}
+
+// Draw the desktop logo to the backbuffer (top-right corner)
+static void wm_draw_logo(void)
+{
+    if (!g_logo || !g_logo->pixels || !g_backbuffer) return;
+
+    int logo_w = (int)g_logo->width;
+    int logo_h = (int)g_logo->height;
+
+    // Clamp to screen bounds
+    int x0 = g_logo_x;
+    int y0 = g_logo_y;
+    int x1 = x0 + logo_w;
+    int y1 = y0 + logo_h;
+
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int)g_mode.width) x1 = (int)g_mode.width;
+    if (y1 > (int)g_mode.height) y1 = (int)g_mode.height;
+
+    int draw_w = x1 - x0;
+    int draw_h = y1 - y0;
+    if (draw_w <= 0 || draw_h <= 0) return;
+
+    // Offset into source image if x0/y0 were clamped
+    int src_x = x0 - g_logo_x;
+    int src_y = y0 - g_logo_y;
+
+    for (int y = 0; y < draw_h; y++)
+    {
+        uint32_t *dst = g_backbuffer + (size_t)(y0 + y) * g_backbuffer_stride + x0;
+        uint32_t *src = g_logo->pixels + (size_t)(src_y + y) * logo_w + src_x;
+
+        for (int x = 0; x < draw_w; x++)
+        {
+            uint32_t pixel = src[x];
+            uint8_t alpha = (pixel >> 24) & 0xFF;
+
+            if (alpha == 0xFF)
+            {
+                // Fully opaque
+                dst[x] = pixel;
+            }
+            else if (alpha > 0)
+            {
+                // Alpha blend
+                uint32_t bg = dst[x];
+                uint32_t inv = 255 - alpha;
+
+                uint32_t r = (((pixel >> 16) & 0xFF) * alpha + ((bg >> 16) & 0xFF) * inv) / 255;
+                uint32_t g = (((pixel >> 8) & 0xFF) * alpha + ((bg >> 8) & 0xFF) * inv) / 255;
+                uint32_t b = ((pixel & 0xFF) * alpha + (bg & 0xFF) * inv) / 255;
+
+                dst[x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+            // alpha == 0: transparent, leave background
+        }
+    }
+}
+
+// Draw the mouse cursor at the current position
+static void wm_draw_cursor(void)
+{
+    const cursor_t *cursor = theme_get_cursor(&g_cursor_theme, g_current_cursor);
+    if (!cursor || !cursor->image || !g_backbuffer) return;
+
+    tga_image_t *img = cursor->image;
+    int cursor_w = (int)img->width;
+    int cursor_h = (int)img->height;
+
+    // Calculate draw position with hotspot offset
+    int draw_x = g_mouse_x - cursor->hotspot_x;
+    int draw_y = g_mouse_y - cursor->hotspot_y;
+
+    // Clamp to screen bounds
+    int x0 = draw_x;
+    int y0 = draw_y;
+    int x1 = draw_x + cursor_w;
+    int y1 = draw_y + cursor_h;
+
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int)g_mode.width) x1 = (int)g_mode.width;
+    if (y1 > (int)g_mode.height) y1 = (int)g_mode.height;
+
+    int draw_w = x1 - x0;
+    int draw_h = y1 - y0;
+    if (draw_w <= 0 || draw_h <= 0) return;
+
+    // Offset into source image if x0/y0 were clamped
+    int src_x = x0 - draw_x;
+    int src_y = y0 - draw_y;
+
+    for (int y = 0; y < draw_h; y++)
+    {
+        uint32_t *dst = g_backbuffer + (size_t)(y0 + y) * g_backbuffer_stride + x0;
+        uint32_t *src = img->pixels + (size_t)(src_y + y) * cursor_w + src_x;
+
+        for (int x = 0; x < draw_w; x++)
+        {
+            uint32_t pixel = src[x];
+            uint8_t alpha = (pixel >> 24) & 0xFF;
+
+            if (alpha == 0xFF)
+            {
+                dst[x] = pixel;
+            }
+            else if (alpha > 0)
+            {
+                uint32_t bg = dst[x];
+                uint32_t inv = 255 - alpha;
+
+                uint32_t r = (((pixel >> 16) & 0xFF) * alpha + ((bg >> 16) & 0xFF) * inv) / 255;
+                uint32_t g = (((pixel >> 8) & 0xFF) * alpha + ((bg >> 8) & 0xFF) * inv) / 255;
+                uint32_t b = ((pixel & 0xFF) * alpha + (bg & 0xFF) * inv) / 255;
+
+                dst[x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+}
+
+// Update mouse position and mark areas dirty
+static void wm_update_mouse(void)
+{
+    // Get current mouse position from kernel
+    system_mouse_get_pos(&g_mouse_x, &g_mouse_y);
+
+    // Check if mouse moved
+    if (g_mouse_x != g_prev_mouse_x || g_mouse_y != g_prev_mouse_y)
+    {
+        const cursor_t *cursor = theme_get_cursor(&g_cursor_theme, g_current_cursor);
+        int cursor_w = cursor && cursor->image ? (int)cursor->image->width : 16;
+        int cursor_h = cursor && cursor->image ? (int)cursor->image->height : 16;
+        int hotspot_x = cursor ? cursor->hotspot_x : 0;
+        int hotspot_y = cursor ? cursor->hotspot_y : 0;
+
+        // Clear old cursor position (restore background)
+        if (g_prev_mouse_x >= 0)
+        {
+            wm_clear_region(g_prev_mouse_x - hotspot_x, g_prev_mouse_y - hotspot_y,
+                            cursor_w, cursor_h);
+        }
+
+        // Mark new cursor position as dirty
+        wm_add_dirty_rect(g_mouse_x - hotspot_x, g_mouse_y - hotspot_y,
+                          cursor_w, cursor_h);
+
+        g_prev_mouse_x = g_mouse_x;
+        g_prev_mouse_y = g_mouse_y;
+        g_needs_redraw = 1;
+    }
 }
 
 // Refresh only focus-related borders to avoid full redraws.
@@ -299,6 +647,9 @@ static void wm_redraw_focus_dirty(void)
         dwm_msg_t msg = {0};
         msg.window_id = g_prev_focus->id;
         wm_draw_window(&msg);
+        wm_add_dirty_rect(g_prev_focus->x - 2, g_prev_focus->y - 2,
+                          (int)g_prev_focus->width + 2 + 2 + 5 + 2,
+                          (int)g_prev_focus->height + 2 + 2 + 5 + 2);
     }
 
     if (g_focused)
@@ -306,6 +657,9 @@ static void wm_redraw_focus_dirty(void)
         dwm_msg_t msg = {0};
         msg.window_id = g_focused->id;
         wm_draw_window(&msg);
+        wm_add_dirty_rect(g_focused->x - 2, g_focused->y - 2,
+                          (int)g_focused->width + 2 + 2 + 5 + 2,
+                          (int)g_focused->height + 2 + 2 + 5 + 2);
     }
 
     g_focus_dirty = 0;
@@ -617,6 +971,7 @@ static void wm_dispatch_key_events(void)
     {
         if (!g_focused)
         {
+            printf("[WM] key event but no focused window\n");
             continue;
         }
 
@@ -628,7 +983,11 @@ static void wm_dispatch_key_events(void)
         ev_msg.event.key_pressed = kev.pressed;
         ev_msg.event.modifiers = kev.modifiers;  // Pass modifier flags to client
 
-        send_message(g_focused->mailbox, &ev_msg, sizeof(ev_msg));
+        int rc = send_message(g_focused->mailbox, &ev_msg, sizeof(ev_msg));
+        if (rc < 0)
+        {
+            printf("[WM] send_message failed rc=%d mailbox=%d\n", rc, g_focused->mailbox);
+        }
     }
 }
 
@@ -657,6 +1016,26 @@ int main(void)
     }
     g_backbuffer = g_buffers[g_active_fb];
 
+    // Load desktop logo
+    g_logo = tga_load("/system/graphics/Logo.tga");
+    if (g_logo)
+    {
+        // Position in top-right corner with 10px margin
+        g_logo_x = (int)g_mode.width - (int)g_logo->width - 10;
+        g_logo_y = 10;
+    }
+
+    // Load cursor theme
+    if (theme_load(&g_cursor_theme, "/system/themes/default.theme") < 0)
+    {
+        // Theme load failed, but we can continue without cursors
+    }
+
+    // Set mouse bounds and center cursor
+    system_mouse_set_bounds((int)g_mode.width, (int)g_mode.height);
+    system_mouse_set_pos((int)g_mode.width / 2, (int)g_mode.height / 2);
+    g_mouse_x = (int)g_mode.width / 2;
+    g_mouse_y = (int)g_mode.height / 2;
 
     g_mailbox = create_message_channel(DWM_MAILBOX_ID);
 
@@ -684,7 +1063,19 @@ int main(void)
         {
             *dst++ = bg;
         }
+
+        // Draw logo to this buffer
+        g_backbuffer = g_buffers[b];
+        wm_draw_logo();
     }
+    g_backbuffer = g_buffers[g_active_fb];
+
+    // Initialize previous mouse position for dirty tracking
+    g_prev_mouse_x = g_mouse_x;
+    g_prev_mouse_y = g_mouse_y;
+
+    // Draw initial cursor
+    wm_draw_cursor();
 
     // Initial full-screen present
     system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
@@ -730,6 +1121,9 @@ int main(void)
                 }
             }
         }
+
+        // Update mouse position and check for movement
+        wm_update_mouse();
 
         // Flush any pending redraw (either from messages or timeout)
         if (g_needs_redraw)

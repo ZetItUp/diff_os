@@ -1,0 +1,56 @@
+# DiffOS Default Cursor Theme
+# Format: INI-style with [section] headers and key=value pairs
+
+[theme]
+name=Default
+
+[cursor.normal]
+path=/system/graphics/mouse_pointer.tga
+hotspot_x=0
+hotspot_y=0
+
+# Future cursor types (uncomment and add paths when images are available)
+# [cursor.resize_h]
+# path=/system/graphics/cursors/resize_h.tga
+# hotspot_x=8
+# hotspot_y=8
+
+# [cursor.resize_v]
+# path=/system/graphics/cursors/resize_v.tga
+# hotspot_x=8
+# hotspot_y=8
+
+# [cursor.resize_diag_l]
+# path=/system/graphics/cursors/resize_nwse.tga
+# hotspot_x=8
+# hotspot_y=8
+
+# [cursor.resize_diag_r]
+# path=/system/graphics/cursors/resize_nesw.tga
+# hotspot_x=8
+# hotspot_y=8
+
+# [cursor.move]
+# path=/system/graphics/cursors/move.tga
+# hotspot_x=8
+# hotspot_y=8
+
+# [cursor.text]
+# path=/system/graphics/cursors/ibeam.tga
+# hotspot_x=4
+# hotspot_y=8
+
+# [cursor.hand]
+# path=/system/graphics/cursors/hand.tga
+# hotspot_x=5
+# hotspot_y=0
+
+# [cursor.wait]
+# path=/system/graphics/cursors/wait.tga
+# hotspot_x=8
+# hotspot_y=8
+
+# [cursor.crosshair]
+# path=/system/graphics/cursors/crosshair.tga
+# hotspot_x=8
+# hotspot_y=8
