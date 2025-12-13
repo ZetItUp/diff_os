@@ -178,6 +178,13 @@ static void process_cleanup_resources(process_t *p)
         tty_destroy(p->tty_in);
         p->tty_in = NULL;
     }
+
+    if (p->resources_kernel)
+    {
+        kfree(p->resources_kernel);
+        p->resources_kernel = NULL;
+        p->resources_kernel_size = 0;
+    }
 }
 
 // Destroy process and free resources (kernel side only)
@@ -235,7 +242,7 @@ static void process_link(process_t *p)
     proc_list_lock(&f);
 
     p->next = g_all_head;
-    g_all_head = p;
+        g_all_head = p;
 
     proc_list_unlock(f);
 }
@@ -617,6 +624,35 @@ int process_pid(const process_t *p)
     }
 
     return p->pid;
+}
+
+// Copy embedded resources of a process into a user buffer. If user_buf is NULL or buf_len==0,
+// returns the size needed (or 0 if none). Returns negative on error.
+int system_process_get_resources(int pid, void *user_buf, uint32_t buf_len)
+{
+    process_t *p = process_find_by_pid(pid);
+    if (!p || !p->resources_kernel || p->resources_kernel_size == 0)
+    {
+        return 0;
+    }
+
+    uint32_t sz = p->resources_kernel_size;
+    if (!user_buf || buf_len == 0)
+    {
+        return (int)sz;
+    }
+
+    if (buf_len < sz)
+    {
+        return -2;
+    }
+
+    if (copy_to_user(user_buf, p->resources_kernel, sz) != 0)
+    {
+        return -3;
+    }
+
+    return (int)sz;
 }
 
 // Get CR3 of a process

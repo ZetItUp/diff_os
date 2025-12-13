@@ -760,6 +760,11 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_MESSAGE_GET_OWNER:
+        {
+            ret = system_msg_owner_pid(arg0);
+            break;
+        }
         case SYSTEM_SHARED_MEMORY_CREATE:
         {
             ret = shared_memory_create((uint32_t)arg0);
@@ -843,6 +848,11 @@ int system_call_dispatch(struct syscall_frame *f)
             // arg0 = channel_id, arg1 = buffer, arg2 = buf_len, arg3 = timeout_ms
             ret = system_msg_recv_timeout(arg0, (void*)arg1, (uint32_t)arg2, (uint32_t)arg3);
 
+            break;
+        }
+        case SYSTEM_PROCESS_GET_RESOURCES:
+        {
+            ret = system_process_get_resources(arg0, (void *)arg1, (uint32_t)arg2);
             break;
         }
         case SYSTEM_MOUSE_GET_POS:

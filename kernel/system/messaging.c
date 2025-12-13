@@ -341,6 +341,22 @@ int system_msg_try_recv(int channel_id, void *buffer, uint32_t buf_len)
     return (int)msg_len;
 }
 
+int system_msg_owner_pid(int channel_id)
+{
+    if (channel_id < 0 || channel_id >= MESSAGES_MAX_CHANNELS)
+    {
+        return -1;
+    }
+
+    msg_channel_t *channel = &g_channels[channel_id];
+    if (!channel->used)
+    {
+        return -1;
+    }
+
+    return channel->owner_pid;
+}
+
 void messaging_cleanup_process(int pid)
 {
     for (int i = 0; i < MESSAGES_MAX_CHANNELS; i++)

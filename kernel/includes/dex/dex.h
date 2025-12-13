@@ -7,6 +7,7 @@
 #define DEX_MAGIC           0x58454400  // "DEX\0"
 #define DEX_VERSION_MAJOR   1
 #define DEX_VERSION_MINOR   0
+#define DEX_RS_MAGIC        0x53525845  // "DEXRS" truncated (EXRS little-endian)
 
 #define DEX_ABS32     0
 #define DEX_PC32      2
@@ -37,7 +38,11 @@ typedef struct
     uint32_t strtab_offset;             // Strings Table Offset
     uint32_t strtab_size;               // Strings Table Size
 
-    uint32_t reserved[8];               // Reserved (In case it will be needed in the future)
+    /* Optional resource blob (e.g., .rs data) */
+    uint32_t resources_offset;          // Offset to the start of embedded resources (0 = none)
+    uint32_t resources_size;            // Size in bytes of the embedded resources blob
+
+    uint32_t reserved[6];               // Reserved (In case it will be needed in the future)
 } __attribute__((packed)) dex_header_t;
 
 
@@ -70,6 +75,8 @@ typedef struct
     dex_header_t *header;
     void (*dex_entry)(void);
     uint32_t image_size;
+    uint8_t *resources_base;            // Optional resources blob mapped into user VA (NULL if none)
+    uint32_t resources_size;            // Size of embedded resources
 } dex_executable_t;
 
 int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **argv,

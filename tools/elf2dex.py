@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import argparse
+import os
 import struct
 import sys
 
 DEX_MAGIC = 0x58454400
 DEX_MAJ = 1
 DEX_MIN = 0
+DEX_RS_MAGIC = 0x53525845  # 'DEXRS' truncated to 4 bytes (EXRS little-endian)
 
 DEX_ABS32 = 0
 DEX_PC32 = 2
@@ -219,8 +221,45 @@ def load_import_map(path):
     return mapping
 
 
+def resolve_program_dir(elffile):
+    elf_dir = os.path.abspath(os.path.dirname(elffile))
+    base_dir = elf_dir
+    if os.path.basename(elf_dir) == "build":
+        base_dir = os.path.abspath(os.path.join(elf_dir, os.pardir))
+    candidates = [base_dir, elf_dir]
+    for d in candidates:
+        name = os.path.basename(d)
+        candidate = os.path.join(d, f"{name}.rs")
+        if os.path.isfile(candidate):
+            return d, name, candidate
+    return base_dir, os.path.basename(base_dir), None
+
+
 def build_dex(dumpfile, elffile, outfile, default_exl, import_map_path=None, forced_entry=None, verbose=False):
     sections, symbols, relocs = parse_dump(dumpfile)
+
+    # Build resource blob (rs) for this program
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    program_dir, program_name, rs_path = resolve_program_dir(elffile)
+    fallback_rs = os.path.join(repo_root, "programs", "default.rs")
+    if rs_path is None:
+        rs_path = fallback_rs
+    sys.path.append(os.path.dirname(__file__))
+    import rsbuild  # noqa: F401
+    from rsbuild import parse_rs, build_blob, debug_dump
+
+    with open(rs_path, "r", encoding="utf-8") as f:
+        rs_lines = f.readlines()
+    rs_entries = parse_rs(rs_lines, program_name)
+    rs_blob, rs_strtab_off, rs_strtab_sz, rs_data_off = build_blob(rs_entries)
+    # Persist the blob alongside the program for visibility/debugging.
+    rs_out_path = os.path.join(program_dir, f"{program_name}.rsbin")
+    try:
+        with open(rs_out_path, "wb") as rfo:
+            rfo.write(rs_blob)
+    except OSError as e:
+        print(f"[RSBUILD] Warning: failed to write {rs_out_path}: {e}")
+    debug_dump(rs_entries, rs_blob, rs_out_path, rs_strtab_off, rs_strtab_sz, rs_data_off)
 
     sec_list = sorted(sections.values(), key=lambda s: s["off"])
     text_buf = bytearray()
@@ -560,6 +599,9 @@ def build_dex(dumpfile, elffile, outfile, default_exl, import_map_path=None, for
     strtab_b = strtab.bytes()
     strtab_off = cur
     cur += len(strtab_b)
+    resources_off = align_up(cur, FILE_ALIGN)
+    resources_size = len(rs_blob)
+    cur = resources_off + resources_size
 
     hdr = bytearray(HDR_SIZE)
 
@@ -585,6 +627,8 @@ def build_dex(dumpfile, elffile, outfile, default_exl, import_map_path=None, for
     w32(0x40, len(dex_symbols))
     w32(0x44, strtab_off)
     w32(0x48, len(strtab_b))
+    w32(0x4C, resources_off)
+    w32(0x50, resources_size)
 
     def pad_to(f, ofs):
         curpos = f.tell()
@@ -611,6 +655,9 @@ def build_dex(dumpfile, elffile, outfile, default_exl, import_map_path=None, for
             f.write(struct.pack("<III", name_off, value_off, stype))
         pad_to(f, strtab_off)
         f.write(strtab_b)
+        if resources_size:
+            pad_to(f, resources_off)
+            f.write(rs_blob)
 
     if verbose:
         print("=== DEX HEADER VALUES ===")
@@ -622,6 +669,10 @@ def build_dex(dumpfile, elffile, outfile, default_exl, import_map_path=None, for
         print(f"reloc_off      = 0x{reloc_off:08x} (cnt={len(reloc_table)})")
         print(f"symtab_off     = 0x{symtab_off:08x} (cnt={len(dex_symbols)})")
         print(f"strtab_off     = 0x{strtab_off:08x} (sz={len(strtab_b)})")
+        print(f"resources_off  = 0x{resources_off:08x} (sz={resources_size})")
+        if resources_size:
+            print(f"resources_magic= 0x{DEX_RS_MAGIC:08x} entries={len(rs_entries)} rsbin_out={rs_out_path}")
+            print(f"rs_strtab_off  = {rs_strtab_off} rs_strtab_sz={rs_strtab_sz} rs_data_off={rs_data_off}")
         print(f"entry_offset   = 0x{entry_off:08x}")
 
 

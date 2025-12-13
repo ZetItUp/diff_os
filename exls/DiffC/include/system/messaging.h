@@ -9,3 +9,4 @@ int send_message(int id, const void *buffer, uint32_t len);
 int receive_message(int id, void *buffer, uint32_t buffer_len);
 int receive_message_timeout(int id, void *buffer, uint32_t buffer_len, uint32_t timeout_ms);
 int try_receive_message(int id, void *buffer, uint32_t buffer_len);
+int message_channel_owner(int id); // returns pid or -1

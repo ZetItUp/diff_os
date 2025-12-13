@@ -64,6 +64,12 @@ typedef struct process
     struct tty *tty_in;
     uint8_t   tty_attr;
     uint8_t   resources_cleaned;
+
+    // Embedded resources (from DEX header)
+    uintptr_t resources_base;   // User VA of embedded resource blob (0 if none)
+    uint32_t  resources_size;   // Size of embedded resources blob
+    uint8_t  *resources_kernel; // Kernel copy of resources (NULL if none)
+    uint32_t  resources_kernel_size;
 } process_t;
 
 typedef struct user_boot_args
@@ -110,3 +116,4 @@ void process_set_exec_root(process_t *p, const char *abs_dir);
 void process_set_user_stack(process_t *p, uintptr_t base, uintptr_t top, size_t size);
 void process_set_kernel_stack(process_t *p, uintptr_t base, uintptr_t top, size_t size);
 int system_thread_create_user(uintptr_t user_eip, uintptr_t user_esp, size_t kstack_bytes);
+int system_process_get_resources(int pid, void *user_buf, uint32_t buf_len);

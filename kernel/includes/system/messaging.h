@@ -34,4 +34,5 @@ int system_msg_send(int chan_id, const void *buffer, uint32_t len);
 int system_msg_recv(int chan_id, void *buffer, uint32_t buf_len);
 int system_msg_recv_timeout(int chan_id, void *buffer, uint32_t buf_len, uint32_t timeout_ms);
 int system_msg_try_recv(int chan_id, void *buffer, uint32_t buf_len);
+int system_msg_owner_pid(int channel_id);     // Return owner pid of channel or -1 if invalid
 void messaging_cleanup_process(int pid);

@@ -29,3 +29,8 @@ int try_receive_message(int id, void *buffer, uint32_t buffer_len)
 {
     return system_message_try_receive(id, buffer, buffer_len);
 }
+
+int message_channel_owner(int id)
+{
+    return system_message_get_owner(id);
+}

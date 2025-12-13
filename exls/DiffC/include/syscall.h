@@ -79,6 +79,8 @@ enum
     SYSTEM_MOUSE_GET_BUTTONS_DOWN = 65,
     SYSTEM_MOUSE_GET_BUTTONS_PRESSED = 66,
     SYSTEM_MOUSE_GET_BUTTONS_CLICKED = 67,
+    SYSTEM_MESSAGE_GET_OWNER = 68,
+    SYSTEM_PROCESS_GET_RESOURCES = 69,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -448,6 +450,16 @@ static inline int system_message_receive(int channel_id, void *buffer, uint32_t 
 static inline int system_message_try_receive(int channel_id, void *buffer, uint32_t buf_len)
 {
     return do_sys(SYSTEM_MESSAGE_TRY_RECEIVE, channel_id, (int)(uintptr_t)buffer, (int)buf_len, 0);
+}
+
+static inline int system_message_get_owner(int channel_id)
+{
+    return do_sys(SYSTEM_MESSAGE_GET_OWNER, channel_id, 0, 0, 0);
+}
+
+static inline int system_process_get_resources(int pid, void *buffer, uint32_t buf_len)
+{
+    return do_sys(SYSTEM_PROCESS_GET_RESOURCES, pid, (int)(uintptr_t)buffer, (int)buf_len, 0);
 }
 
 static inline int system_message_receive_timeout(int channel_id, void *buffer, uint32_t buf_len, uint32_t timeout_ms)

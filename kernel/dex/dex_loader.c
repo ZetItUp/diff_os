@@ -585,6 +585,8 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
     uint32_t max_end;
     uint32_t tmp;
     uint32_t total_sz;
+    uint32_t resources_sz;
+    uint32_t resources_off;
     uint8_t *image;
     const dex_import_t *imp;
     const dex_reloc_t *rel;
@@ -626,7 +628,9 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
     if (!in_range(hdr->text_offset,   hdr->text_size,   (uint32_t)file_size) ||
         !in_range(hdr->rodata_offset, hdr->rodata_size, (uint32_t)file_size) ||
         !in_range(hdr->data_offset,   hdr->data_size,   (uint32_t)file_size) ||
-        !in_range(hdr->strtab_offset, hdr->strtab_size, (uint32_t)file_size))
+        !in_range(hdr->strtab_offset, hdr->strtab_size, (uint32_t)file_size) ||
+        (hdr->resources_size &&
+         !in_range(hdr->resources_offset, hdr->resources_size, (uint32_t)file_size)))
     {
         DEX_DBG("[DEX] Section offsets or sizes out of file\n");
 
@@ -644,15 +648,18 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
     }
 
     // Cache sizes and compute total image span
-    text_sz   = hdr->text_size;
-    ro_sz     = hdr->rodata_size;
-    data_sz   = hdr->data_size;
-    bss_sz    = hdr->bss_size;
-    entry_off = hdr->entry_offset;
+    text_sz      = hdr->text_size;
+    ro_sz        = hdr->rodata_size;
+    data_sz      = hdr->data_size;
+    bss_sz       = hdr->bss_size;
+    entry_off    = hdr->entry_offset;
+    resources_sz = hdr->resources_size;
+    resources_off = hdr->resources_offset;
 
     max_end = hdr->data_offset + data_sz + bss_sz;
     tmp = hdr->rodata_offset + ro_sz; if (tmp > max_end) max_end = tmp;
     tmp = hdr->text_offset   + text_sz; if (tmp > max_end) max_end = tmp;
+    tmp = resources_off + resources_sz; if (tmp > max_end) max_end = tmp;
     tmp = entry_off + 16u; if (tmp > max_end) max_end = tmp;
 
     total_sz = PAGE_ALIGN_UP(max_end);
@@ -722,6 +729,19 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
         memset(image + hdr->data_offset + data_sz, 0, bss_sz);
     }
 
+    // Copy resources blob if present
+    if (resources_sz)
+    {
+        if (copy_to_user(image + resources_off,
+                         (const uint8_t *)file_data + resources_off,
+                         resources_sz) != 0)
+        {
+            DEX_DBG("[DEX] Failed to copy resources blob to user image\n");
+            ufree(image, total_sz);
+            return -23;
+        }
+    }
+
     // Validate table windows
     if ((hdr->import_table_count &&
          !in_range(hdr->import_table_offset,
@@ -756,6 +776,7 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
     DEX_DBG(".bss  sz=%u\n", hdr->bss_size);
     DEX_DBG("import off=0x%08x cnt=%u\n", hdr->import_table_offset, hdr->import_table_count);
     DEX_DBG("reloc  off=0x%08x cnt=%u\n", hdr->reloc_table_offset,  hdr->reloc_table_count);
+    DEX_DBG("rsrc  off=0x%08x sz=%u\n", hdr->resources_offset, hdr->resources_size);
     DEX_DBG("========================\n");
 
     // Apply relocations and imports
@@ -796,10 +817,12 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
     paging_set_user((uint32_t)image, total_sz);
 
     // Fill output
-    out->image_base = image;
-    out->header     = (dex_header_t *)file_data;
-    out->dex_entry  = (void (*)(void))((uint32_t)image + entry_off);
-    out->image_size = total_sz;
+    out->image_base     = image;
+    out->header         = (dex_header_t *)file_data;
+    out->dex_entry      = (void (*)(void))((uint32_t)image + entry_off);
+    out->image_size     = total_sz;
+    out->resources_base = resources_sz ? (image + resources_off) : NULL;
+    out->resources_size = resources_sz;
 
     DEX_DBG("[DEX] entry_va=0x%08x text_off=0x%08x text_sz=0x%08x\n",
            (uint32_t)out->dex_entry,
@@ -1164,6 +1187,24 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
 
     DEX_DBG("[DEX] PID=%d heap_base=%p heap_end=%p heap_max=%p\n",
            pid, (void *)p->heap_base, (void *)p->heap_end, (void *)p->heap_max);
+
+    // Stash embedded resources info on the process for later lookup
+    p->resources_base = (uintptr_t)dex.resources_base;
+    p->resources_size = dex.resources_size;
+
+    // Also keep a kernel copy of the resources (if present) for cross-process queries
+    if (dex.header && dex.header->resources_size &&
+        dex.header->resources_offset + dex.header->resources_size <= fe->file_size_bytes)
+    {
+        uint32_t rsz = dex.header->resources_size;
+        uint8_t *kres = (uint8_t *)kmalloc(rsz);
+        if (kres)
+        {
+            memcpy(kres, buffer + dex.header->resources_offset, rsz);
+            p->resources_kernel = kres;
+            p->resources_kernel_size = rsz;
+        }
+    }
 
     kfree(buffer);
 
