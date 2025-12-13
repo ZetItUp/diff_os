@@ -1,6 +1,7 @@
 .*
 !.gitignore
 *.o
+*.rsbin
 *.bat
 *.bin
 *.iso
