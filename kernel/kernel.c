@@ -54,6 +54,7 @@ void display_sys_info(void);
 void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
 {
     serial_init();
+    serial_write("[KERNEL] kmain entered\n");
 
     set_color(MAKE_COLOR(foreground, background));
     clear();

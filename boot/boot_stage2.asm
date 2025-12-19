@@ -66,7 +66,8 @@ entry_stage2:
     jnz .get_e820
 
 .done_e820:
-    mov [mem_entry_count], si
+    mov word [mem_entry_count], si
+    mov word [mem_entry_count+2], 0
 
 start_loader:
     ; Read superblock, 1 sector
@@ -332,6 +333,16 @@ init_pm:
     mov gs, ax
     mov ss, ax
 
+    ; Ensure FPU/SSE is usable (avoid early #UD/#NM before kernel sets this up)
+    mov eax, cr0
+    and eax, 0xFFFFFFFB                  ; clear EM
+    or  eax, 0x00000022                  ; set MP and NE
+    mov cr0, eax
+    mov eax, cr4
+    or  eax, 0x00000600                  ; set OSFXSR and OSXMMEXCPT
+    mov cr4, eax
+    fninit
+
     mov edi, 0x8F000                    ; Beginning of stack (just below 0x7FFFF)
     mov ecx, 0x400                      ; 4KB = 1024 dword (4 * 1024 = 4096 bytes)
     xor eax, eax
@@ -515,4 +526,3 @@ kernel_sectors dd 0
 ; Messages
 msg_load_fail   db 'ERROR: Kernel missing',0
 msg_halt        db 'System Halted',0
-

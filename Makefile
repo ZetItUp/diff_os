@@ -8,6 +8,20 @@ NASM = nasm
 # Choose which QEMU to use (comment/uncomment):
 QEMU = qemu-system-i386
 
+# QEMU runtime config:
+# - Default uses a GUI display (if available).
+# - Use `HEADLESS=1 make run` / `HEADLESS=1 make run-cd` for serial-only output.
+QEMU_DISPLAY ?= default,show-cursor=off
+QEMU_MONITOR ?= stdio
+QEMU_SERIAL  ?= file:serial.log
+QEMU_EXTRA   ?=
+
+ifeq ($(HEADLESS),1)
+QEMU_MONITOR = none
+QEMU_SERIAL  = mon:stdio
+QEMU_EXTRA   = -nographic
+endif
+
 # Build Directories
 BUILD = build
 OBJ = $(BUILD)/obj
@@ -34,9 +48,13 @@ endif
 
 .PRECIOUS: %.o %.elf %.bin %.patched
 
-# Source Files
+# Source Files - Normal HDD boot
 BOOT_STAGE1 = boot/boot.asm
 BOOT_STAGE2 = boot/boot_stage2.asm
+
+# Source Files - CD-ROM boot
+BOOT_CD_STAGE1 = boot/boot_cd.asm
+BOOT_CD_STAGE2 = boot/boot_stage2_cd.asm
 
 ASM_SRC = \
 	kernel/arch/x86_64/cpu/isr_stub.asm \
@@ -107,8 +125,9 @@ KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))
 # Targets
 TARGET = $(BUILD)/diffos.img
 ISO = $(BUILD)/diffos.iso
+CD_ISO = $(BUILD)/diffos_cd.iso
 
-.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean iso vdi vmdk graphics
+.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean iso vdi vmdk graphics cd run-cd
 
 all: tools drivers $(ISO)
 
@@ -169,6 +188,27 @@ $(BUILD)/boot_stage2.bin: $(BOOT_STAGE2) $(BUILD)/kernel_sizes.inc
 	@echo "[ASM] Building Stage 2 loader"
 	@$(NASM) $(NASMFLAGS) $< -o $@
 	@echo "[ASM] Stage 2 loader built: $@"
+
+# CD-ROM Bootloader Stages
+$(BUILD)/boot_cd_stage1.bin: $(BOOT_CD_STAGE1) $(BUILD)/boot_stage2_cd.bin
+	@mkdir -p $(BUILD)
+	@echo "[ASM] Building CD Stage 1 bootloader"
+	@stage2_sectors=$$(expr \( $$(stat -c %s $(BUILD)/boot_stage2_cd.bin) + 2047 \) / 2048); \
+	$(NASM) $(NASMFLAGS) -D STAGE2_SECTORS=$$stage2_sectors $< -o $@
+	@echo "[ASM] CD Bootloader Stage 1 built: $@"
+
+$(BUILD)/boot_stage2_cd.bin: $(BOOT_CD_STAGE2)
+	@mkdir -p $(BUILD)
+	@echo "[ASM] Building CD Stage 2 loader"
+	@$(NASM) $(NASMFLAGS) $< -o $@
+	@echo "[ASM] CD Stage 2 loader built: $@"
+
+$(BUILD)/boot_cd.bin: $(BUILD)/boot_cd_stage1.bin $(BUILD)/boot_stage2_cd.bin
+	@echo "[CD] Packing El Torito boot image (stage1 + stage2)"
+	@dd if=$(BUILD)/boot_cd_stage1.bin of=$(BUILD)/boot_cd_stage1.padded.bin bs=2048 conv=sync status=none
+	@dd if=$(BUILD)/boot_stage2_cd.bin of=$(BUILD)/boot_stage2_cd.padded.bin bs=2048 conv=sync status=none
+	@cat $(BUILD)/boot_cd_stage1.padded.bin $(BUILD)/boot_stage2_cd.padded.bin > $@
+	@echo "[CD] Boot image built: $@"
 
 # Kernel ELF
 $(BUILD)/kernel.elf: $(KERNEL_OBJ) $(ASM_OBJ) linker.ld
@@ -256,14 +296,15 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 run: tools drivers $(TARGET)
 	@echo "[QEMU] Starting OS"
 	$(QEMU) \
-		-display default,show-cursor=off \
-		-monitor stdio \
+		$(if $(HEADLESS),,$(if $(QEMU_DISPLAY),-display $(QEMU_DISPLAY),)) \
+		-monitor $(QEMU_MONITOR) \
 		-m 64M \
-		-serial file:serial.log \
+		-serial $(QEMU_SERIAL) \
 		-no-reboot -no-shutdown \
 		-d guest_errors,trace:ioport_* -D qemu.log \
 		-boot c \
 		-hda $(TARGET) \
+		$(QEMU_EXTRA) \
 		-chardev file,id=dbg,path=/home/zet/os/debugcon.log \
 		-device isa-debugcon,iobase=0xe9,chardev=dbg
 
@@ -273,6 +314,44 @@ debug: tools drivers $(TARGET)
 	@$(QEMU) -display default,show-cursor=off -monitor stdio -m 64M -vga std -boot c -hda $(TARGET) -s -S &
 	@echo "[GDB] Starting debugger"
 	@gdb -x 1kernel.gdb
+
+# CD-ROM ISO image (El Torito bootable)
+$(CD_ISO): tools exls graphics $(BUILD)/boot_cd.bin $(BUILD)/boot_stage2_cd.bin $(BUILD)/kernel.bin $(TARGET)
+	@echo "[CD] Creating bootable CD-ROM ISO"
+	@mkdir -p $(BUILD)/cdroot/boot
+	@cp $(BUILD)/boot_cd.bin $(BUILD)/cdroot/boot/
+	@cp $(BUILD)/boot_stage2_cd.bin $(BUILD)/cdroot/boot/
+	@cp $(TARGET) $(BUILD)/cdroot/diffos.img
+	@$(MKISOFS) -o $@ \
+		-b boot/boot_cd.bin \
+		-no-emul-boot \
+		-boot-load-size 12 \
+		-boot-info-table \
+		-V "DIFFOS" \
+		-publisher "DiffOS" \
+		-quiet \
+		$(BUILD)/cdroot
+	@rm -rf $(BUILD)/cdroot
+	@echo "[CD] Bootable CD-ROM ISO created: $@"
+
+# Build CD target
+cd: $(CD_ISO)
+
+# Run CD-ROM in QEMU
+run-cd: $(CD_ISO)
+	@echo "[QEMU] Starting OS from CD-ROM"
+	$(QEMU) \
+		$(if $(HEADLESS),,$(if $(QEMU_DISPLAY),-display $(QEMU_DISPLAY),)) \
+		-monitor $(QEMU_MONITOR) \
+		-m 64M \
+		-serial $(QEMU_SERIAL) \
+		-no-reboot -no-shutdown \
+		-d guest_errors,trace:ioport_* -D qemu.log \
+		-boot d \
+		-cdrom $(CD_ISO) \
+		$(QEMU_EXTRA) \
+		-chardev file,id=dbg,path=/home/zet/os/debugcon.log \
+		-device isa-debugcon,iobase=0xe9,chardev=dbg
 
 exls:
 	@dirs="$(EXL_SUBDIRS)"; \

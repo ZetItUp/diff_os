@@ -23,3 +23,8 @@ void serial_putc(char c)
     outb(COM1, (uint8_t)c);
 }
 
+void serial_write(const char* s)
+{
+    if (!s) return;
+    while (*s) serial_putc(*s++);
+}
