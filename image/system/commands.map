@@ -19,6 +19,7 @@ wrtest=/programs/writetest/writetest.dex
 gdterm=/programs/gdterm/gdterm.dex
 threadtest=/programs/threadtest/threadtest.dex
 fpstest=/programs/fpstest/fpstest.dex
+mousetest=/programs/mousetest/mousetest.dex
 
 # Games
 doom=/games/doom/doom.dex

@@ -30,6 +30,22 @@ typedef enum
     DIFF_EVENT_FOCUS_LOST
 } diff_event_type_t;
 
+typedef enum
+{
+    MOUSE_ACTION_MOVE = 0,
+    MOUSE_ACTION_DOWN,
+    MOUSE_ACTION_UP,
+    MOUSE_ACTION_CLICK,
+    MOUSE_ACTION_DBLCLICK
+} mouse_action_t;
+
+// Mouse button flags (matches kernel MOUSE_BTN_*)
+#ifndef MOUSE_BTN_LEFT
+#define MOUSE_BTN_LEFT   0x01
+#define MOUSE_BTN_RIGHT  0x02
+#define MOUSE_BTN_MIDDLE 0x04
+#endif
+
 // Modifier key flags (matches kernel KB_MOD_*)
 #define DIFF_MOD_SHIFT  0x01
 #define DIFF_MOD_CTRL   0x02
@@ -45,6 +61,8 @@ typedef struct
     int16_t mouse_x;
     int16_t mouse_y;
     uint8_t mouse_buttons;
+    uint8_t mouse_action;   // mouse_action_t
+    uint8_t mouse_button;   // MOUSE_BTN_* mask for the triggering button
 } diff_event_t;
 
 #define DWM_MAILBOX_ID  0x44574D31      // DWM1

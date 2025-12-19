@@ -84,8 +84,10 @@ static wm_window_t *g_focused = NULL;
 static void wm_draw_window(const dwm_msg_t *msg);
 static void wm_apply_window_resources(wm_window_t *window, int client_mailbox_channel);
 static void wm_draw_cursor(void);
-static void wm_update_mouse(void);
+static int wm_update_mouse(void);
+static void wm_dispatch_mouse_events(int moved);
 static void wm_get_decor_bounds(const wm_window_t *win, int *x, int *y, int *w, int *h);
+static wm_window_t *wm_find_window_at(int x, int y);
 
 // Video mode and backbuffer
 static video_mode_info_t g_mode;
@@ -105,6 +107,15 @@ static int g_mouse_x = 0;
 static int g_mouse_y = 0;
 static int g_prev_mouse_x = -1;
 static int g_prev_mouse_y = -1;
+static wm_window_t *g_mouse_capture = NULL;
+static uint8_t g_mouse_buttons_down = 0;
+static uint64_t g_last_click_ms[3] = {0, 0, 0};
+static int g_last_click_x[3] = {0, 0, 0};
+static int g_last_click_y[3] = {0, 0, 0};
+static uint32_t g_last_click_window_id[3] = {0, 0, 0};
+static wm_window_t *g_drag_window = NULL;
+static int g_drag_offset_x = 0;
+static int g_drag_offset_y = 0;
 
 // Window skin and title font
 static tga_image_t *g_window_skin = NULL;
@@ -118,6 +129,9 @@ static font_t *g_title_font = NULL;
 
 #define TITLE_PADDING_X 8
 #define TITLE_PADDING_Y 6
+
+#define DWM_DBLCLICK_MS    300
+#define DWM_DBLCLICK_DIST  4
 
 // Dirty rectangle tracking
 #define MAX_DIRTY_RECTS 16
@@ -336,6 +350,45 @@ static void wm_get_decor_bounds(const wm_window_t *win, int *x, int *y, int *w, 
     *y = min_y;
     *w = max_x - min_x;
     *h = max_y - min_y;
+}
+
+static wm_window_t *wm_find_window_at(int x, int y)
+{
+    for (wm_window_t *win = g_windows; win; win = win->next)
+    {
+        int wx, wy, ww, wh;
+        wm_get_decor_bounds(win, &wx, &wy, &ww, &wh);
+        if (x >= wx && x < wx + ww && y >= wy && y < wy + wh)
+        {
+            return win;
+        }
+    }
+
+    return NULL;
+}
+
+static int wm_point_in_titlebar(const wm_window_t *win, int x, int y)
+{
+    if (!win || !g_window_skin || !g_window_skin->pixels || !g_title_font)
+    {
+        return 0;
+    }
+
+    int fw = font_width(g_title_font);
+    int fh = font_height(g_title_font);
+    int title_w = (int)strlen(win->title) * fw + TITLE_PADDING_X;
+    int title_h = fh + TITLE_PADDING_Y;
+    int title_x = win->x;
+    if (title_x + title_w > (int)g_mode.width)
+    {
+        title_x = (int)g_mode.width - title_w;
+        if (title_x < 0) title_x = 0;
+    }
+    int title_y = win->y - title_h;
+    if (title_y < 0) title_y = 0;
+
+    return (x >= title_x && x < title_x + title_w &&
+            y >= title_y && y < title_y + title_h);
 }
 
 // Add a dirty rectangle (will be merged/clipped later)
@@ -750,14 +803,16 @@ static void wm_draw_cursor(void)
 }
 
 // Update mouse position and mark areas dirty
-static void wm_update_mouse(void)
+static int wm_update_mouse(void)
 {
+    int moved = 0;
     // Get current mouse position from kernel
     system_mouse_get_pos(&g_mouse_x, &g_mouse_y);
 
     // Check if mouse moved
     if (g_mouse_x != g_prev_mouse_x || g_mouse_y != g_prev_mouse_y)
     {
+        moved = 1;
         const cursor_t *cursor = theme_get_cursor(&g_cursor_theme, g_current_cursor);
         int cursor_w = cursor && cursor->image ? (int)cursor->image->width : 16;
         int cursor_h = cursor && cursor->image ? (int)cursor->image->height : 16;
@@ -779,6 +834,8 @@ static void wm_update_mouse(void)
         g_prev_mouse_y = g_mouse_y;
         g_needs_redraw = 1;
     }
+
+    return moved;
 }
 
 // Repaint focus-related window decorations.
@@ -1288,6 +1345,210 @@ static void wm_dispatch_key_events(void)
     }
 }
 
+static int wm_button_index(uint8_t button)
+{
+    if (button == MOUSE_BTN_LEFT) return 0;
+    if (button == MOUSE_BTN_RIGHT) return 1;
+    if (button == MOUSE_BTN_MIDDLE) return 2;
+    return -1;
+}
+
+static void wm_send_mouse_event(wm_window_t *window, uint8_t action, uint8_t button)
+{
+    if (!window)
+    {
+        return;
+    }
+
+    int rel_x = g_mouse_x - window->x;
+    int rel_y = g_mouse_y - window->y;
+    if (rel_x < -32768) rel_x = -32768;
+    if (rel_x > 32767) rel_x = 32767;
+    if (rel_y < -32768) rel_y = -32768;
+    if (rel_y > 32767) rel_y = 32767;
+
+    dwm_msg_t ev_msg = {0};
+    ev_msg.type = DWM_MSG_EVENT;
+    ev_msg.window_id = window->id;
+    ev_msg.event.type = DIFF_EVENT_MOUSE;
+    ev_msg.event.mouse_x = (int16_t)rel_x;
+    ev_msg.event.mouse_y = (int16_t)rel_y;
+    ev_msg.event.mouse_buttons = g_mouse_buttons_down;
+    ev_msg.event.mouse_action = action;
+    ev_msg.event.mouse_button = button;
+
+    int rc = send_message(window->mailbox, &ev_msg, sizeof(ev_msg));
+    if (rc < 0)
+    {
+        printf("[WM] send_message failed rc=%d mailbox=%d\n", rc, window->mailbox);
+    }
+}
+
+static void wm_dispatch_mouse_events(int moved)
+{
+    uint8_t pressed = system_mouse_get_buttons_pressed();
+    uint8_t released = system_mouse_get_buttons_clicked();
+
+    if (!moved && pressed == 0 && released == 0)
+    {
+        return;
+    }
+
+    wm_window_t *hover = wm_find_window_at(g_mouse_x, g_mouse_y);
+    wm_window_t *target = g_mouse_capture ? g_mouse_capture : hover;
+
+    if (moved)
+    {
+        if (g_drag_window)
+        {
+            int new_x = g_mouse_x - g_drag_offset_x;
+            int new_y = g_mouse_y - g_drag_offset_y;
+
+            if (new_x < 0) new_x = 0;
+            if (new_y < 0) new_y = 0;
+            if (new_x >= (int)g_mode.width) new_x = (int)g_mode.width - 1;
+            if (new_y >= (int)g_mode.height) new_y = (int)g_mode.height - 1;
+
+            if (new_x != g_drag_window->x || new_y != g_drag_window->y)
+            {
+                int old_x, old_y, old_w, old_h;
+                wm_get_decor_bounds(g_drag_window, &old_x, &old_y, &old_w, &old_h);
+                wm_clear_region(old_x, old_y, old_w, old_h);
+
+                g_drag_window->x = new_x;
+                g_drag_window->y = new_y;
+
+                int new_dx, new_dy, new_dw, new_dh;
+                wm_get_decor_bounds(g_drag_window, &new_dx, &new_dy, &new_dw, &new_dh);
+                wm_add_dirty_rect(new_dx, new_dy, new_dw, new_dh);
+                g_needs_redraw = 1;
+            }
+        }
+
+        if (target)
+        {
+            wm_send_mouse_event(target, MOUSE_ACTION_MOVE, 0);
+        }
+    }
+
+    if (pressed)
+    {
+        g_mouse_buttons_down |= pressed;
+
+        if (!g_mouse_capture)
+        {
+            g_mouse_capture = target;
+        }
+
+        if (target && g_focused != target)
+        {
+            wm_set_focus(target);
+        }
+
+        if (target && (pressed & MOUSE_BTN_LEFT) &&
+            wm_point_in_titlebar(target, g_mouse_x, g_mouse_y))
+        {
+            g_drag_window = target;
+            g_drag_offset_x = g_mouse_x - target->x;
+            g_drag_offset_y = g_mouse_y - target->y;
+        }
+
+        if (pressed & MOUSE_BTN_LEFT)
+        {
+            wm_send_mouse_event(target, MOUSE_ACTION_DOWN, MOUSE_BTN_LEFT);
+        }
+        if (pressed & MOUSE_BTN_RIGHT)
+        {
+            wm_send_mouse_event(target, MOUSE_ACTION_DOWN, MOUSE_BTN_RIGHT);
+        }
+        if (pressed & MOUSE_BTN_MIDDLE)
+        {
+            wm_send_mouse_event(target, MOUSE_ACTION_DOWN, MOUSE_BTN_MIDDLE);
+        }
+    }
+
+    if (released)
+    {
+        g_mouse_buttons_down &= (uint8_t)~released;
+
+        if (released & MOUSE_BTN_LEFT)
+        {
+            wm_send_mouse_event(target, MOUSE_ACTION_UP, MOUSE_BTN_LEFT);
+        }
+        if (released & MOUSE_BTN_RIGHT)
+        {
+            wm_send_mouse_event(target, MOUSE_ACTION_UP, MOUSE_BTN_RIGHT);
+        }
+        if (released & MOUSE_BTN_MIDDLE)
+        {
+            wm_send_mouse_event(target, MOUSE_ACTION_UP, MOUSE_BTN_MIDDLE);
+        }
+
+        if (target)
+        {
+            uint64_t now = monotonic_ms();
+
+            if (released & MOUSE_BTN_LEFT)
+            {
+                wm_send_mouse_event(target, MOUSE_ACTION_CLICK, MOUSE_BTN_LEFT);
+                int idx = wm_button_index(MOUSE_BTN_LEFT);
+                if (idx >= 0 &&
+                    now - g_last_click_ms[idx] <= DWM_DBLCLICK_MS &&
+                    g_last_click_window_id[idx] == target->id &&
+                    abs(g_mouse_x - g_last_click_x[idx]) <= DWM_DBLCLICK_DIST &&
+                    abs(g_mouse_y - g_last_click_y[idx]) <= DWM_DBLCLICK_DIST)
+                {
+                    wm_send_mouse_event(target, MOUSE_ACTION_DBLCLICK, MOUSE_BTN_LEFT);
+                }
+                g_last_click_ms[idx] = now;
+                g_last_click_x[idx] = g_mouse_x;
+                g_last_click_y[idx] = g_mouse_y;
+                g_last_click_window_id[idx] = target->id;
+            }
+            if (released & MOUSE_BTN_RIGHT)
+            {
+                wm_send_mouse_event(target, MOUSE_ACTION_CLICK, MOUSE_BTN_RIGHT);
+                int idx = wm_button_index(MOUSE_BTN_RIGHT);
+                if (idx >= 0 &&
+                    now - g_last_click_ms[idx] <= DWM_DBLCLICK_MS &&
+                    g_last_click_window_id[idx] == target->id &&
+                    abs(g_mouse_x - g_last_click_x[idx]) <= DWM_DBLCLICK_DIST &&
+                    abs(g_mouse_y - g_last_click_y[idx]) <= DWM_DBLCLICK_DIST)
+                {
+                    wm_send_mouse_event(target, MOUSE_ACTION_DBLCLICK, MOUSE_BTN_RIGHT);
+                }
+                g_last_click_ms[idx] = now;
+                g_last_click_x[idx] = g_mouse_x;
+                g_last_click_y[idx] = g_mouse_y;
+                g_last_click_window_id[idx] = target->id;
+            }
+            if (released & MOUSE_BTN_MIDDLE)
+            {
+                wm_send_mouse_event(target, MOUSE_ACTION_CLICK, MOUSE_BTN_MIDDLE);
+                int idx = wm_button_index(MOUSE_BTN_MIDDLE);
+                if (idx >= 0 &&
+                    now - g_last_click_ms[idx] <= DWM_DBLCLICK_MS &&
+                    g_last_click_window_id[idx] == target->id &&
+                    abs(g_mouse_x - g_last_click_x[idx]) <= DWM_DBLCLICK_DIST &&
+                    abs(g_mouse_y - g_last_click_y[idx]) <= DWM_DBLCLICK_DIST)
+                {
+                    wm_send_mouse_event(target, MOUSE_ACTION_DBLCLICK, MOUSE_BTN_MIDDLE);
+                }
+                g_last_click_ms[idx] = now;
+                g_last_click_x[idx] = g_mouse_x;
+                g_last_click_y[idx] = g_mouse_y;
+                g_last_click_window_id[idx] = target->id;
+            }
+        }
+
+        if (g_mouse_buttons_down == 0)
+        {
+            g_mouse_capture = NULL;
+            g_drag_window = NULL;
+        }
+    }
+}
+
 int main(void)
 {
     vbe_toggle_graphics_mode();
@@ -1336,6 +1597,7 @@ int main(void)
     system_mouse_set_pos((int)g_mode.width / 2, (int)g_mode.height / 2);
     g_mouse_x = (int)g_mode.width / 2;
     g_mouse_y = (int)g_mode.height / 2;
+    g_mouse_buttons_down = system_mouse_get_buttons_down();
 
     g_mailbox = create_message_channel(DWM_MAILBOX_ID);
 
@@ -1421,7 +1683,8 @@ int main(void)
         }
 
         // Update mouse position and check for movement
-        wm_update_mouse();
+        int mouse_moved = wm_update_mouse();
+        wm_dispatch_mouse_events(mouse_moved);
 
         // Flush any pending redraw (either from messages or timeout)
         if (g_needs_redraw)
