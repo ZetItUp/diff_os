@@ -299,18 +299,17 @@ static inline uint32_t blend_skin_px(uint32_t bg, uint32_t skin, uint32_t tint)
     return 0xFF000000 | (r << 16) | (g << 8) | b;
 }
 
-// Compute bounding box of a window including borders, titlebar, and shadow
+// Compute bounding box of a window including borders and titlebar
 static void wm_get_decor_bounds(const wm_window_t *win, int *x, int *y, int *w, int *h)
 {
     if (!win || !x || !y || !w || !h) return;
 
     const int border = 2;
-    const int shadow = 5;
 
     int min_x = win->x - border;
     int min_y = win->y - border;
-    int max_x = win->x + (int)win->width + border + shadow;
-    int max_y = win->y + (int)win->height + border + shadow;
+    int max_x = win->x + (int)win->width + border;
+    int max_y = win->y + (int)win->height + border;
 
     if (g_window_skin && g_window_skin->pixels && g_title_font)
     {
@@ -371,23 +370,6 @@ static void wm_add_dirty_rect(int x, int y, int w, int h)
     g_dirty_rects[g_dirty_count].h = h;
     g_dirty_count++;
     g_needs_redraw = 1;
-}
-
-// Darken an ARGB pixel very slightly to simulate a subtle shadow (alpha over black).
-// Optimized: use shift instead of division (inv=224 ≈ 7/8)
-static inline uint32_t apply_shadow_20(uint32_t c)
-{
-    uint32_t a = c & 0xFF000000u;
-    uint32_t r = (c >> 16) & 0xFFu;
-    uint32_t g = (c >> 8) & 0xFFu;
-    uint32_t b = c & 0xFFu;
-
-    // Multiply by 7/8 using shift: (x * 7) >> 3
-    r = (r * 7) >> 3;
-    g = (g * 7) >> 3;
-    b = (b * 7) >> 3;
-
-    return a | (r << 16) | (g << 8) | b;
 }
 
 // Present only dirty region (bounding box of all dirty rects) to the screen
@@ -619,8 +601,9 @@ static void wm_set_focus(wm_window_t *window)
     g_focus_dirty = 1; // Need to repaint borders for focus change
 
     // Immediately redraw focus-sensitive decorations and present
+    // wm_redraw_focus_dirty() now clears and draws directly, so no need
+    // for wm_repaint_dirty_region() which would erase our drawings
     wm_redraw_focus_dirty();
-    wm_repaint_dirty_region();
     wm_draw_cursor();
     wm_request_present();
 }
@@ -632,7 +615,31 @@ static void wm_add_window(wm_window_t *window)
 
     // New windows automatically get focus, but don't send focus events yet
     // (the client hasn't received its CREATE reply, so it can't handle events)
+    // However, we DO need to repaint the old focused window's decorations
+    wm_window_t *old_focus = g_focused;
     g_focused = window;
+
+    // Repaint old window with unfocused decorations
+    if (old_focus)
+    {
+        int dx, dy, dw, dh;
+        wm_get_decor_bounds(old_focus, &dx, &dy, &dw, &dh);
+        wm_fill_bg_region(dx, dy, dw, dh);
+
+        dwm_msg_t msg = {0};
+        msg.window_id = old_focus->id;
+        wm_draw_window(&msg);
+
+        wm_add_dirty_rect(dx, dy, dw, dh);
+
+        // Present immediately so decorations update is visible
+        wm_draw_cursor();
+        wm_request_present();
+
+        // Send focus lost event to the old window
+        wm_send_focus_event(old_focus, 0);
+    }
+
     g_needs_redraw = 1;
 }
 
@@ -774,7 +781,9 @@ static void wm_update_mouse(void)
     }
 }
 
-// Refresh only focus-related borders to avoid full redraws.
+// Repaint focus-related window decorations.
+// Clears and redraws both the previously focused and newly focused windows
+// to update their decoration colors (title bar, border).
 static void wm_redraw_focus_dirty(void)
 {
     if (!g_focus_dirty)
@@ -782,23 +791,37 @@ static void wm_redraw_focus_dirty(void)
         return;
     }
 
+    // Clear and redraw the previously focused window (now unfocused)
     if (g_prev_focus)
     {
+        int dx, dy, dw, dh;
+        wm_get_decor_bounds(g_prev_focus, &dx, &dy, &dw, &dh);
+
+        // Clear the decoration area to background
+        wm_fill_bg_region(dx, dy, dw, dh);
+
+        // Redraw the window with unfocused decorations
         dwm_msg_t msg = {0};
         msg.window_id = g_prev_focus->id;
         wm_draw_window(&msg);
-        int dx, dy, dw, dh;
-        wm_get_decor_bounds(g_prev_focus, &dx, &dy, &dw, &dh);
+
         wm_add_dirty_rect(dx, dy, dw, dh);
     }
 
+    // Clear and redraw the newly focused window
     if (g_focused)
     {
+        int dx, dy, dw, dh;
+        wm_get_decor_bounds(g_focused, &dx, &dy, &dw, &dh);
+
+        // Clear the decoration area to background
+        wm_fill_bg_region(dx, dy, dw, dh);
+
+        // Redraw the window with focused decorations
         dwm_msg_t msg = {0};
         msg.window_id = g_focused->id;
         wm_draw_window(&msg);
-        int dx, dy, dw, dh;
-        wm_get_decor_bounds(g_focused, &dx, &dy, &dw, &dh);
+
         wm_add_dirty_rect(dx, dy, dw, dh);
     }
 
@@ -815,11 +838,9 @@ static void wm_remove_window(uint32_t id)
         {
             wm_window_t* window = *winp;
 
-            // Save window bounds before freeing (include border + shadow)
-            int wx = window->x - 2;  // Border is 2px
-            int wy = window->y - 2;
-            int ww = (int)window->width + 2 + 2 + 5 + 2;  // left border + right border + shadow + extra
-            int wh = (int)window->height + 2 + 2 + 5 + 2;
+            // Get full decorated bounds (includes titlebar, border, shadow)
+            int wx, wy, ww, wh;
+            wm_get_decor_bounds(window, &wx, &wy, &ww, &wh);
 
             *winp = window->next;
             shared_memory_unmap(window->handle);
@@ -841,8 +862,10 @@ static void wm_remove_window(uint32_t id)
 
             free(window);
 
-            // Clear the region where the window was and present immediately
+            // Clear the full decorated region and present immediately
             wm_clear_region(wx, wy, ww, wh);
+            wm_repaint_dirty_region();
+            wm_draw_cursor();
             wm_request_present();
 
             return;
@@ -1160,70 +1183,7 @@ static void wm_draw_window(const dwm_msg_t *msg)
         #undef SKIN
     }
 
-
-    // Shadow only needs to be drawn once (it's on the background, not the window)
-    const int shadow = 5;
-    int include_shadow = !window->drew_once;
-    if (!window->drew_once)
-    {
-        int shadow_x0 = x0 + max_x;
-        int shadow_y0 = y0 + max_y;
-        int shadow_x1 = shadow_x0 + shadow;
-        int shadow_y1 = shadow_y0 + shadow;
-
-        if (shadow_x0 < (int)g_mode.width)
-        {
-            int sx1 = (shadow_x1 < (int)g_mode.width) ? shadow_x1 : (int)g_mode.width;
-            int sy0 = y0;
-            int sy1 = y0 + max_y + shadow;
-            if (sy0 < 0) sy0 = 0;
-            if (sy1 > (int)g_mode.height) sy1 = (int)g_mode.height;
-
-            for (int y = sy0; y < sy1; ++y)
-            {
-                uint32_t *row = g_backbuffer + (size_t)y * g_backbuffer_stride;
-                int y_off = y - y0;
-                for (int x = shadow_x0; x < sx1; ++x)
-                {
-                    if (y_off < shadow)
-                    {
-                        int max_w = y_off + 1;
-                        if (x >= shadow_x0 + max_w) continue;
-                    }
-                    row[x] = apply_shadow_20(row[x]);
-                }
-            }
-        }
-
-        if (shadow_y0 < (int)g_mode.height)
-        {
-            int sy1 = (shadow_y1 < (int)g_mode.height) ? shadow_y1 : (int)g_mode.height;
-            int sx0 = x0;
-            int sx1 = x0 + max_x + shadow;
-            if (sx0 < 0) sx0 = 0;
-            if (sx1 > (int)g_mode.width) sx1 = (int)g_mode.width;
-
-            for (int y = shadow_y0; y < sy1; ++y)
-            {
-                uint32_t *row = g_backbuffer + (size_t)y * g_backbuffer_stride;
-                int y_off = y - shadow_y0;
-                for (int x = sx0; x < sx1; ++x)
-                {
-                    int x_off = x - x0;
-                    if (x_off < shadow)
-                    {
-                        int max_h = x_off + 1;
-                        if (y_off >= max_h) continue;
-                    }
-                    row[x] = apply_shadow_20(row[x]);
-                }
-            }
-        }
-
-        window->drew_once = 1;
-    }
-
-    // Mark dirty area covering window, borders, title bar and (on first draw) shadow
+    // Mark dirty area covering window, borders, and title bar
     int dirty_x0, dirty_y0, dirty_w, dirty_h;
     if (have_title)
     {
@@ -1233,8 +1193,8 @@ static void wm_draw_window(const dwm_msg_t *msg)
     {
         dirty_x0 = x0 - border;
         dirty_y0 = y0 - border;
-        dirty_w = x0 + max_x + border + (include_shadow ? shadow : 0) - dirty_x0;
-        dirty_h = y0 + max_y + border + (include_shadow ? shadow : 0) - dirty_y0;
+        dirty_w = x0 + max_x + border - dirty_x0;
+        dirty_h = y0 + max_y + border - dirty_y0;
     }
     wm_add_dirty_rect(dirty_x0, dirty_y0, dirty_w, dirty_h);
 }

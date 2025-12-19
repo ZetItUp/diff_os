@@ -1,7 +1,25 @@
 #pragma once
 
 #include <stdint.h>
-#include <stdint.h>
+
+/*
+ * Window Decoration Metrics
+ *
+ * These constants define the size of window decorations drawn by the WM.
+ * Used by both the window manager and client library to calculate full
+ * window bounds (content area + decorations).
+ */
+#define DWM_TITLEBAR_HEIGHT  22   // Title bar height (font height + padding)
+#define DWM_BORDER_WIDTH     2    // Border thickness around window
+#define DWM_SHADOW_SIZE      0    // Drop shadow size (disabled)
+
+// Calculate full decorated window dimensions from content dimensions
+#define DWM_FRAME_WIDTH(content_w)  ((content_w) + (DWM_BORDER_WIDTH * 2) + DWM_SHADOW_SIZE)
+#define DWM_FRAME_HEIGHT(content_h) ((content_h) + DWM_TITLEBAR_HEIGHT + (DWM_BORDER_WIDTH * 2) + DWM_SHADOW_SIZE)
+
+// Calculate content area position relative to frame origin
+#define DWM_CONTENT_OFFSET_X  DWM_BORDER_WIDTH
+#define DWM_CONTENT_OFFSET_Y  (DWM_TITLEBAR_HEIGHT + DWM_BORDER_WIDTH)
 
 typedef enum
 {
