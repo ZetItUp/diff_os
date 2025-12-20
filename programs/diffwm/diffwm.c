@@ -21,34 +21,10 @@
 // DiffTGA for loading TGA images
 #include <difftga.h>
 
-// Theme system for cursors
+// Internal headers
+#include "wm_internal.h"
+#include "event.h"
 #include "theme.h"
-#include "theme.c"
-
-/*
- * Window Manager Internal Window Tracking
- *
- * This structure is used by the window manager to track client windows.
- * It's separate from the client-side window_t which has polymorphic components.
- */
-typedef struct wm_window
-{
-    uint32_t id;
-    int handle;
-    void *pixels;
-    int drew_once;
-    char title[64];
-
-    int x;
-    int y;
-    uint32_t width;
-    uint32_t height;
-
-    int pitch;
-    int mailbox;    /* Client mailbox channel index for replies/events */
-    int wm_channel; /* Channel index to talk to WM */
-    struct wm_window *next;
-} wm_window_t;
 
 // Resource parsing (matches rsbuild.py output)
 #define RS_MAGIC      0x53525845u /* 'EXRS' */
@@ -85,9 +61,16 @@ static void wm_draw_window(const dwm_msg_t *msg);
 static void wm_apply_window_resources(wm_window_t *window, int client_mailbox_channel);
 static void wm_draw_cursor(void);
 static int wm_update_mouse(void);
-static void wm_dispatch_mouse_events(int moved);
-static void wm_get_decor_bounds(const wm_window_t *win, int *x, int *y, int *w, int *h);
-static wm_window_t *wm_find_window_at(int x, int y);
+
+// Event system context
+static mouse_state_t g_mouse_state;
+static click_state_t g_click_state;
+static event_context_t g_event_ctx;
+
+// Accessors for event.c
+wm_window_t *wm_get_windows(void) { return g_windows; }
+wm_window_t *wm_get_focused(void) { return g_focused; }
+void wm_set_focused(wm_window_t *window) { g_focused = window; }
 
 // Video mode and backbuffer
 static video_mode_info_t g_mode;
@@ -103,23 +86,10 @@ static uint64_t g_last_present_ms = 0;
 // Cursor theme and state
 static cursor_theme_t g_cursor_theme;
 static cursor_type_t g_current_cursor = CURSOR_NORMAL;
-static int g_mouse_x = 0;
-static int g_mouse_y = 0;
-static int g_prev_mouse_x = -1;
-static int g_prev_mouse_y = -1;
-static wm_window_t *g_mouse_capture = NULL;
-static uint8_t g_mouse_buttons_down = 0;
-static uint64_t g_last_click_ms[3] = {0, 0, 0};
-static int g_last_click_x[3] = {0, 0, 0};
-static int g_last_click_y[3] = {0, 0, 0};
-static uint32_t g_last_click_window_id[3] = {0, 0, 0};
-static wm_window_t *g_drag_window = NULL;
-static int g_drag_offset_x = 0;
-static int g_drag_offset_y = 0;
 
 // Window skin and title font
 static tga_image_t *g_window_skin = NULL;
-static font_t *g_title_font = NULL;
+font_t *g_title_font = NULL;
 
 // Tint colors for active/inactive windows (ARGB format)
 #define TITLE_TINT_ACTIVE   color_rgb(42, 112, 255)  // Cornflower blue
@@ -127,11 +97,6 @@ static font_t *g_title_font = NULL;
 #define BODY_TINT_ACTIVE    0xFF4A4A8A  // Dark blue-purple
 #define BODY_TINT_INACTIVE  color_rgb(63, 63, 116)  // Dark gray
 
-#define TITLE_PADDING_X 8
-#define TITLE_PADDING_Y 6
-
-#define DWM_DBLCLICK_MS    300
-#define DWM_DBLCLICK_DIST  4
 
 // Dirty rectangle tracking
 #define MAX_DIRTY_RECTS 16
@@ -142,6 +107,7 @@ typedef struct {
 static dirty_rect_t g_dirty_rects[MAX_DIRTY_RECTS];
 static int g_dirty_count = 0;
 static volatile int g_needs_redraw = 0;
+void wm_mark_needs_redraw(void) { g_needs_redraw = 1; }
 static void wm_redraw_focus_dirty(void);
 static int g_disable_dirty_mark = 0;
 
@@ -314,7 +280,7 @@ static inline uint32_t blend_skin_px(uint32_t bg, uint32_t skin, uint32_t tint)
 }
 
 // Compute bounding box of a window including borders and titlebar
-static void wm_get_decor_bounds(const wm_window_t *win, int *x, int *y, int *w, int *h)
+void wm_get_decor_bounds(const wm_window_t *win, int *x, int *y, int *w, int *h)
 {
     if (!win || !x || !y || !w || !h) return;
 
@@ -352,47 +318,8 @@ static void wm_get_decor_bounds(const wm_window_t *win, int *x, int *y, int *w, 
     *h = max_y - min_y;
 }
 
-static wm_window_t *wm_find_window_at(int x, int y)
-{
-    for (wm_window_t *win = g_windows; win; win = win->next)
-    {
-        int wx, wy, ww, wh;
-        wm_get_decor_bounds(win, &wx, &wy, &ww, &wh);
-        if (x >= wx && x < wx + ww && y >= wy && y < wy + wh)
-        {
-            return win;
-        }
-    }
-
-    return NULL;
-}
-
-static int wm_point_in_titlebar(const wm_window_t *win, int x, int y)
-{
-    if (!win || !g_window_skin || !g_window_skin->pixels || !g_title_font)
-    {
-        return 0;
-    }
-
-    int fw = font_width(g_title_font);
-    int fh = font_height(g_title_font);
-    int title_w = (int)strlen(win->title) * fw + TITLE_PADDING_X;
-    int title_h = fh + TITLE_PADDING_Y;
-    int title_x = win->x;
-    if (title_x + title_w > (int)g_mode.width)
-    {
-        title_x = (int)g_mode.width - title_w;
-        if (title_x < 0) title_x = 0;
-    }
-    int title_y = win->y - title_h;
-    if (title_y < 0) title_y = 0;
-
-    return (x >= title_x && x < title_x + title_w &&
-            y >= title_y && y < title_y + title_h);
-}
-
 // Add a dirty rectangle (will be merged/clipped later)
-static void wm_add_dirty_rect(int x, int y, int w, int h)
+void wm_add_dirty_rect(int x, int y, int w, int h)
 {
     if (g_disable_dirty_mark)
     {
@@ -603,7 +530,7 @@ static int wm_try_present(void)
     return 1;
 }
 
-static wm_window_t* wm_find(uint32_t id)
+wm_window_t* wm_find(uint32_t id)
 {
     for(wm_window_t *win = g_windows; win; win = win->next)
     {
@@ -616,21 +543,28 @@ static wm_window_t* wm_find(uint32_t id)
     return NULL;
 }
 
-// Send focus event to a window
-static void wm_send_focus_event(wm_window_t *window, int gained)
+// Move window to front of list (bring to top of z-order)
+static void wm_bring_to_front(wm_window_t *window)
 {
-    if (!window) return;
+    if (!window || g_windows == window) return;
 
-    dwm_msg_t ev_msg = {0};
-    ev_msg.type = DWM_MSG_EVENT;
-    ev_msg.window_id = window->id;
-    ev_msg.event.type = gained ? DIFF_EVENT_FOCUS_GAINED : DIFF_EVENT_FOCUS_LOST;
-
-    send_message(window->mailbox, &ev_msg, sizeof(ev_msg));
+    // Find and unlink window from current position
+    wm_window_t **pp = &g_windows;
+    while (*pp && *pp != window)
+    {
+        pp = &(*pp)->next;
+    }
+    if (*pp == window)
+    {
+        *pp = window->next;
+        // Insert at front
+        window->next = g_windows;
+        g_windows = window;
+    }
 }
 
 // Set focus to a specific window, sending events to old and new focused windows
-static void wm_set_focus(wm_window_t *window)
+void wm_set_focus(wm_window_t *window)
 {
     if (g_focused == window) return;
 
@@ -639,15 +573,20 @@ static void wm_set_focus(wm_window_t *window)
     // Notify old focused window it lost focus
     if (g_focused)
     {
-        wm_send_focus_event(g_focused, 0);
+        event_send_focus(g_focused, 0);
     }
 
+    // Bring window to front of z-order
+    wm_bring_to_front(window);
+    g_event_ctx.windows = g_windows;
+
     g_focused = window;
+    g_event_ctx.focused = window;
 
     // Notify new focused window it gained focus
     if (g_focused)
     {
-        wm_send_focus_event(g_focused, 1);
+        event_send_focus(g_focused, 1);
     }
 
     g_prev_focus = old_focus;
@@ -671,6 +610,8 @@ static void wm_add_window(wm_window_t *window)
     // However, we DO need to repaint the old focused window's decorations
     wm_window_t *old_focus = g_focused;
     g_focused = window;
+    g_event_ctx.focused = window;
+    g_event_ctx.windows = g_windows;
 
     // Repaint old window with unfocused decorations
     if (old_focus)
@@ -690,7 +631,7 @@ static void wm_add_window(wm_window_t *window)
         wm_request_present();
 
         // Send focus lost event to the old window
-        wm_send_focus_event(old_focus, 0);
+        event_send_focus(old_focus, 0);
     }
 
     g_needs_redraw = 1;
@@ -712,7 +653,7 @@ static inline void wm_memset32(uint32_t *dst, uint32_t val, size_t count)
 }
 
 // Clear a region of the backbuffer to the desktop background color
-static void wm_clear_region(int x, int y, int w, int h)
+void wm_clear_region(int x, int y, int w, int h)
 {
     if (!g_backbuffer) return;
 
@@ -751,8 +692,8 @@ static void wm_draw_cursor(void)
     int cursor_h = (int)img->height;
 
     // Calculate draw position with hotspot offset
-    int draw_x = g_mouse_x - cursor->hotspot_x;
-    int draw_y = g_mouse_y - cursor->hotspot_y;
+    int draw_x = g_mouse_state.x - cursor->hotspot_x;
+    int draw_y = g_mouse_state.y - cursor->hotspot_y;
 
     // Clamp to screen bounds
     int x0 = draw_x;
@@ -807,10 +748,10 @@ static int wm_update_mouse(void)
 {
     int moved = 0;
     // Get current mouse position from kernel
-    system_mouse_get_pos(&g_mouse_x, &g_mouse_y);
+    system_mouse_get_pos(&g_mouse_state.x, &g_mouse_state.y);
 
     // Check if mouse moved
-    if (g_mouse_x != g_prev_mouse_x || g_mouse_y != g_prev_mouse_y)
+    if (g_mouse_state.x != g_mouse_state.prev_x || g_mouse_state.y != g_mouse_state.prev_y)
     {
         moved = 1;
         const cursor_t *cursor = theme_get_cursor(&g_cursor_theme, g_current_cursor);
@@ -820,18 +761,18 @@ static int wm_update_mouse(void)
         int hotspot_y = cursor ? cursor->hotspot_y : 0;
 
         // Clear old cursor position (restore background)
-        if (g_prev_mouse_x >= 0)
+        if (g_mouse_state.prev_x >= 0)
         {
-            wm_clear_region(g_prev_mouse_x - hotspot_x, g_prev_mouse_y - hotspot_y,
+            wm_clear_region(g_mouse_state.prev_x - hotspot_x, g_mouse_state.prev_y - hotspot_y,
                             cursor_w, cursor_h);
         }
 
         // Mark new cursor position as dirty
-        wm_add_dirty_rect(g_mouse_x - hotspot_x, g_mouse_y - hotspot_y,
+        wm_add_dirty_rect(g_mouse_state.x - hotspot_x, g_mouse_state.y - hotspot_y,
                           cursor_w, cursor_h);
 
-        g_prev_mouse_x = g_mouse_x;
-        g_prev_mouse_y = g_mouse_y;
+        g_mouse_state.prev_x = g_mouse_state.x;
+        g_mouse_state.prev_y = g_mouse_state.y;
         g_needs_redraw = 1;
     }
 
@@ -1317,238 +1258,6 @@ static void wm_handle_message(const dwm_msg_t *msg)
     }
 }
 
-static void wm_dispatch_key_events(void)
-{
-    system_key_event_t kev;
-
-    while (system_keyboard_event_try(&kev))
-    {
-        if (!g_focused)
-        {
-            printf("[WM] key event but no focused window\n");
-            continue;
-        }
-
-        dwm_msg_t ev_msg = {0};
-        ev_msg.type = DWM_MSG_EVENT;
-        ev_msg.window_id = g_focused->id;
-        ev_msg.event.type = DIFF_EVENT_KEY;
-        ev_msg.event.key = kev.key;
-        ev_msg.event.key_pressed = kev.pressed;
-        ev_msg.event.modifiers = kev.modifiers;  // Pass modifier flags to client
-
-        int rc = send_message(g_focused->mailbox, &ev_msg, sizeof(ev_msg));
-        if (rc < 0)
-        {
-            printf("[WM] send_message failed rc=%d mailbox=%d\n", rc, g_focused->mailbox);
-        }
-    }
-}
-
-static int wm_button_index(uint8_t button)
-{
-    if (button == MOUSE_BTN_LEFT) return 0;
-    if (button == MOUSE_BTN_RIGHT) return 1;
-    if (button == MOUSE_BTN_MIDDLE) return 2;
-    return -1;
-}
-
-static void wm_send_mouse_event(wm_window_t *window, uint8_t action, uint8_t button)
-{
-    if (!window)
-    {
-        return;
-    }
-
-    int rel_x = g_mouse_x - window->x;
-    int rel_y = g_mouse_y - window->y;
-    if (rel_x < -32768) rel_x = -32768;
-    if (rel_x > 32767) rel_x = 32767;
-    if (rel_y < -32768) rel_y = -32768;
-    if (rel_y > 32767) rel_y = 32767;
-
-    dwm_msg_t ev_msg = {0};
-    ev_msg.type = DWM_MSG_EVENT;
-    ev_msg.window_id = window->id;
-    ev_msg.event.type = DIFF_EVENT_MOUSE;
-    ev_msg.event.mouse_x = (int16_t)rel_x;
-    ev_msg.event.mouse_y = (int16_t)rel_y;
-    ev_msg.event.mouse_buttons = g_mouse_buttons_down;
-    ev_msg.event.mouse_action = action;
-    ev_msg.event.mouse_button = button;
-
-    int rc = send_message(window->mailbox, &ev_msg, sizeof(ev_msg));
-    if (rc < 0)
-    {
-        printf("[WM] send_message failed rc=%d mailbox=%d\n", rc, window->mailbox);
-    }
-}
-
-static void wm_dispatch_mouse_events(int moved)
-{
-    uint8_t pressed = system_mouse_get_buttons_pressed();
-    uint8_t released = system_mouse_get_buttons_clicked();
-
-    if (!moved && pressed == 0 && released == 0)
-    {
-        return;
-    }
-
-    wm_window_t *hover = wm_find_window_at(g_mouse_x, g_mouse_y);
-    wm_window_t *target = g_mouse_capture ? g_mouse_capture : hover;
-
-    if (moved)
-    {
-        if (g_drag_window)
-        {
-            int new_x = g_mouse_x - g_drag_offset_x;
-            int new_y = g_mouse_y - g_drag_offset_y;
-
-            if (new_x < 0) new_x = 0;
-            if (new_y < 0) new_y = 0;
-            if (new_x >= (int)g_mode.width) new_x = (int)g_mode.width - 1;
-            if (new_y >= (int)g_mode.height) new_y = (int)g_mode.height - 1;
-
-            if (new_x != g_drag_window->x || new_y != g_drag_window->y)
-            {
-                int old_x, old_y, old_w, old_h;
-                wm_get_decor_bounds(g_drag_window, &old_x, &old_y, &old_w, &old_h);
-                wm_clear_region(old_x, old_y, old_w, old_h);
-
-                g_drag_window->x = new_x;
-                g_drag_window->y = new_y;
-
-                int new_dx, new_dy, new_dw, new_dh;
-                wm_get_decor_bounds(g_drag_window, &new_dx, &new_dy, &new_dw, &new_dh);
-                wm_add_dirty_rect(new_dx, new_dy, new_dw, new_dh);
-                g_needs_redraw = 1;
-            }
-        }
-
-        if (target)
-        {
-            wm_send_mouse_event(target, MOUSE_ACTION_MOVE, 0);
-        }
-    }
-
-    if (pressed)
-    {
-        g_mouse_buttons_down |= pressed;
-
-        if (!g_mouse_capture)
-        {
-            g_mouse_capture = target;
-        }
-
-        if (target && g_focused != target)
-        {
-            wm_set_focus(target);
-        }
-
-        if (target && (pressed & MOUSE_BTN_LEFT) &&
-            wm_point_in_titlebar(target, g_mouse_x, g_mouse_y))
-        {
-            g_drag_window = target;
-            g_drag_offset_x = g_mouse_x - target->x;
-            g_drag_offset_y = g_mouse_y - target->y;
-        }
-
-        if (pressed & MOUSE_BTN_LEFT)
-        {
-            wm_send_mouse_event(target, MOUSE_ACTION_DOWN, MOUSE_BTN_LEFT);
-        }
-        if (pressed & MOUSE_BTN_RIGHT)
-        {
-            wm_send_mouse_event(target, MOUSE_ACTION_DOWN, MOUSE_BTN_RIGHT);
-        }
-        if (pressed & MOUSE_BTN_MIDDLE)
-        {
-            wm_send_mouse_event(target, MOUSE_ACTION_DOWN, MOUSE_BTN_MIDDLE);
-        }
-    }
-
-    if (released)
-    {
-        g_mouse_buttons_down &= (uint8_t)~released;
-
-        if (released & MOUSE_BTN_LEFT)
-        {
-            wm_send_mouse_event(target, MOUSE_ACTION_UP, MOUSE_BTN_LEFT);
-        }
-        if (released & MOUSE_BTN_RIGHT)
-        {
-            wm_send_mouse_event(target, MOUSE_ACTION_UP, MOUSE_BTN_RIGHT);
-        }
-        if (released & MOUSE_BTN_MIDDLE)
-        {
-            wm_send_mouse_event(target, MOUSE_ACTION_UP, MOUSE_BTN_MIDDLE);
-        }
-
-        if (target)
-        {
-            uint64_t now = monotonic_ms();
-
-            if (released & MOUSE_BTN_LEFT)
-            {
-                wm_send_mouse_event(target, MOUSE_ACTION_CLICK, MOUSE_BTN_LEFT);
-                int idx = wm_button_index(MOUSE_BTN_LEFT);
-                if (idx >= 0 &&
-                    now - g_last_click_ms[idx] <= DWM_DBLCLICK_MS &&
-                    g_last_click_window_id[idx] == target->id &&
-                    abs(g_mouse_x - g_last_click_x[idx]) <= DWM_DBLCLICK_DIST &&
-                    abs(g_mouse_y - g_last_click_y[idx]) <= DWM_DBLCLICK_DIST)
-                {
-                    wm_send_mouse_event(target, MOUSE_ACTION_DBLCLICK, MOUSE_BTN_LEFT);
-                }
-                g_last_click_ms[idx] = now;
-                g_last_click_x[idx] = g_mouse_x;
-                g_last_click_y[idx] = g_mouse_y;
-                g_last_click_window_id[idx] = target->id;
-            }
-            if (released & MOUSE_BTN_RIGHT)
-            {
-                wm_send_mouse_event(target, MOUSE_ACTION_CLICK, MOUSE_BTN_RIGHT);
-                int idx = wm_button_index(MOUSE_BTN_RIGHT);
-                if (idx >= 0 &&
-                    now - g_last_click_ms[idx] <= DWM_DBLCLICK_MS &&
-                    g_last_click_window_id[idx] == target->id &&
-                    abs(g_mouse_x - g_last_click_x[idx]) <= DWM_DBLCLICK_DIST &&
-                    abs(g_mouse_y - g_last_click_y[idx]) <= DWM_DBLCLICK_DIST)
-                {
-                    wm_send_mouse_event(target, MOUSE_ACTION_DBLCLICK, MOUSE_BTN_RIGHT);
-                }
-                g_last_click_ms[idx] = now;
-                g_last_click_x[idx] = g_mouse_x;
-                g_last_click_y[idx] = g_mouse_y;
-                g_last_click_window_id[idx] = target->id;
-            }
-            if (released & MOUSE_BTN_MIDDLE)
-            {
-                wm_send_mouse_event(target, MOUSE_ACTION_CLICK, MOUSE_BTN_MIDDLE);
-                int idx = wm_button_index(MOUSE_BTN_MIDDLE);
-                if (idx >= 0 &&
-                    now - g_last_click_ms[idx] <= DWM_DBLCLICK_MS &&
-                    g_last_click_window_id[idx] == target->id &&
-                    abs(g_mouse_x - g_last_click_x[idx]) <= DWM_DBLCLICK_DIST &&
-                    abs(g_mouse_y - g_last_click_y[idx]) <= DWM_DBLCLICK_DIST)
-                {
-                    wm_send_mouse_event(target, MOUSE_ACTION_DBLCLICK, MOUSE_BTN_MIDDLE);
-                }
-                g_last_click_ms[idx] = now;
-                g_last_click_x[idx] = g_mouse_x;
-                g_last_click_y[idx] = g_mouse_y;
-                g_last_click_window_id[idx] = target->id;
-            }
-        }
-
-        if (g_mouse_buttons_down == 0)
-        {
-            g_mouse_capture = NULL;
-            g_drag_window = NULL;
-        }
-    }
-}
-
 int main(void)
 {
     vbe_toggle_graphics_mode();
@@ -1595,9 +1304,18 @@ int main(void)
     // Set mouse bounds and center cursor
     system_mouse_set_bounds((int)g_mode.width, (int)g_mode.height);
     system_mouse_set_pos((int)g_mode.width / 2, (int)g_mode.height / 2);
-    g_mouse_x = (int)g_mode.width / 2;
-    g_mouse_y = (int)g_mode.height / 2;
-    g_mouse_buttons_down = system_mouse_get_buttons_down();
+    g_mouse_state.x = (int)g_mode.width / 2;
+    g_mouse_state.y = (int)g_mode.height / 2;
+    g_mouse_state.buttons_down = system_mouse_get_buttons_down();
+
+    // Initialize event system
+    g_event_ctx.mouse = &g_mouse_state;
+    g_event_ctx.clicks = &g_click_state;
+    g_event_ctx.focused = NULL;
+    g_event_ctx.windows = NULL;
+    g_event_ctx.screen_width = (int)g_mode.width;
+    g_event_ctx.screen_height = (int)g_mode.height;
+    event_init(&g_event_ctx);
 
     g_mailbox = create_message_channel(DWM_MAILBOX_ID);
 
@@ -1631,8 +1349,8 @@ int main(void)
     g_backbuffer = g_buffers[g_active_fb];
 
     // Initialize previous mouse position for dirty tracking
-    g_prev_mouse_x = g_mouse_x;
-    g_prev_mouse_y = g_mouse_y;
+    g_mouse_state.prev_x = g_mouse_state.x;
+    g_mouse_state.prev_y = g_mouse_state.y;
 
     // Draw initial cursor
     wm_draw_cursor();
@@ -1684,7 +1402,13 @@ int main(void)
 
         // Update mouse position and check for movement
         int mouse_moved = wm_update_mouse();
-        wm_dispatch_mouse_events(mouse_moved);
+
+        // Update event context with current state
+        g_event_ctx.windows = g_windows;
+        g_event_ctx.focused = g_focused;
+
+        // Process mouse events with proper consumption
+        event_process_mouse(&g_event_ctx, mouse_moved);
 
         // Flush any pending redraw (either from messages or timeout)
         if (g_needs_redraw)
@@ -1694,7 +1418,7 @@ int main(void)
         }
 
         // Deliver keyboard events to the currently focused window
-        wm_dispatch_key_events();
+        event_process_keyboard(&g_event_ctx);
     }
 
     free(g_backbuffer);

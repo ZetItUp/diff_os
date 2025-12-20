@@ -12,17 +12,29 @@ GEN_IMPORTS := ../tools/gen_imports.py
 
 OUT_ROOT  := ../image/programs
 
-# Only build directories where <dir>/<dir>.c exists (ignores helper files like theme.c)
-PROGRAMS := $(foreach d,$(patsubst %/,%,$(wildcard */)),$(if $(wildcard $d/$d.c),$d))
+# All program directories where <dir>/<dir>.c exists
+ALL_PROGRAMS := $(foreach d,$(patsubst %/,%,$(wildcard */)),$(if $(wildcard $d/$d.c),$d))
+
+# Programs with their own Makefile (multi-file builds)
+CUSTOM_PROGRAMS := $(foreach d,$(ALL_PROGRAMS),$(if $(wildcard $d/Makefile),$d))
+
+# Programs without Makefile (single-file builds)
+SIMPLE_PROGRAMS := $(filter-out $(CUSTOM_PROGRAMS),$(ALL_PROGRAMS))
 
 LIBMAP   := libmap.json
 DEFAULT_EXL := diffc.exl
 
-.PHONY: all $(PROGRAMS) clean list
+.PHONY: all $(ALL_PROGRAMS) clean list
 
-all: $(PROGRAMS)
+all: $(ALL_PROGRAMS)
 
-$(PROGRAMS):
+# Programs with their own Makefile - delegate to their Makefile
+$(CUSTOM_PROGRAMS):
+	@echo "[BUILD] $@ (custom Makefile)"
+	$(MAKE) -C $@
+
+# Simple single-file programs
+$(SIMPLE_PROGRAMS):
 	@echo "[BUILD] $@"
 	@mkdir -p $@/build
 	@mkdir -p $(OUT_ROOT)/$@
@@ -43,10 +55,15 @@ $(PROGRAMS):
 	@echo "[INFO] artifacts: $@/build/dump.txt, undefined.txt, imports_map.txt, libs.txt"
 
 list:
-	@echo $(PROGRAMS)
+	@echo "All programs: $(ALL_PROGRAMS)"
+	@echo "Custom builds: $(CUSTOM_PROGRAMS)"
+	@echo "Simple builds: $(SIMPLE_PROGRAMS)"
 
 clean:
-	@for dir in $(PROGRAMS); do \
+	@for dir in $(SIMPLE_PROGRAMS); do \
 		rm -rf $$dir/build; \
 		rm -f $(OUT_ROOT)/$$dir/$$dir.dex; \
+	done
+	@for dir in $(CUSTOM_PROGRAMS); do \
+		$(MAKE) -C $$dir clean; \
 	done
