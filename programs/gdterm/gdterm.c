@@ -568,11 +568,6 @@ int main(void)
 
     while (!g_should_quit)
     {
-        if (!g_has_focus)
-        {
-            window_request_focus(win);
-        }
-
         if (drain_tty_output())
         {
             dirty = 1;
