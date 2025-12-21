@@ -81,5 +81,5 @@ void label_draw(window_component_t *self)
                    self->x,
                    self->y,
                    text,
-                   0xFFFFFFFF);
+                   0xFF000000);
 }

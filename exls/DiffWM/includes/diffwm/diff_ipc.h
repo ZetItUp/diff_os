@@ -13,6 +13,7 @@
 
 /* Window lifecycle */
 window_t* window_create(int x, int y, int width, int height, uint32_t flags, const char *title);
+void window_set_title(window_t *window, const char *title);
 void window_destroy(window_t *window);
 
 /* Window operations */

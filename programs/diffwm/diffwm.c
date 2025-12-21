@@ -210,6 +210,7 @@ static uint8_t *wm_fetch_process_resources(int pid, uint32_t *out_sz)
 static void wm_apply_window_resources(wm_window_t *window, int client_mailbox_channel)
 {
     if (!window) return;
+    if (window->title_overridden) return;
 
     // Get the owner PID of the client mailbox
     int owner_pid = message_channel_owner(client_mailbox_channel);
@@ -820,7 +821,6 @@ static int wm_update_mouse(void)
     // Get current mouse position from kernel
     system_mouse_get_pos(&g_mouse_state.x, &g_mouse_state.y);
 
-    // Check if mouse moved
     if (g_mouse_state.x != g_mouse_state.prev_x || g_mouse_state.y != g_mouse_state.prev_y)
     {
         moved = 1;
@@ -986,6 +986,7 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     window->drew_once = 0;
     window->focus_notified = 0;
     window->client_drawn = 0;
+    window->title_overridden = 0;
     strncpy(window->title, "Window", sizeof(window->title) - 1);
 
     // Try to get window title from client's resources
@@ -1385,6 +1386,22 @@ static void wm_handle_message(const dwm_msg_t *msg)
                 if (window)
                 {
                     wm_set_focus(window);
+                }
+                break;
+            }
+        case DWM_MSG_SET_TITLE:
+            {
+                wm_window_t *window = wm_find(msg->window_id);
+                if (window)
+                {
+                    strncpy(window->title, msg->set_title.title, sizeof(window->title) - 1);
+                    window->title[sizeof(window->title) - 1] = '\0';
+                    window->title_overridden = 1;
+
+                    int dx, dy, dw, dh;
+                    wm_get_decor_bounds(window, &dx, &dy, &dw, &dh);
+                    wm_add_dirty_rect(dx, dy, dw, dh);
+                    wm_mark_needs_redraw();
                 }
                 break;
             }

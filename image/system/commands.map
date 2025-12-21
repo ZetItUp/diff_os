@@ -3,6 +3,8 @@
 # Programs
 hello=/programs/hello/hello.dex
 ls=/programs/ls/ls.dex
+gdterm=/programs/gdterm/gdterm.dex
+launcher=/programs/launcher/launcher.dex
 
 # Test Programs
 ptest=/programs/ptest/ptest.dex
@@ -16,7 +18,6 @@ testcall=/programs/testcall/testcall.dex
 filetest=/programs/filetest/filetest.dex
 wad=/programs/testwad/testwad.dex
 wrtest=/programs/writetest/writetest.dex
-gdterm=/programs/gdterm/gdterm.dex
 threadtest=/programs/threadtest/threadtest.dex
 fpstest=/programs/fpstest/fpstest.dex
 mousetest=/programs/mousetest/mousetest.dex

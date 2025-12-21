@@ -24,5 +24,17 @@
     "font_width",
     "font_height",
     "font_draw_text"
+  ],
+  "diffruntime.exl": [
+    "rt_init",
+    "rt_shutdown",
+    "rt_resolve",
+    "rt_exec",
+    "rt_exec_wait",
+    "rt_get_path",
+    "rt_set_path",
+    "rt_append_path",
+    "rt_prepend_path",
+    "rt_file_exists"
   ]
 }

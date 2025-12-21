@@ -20,6 +20,8 @@ void font_destroy(font_t *font);
 // Metrics
 int font_width(const font_t *font);   // advance width (pixels)
 int font_height(const font_t *font);  // pixel height
+int font_ascent(const font_t *font);  // pixels above baseline
+int font_descent(const font_t *font); // pixels below baseline
 
 // Draw ASCII text (ARGB32 target, pitch in pixels). Leaves background untouched.
 void font_draw_text(const font_t *font,

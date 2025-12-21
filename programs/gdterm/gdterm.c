@@ -11,7 +11,7 @@
 #include <difffonts/fonts.h>
 #include <difftga.h>
 #include <system/threads.h>
-#include <system/command_registry.h>
+#include <runtime/exec.h>
 #include <system/process.h>
 #include <stdbool.h>
 #include <dirent.h>
@@ -420,8 +420,10 @@ static int run_external(int argc, char **argv, int *dirty_flag)
     if (argc == 0)
         return 0;
 
-    const char *path = cmdreg_lookup(argv[0]);
-    if (!path)
+    /* Resolve the program using DiffRuntime */
+    char resolved_path[RT_MAX_PATH];
+    int rc = rt_resolve(argv[0], resolved_path, sizeof(resolved_path), RT_RESOLVE_ALL);
+    if (rc != RT_OK)
     {
         char buf[256];
         snprintf(buf, sizeof(buf), "Unknown command: %s\n", argv[0]);
@@ -434,7 +436,7 @@ static int run_external(int argc, char **argv, int *dirty_flag)
     int pid;
     if (user_argc <= 0)
     {
-        pid = process_spawn(path, 0, NULL);
+        pid = process_spawn(resolved_path, 0, NULL);
     }
     else
     {
@@ -443,13 +445,13 @@ static int run_external(int argc, char **argv, int *dirty_flag)
         {
             user_argv[i] = argv[i + 1];
         }
-        pid = process_spawn(path, user_argc, user_argv);
+        pid = process_spawn(resolved_path, user_argc, user_argv);
     }
 
     if (pid < 0)
     {
         char buf[256];
-        snprintf(buf, sizeof(buf), "[SYSTEM] Could not start %s\n", path);
+        snprintf(buf, sizeof(buf), "[SYSTEM] Could not start %s\n", resolved_path);
         terminal_puts(&g_terminal, buf);
         return -1;
     }
@@ -469,7 +471,8 @@ static int run_external(int argc, char **argv, int *dirty_flag)
 
 int main(void)
 {
-    window_t *win = window_create(80, 80, WIN_W, WIN_H, 0, "Different Terminal");
+    window_t *win = window_create(80, 80, WIN_W, WIN_H, WINDOW_FLAG_NO_BACKGROUND,
+                                  "Different Terminal");
     if (!win)
         return -1;
 
@@ -515,13 +518,11 @@ int main(void)
         g_logo_enabled = false;
     }
 
-    // Initialize command registry
-    if (!cmdreg_init("/system/commands.map"))
+    // Initialize runtime (loads commands.map and sets up PATH)
+    if (rt_init("/system/commands.map") != RT_OK)
     {
-        terminal_puts(&g_terminal, "[CRITICAL ERROR] Unable to initialize command registry!\n");
-        font_destroy(font);
-        window_destroy(win);
-        return 127;
+        terminal_puts(&g_terminal, "[WARNING] Runtime initialization had issues.\n");
+        // Non-fatal - continue anyway
     }
 
     if (!getcwd(g_cwd, sizeof(g_cwd)))

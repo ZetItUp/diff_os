@@ -5,6 +5,7 @@
 #include <diffwm/protocol.h>
 
 #define WINDOW_MAX_CHILDREN 8
+#define WINDOW_FLAG_NO_BACKGROUND 0x80000000u
 
 typedef struct window_t
 {
@@ -14,6 +15,9 @@ typedef struct window_t
 
     /* Rendering */
     uint32_t *backbuffer;  // Owned by window, allocated in window_create
+    uint32_t flags;
+    int draw_background;
+    int presented;
 
     /* Child components */
     window_component_t *children[WINDOW_MAX_CHILDREN];
@@ -39,6 +43,7 @@ typedef struct window_t
 /* High-level window API for GUI programming */
 void window_init(window_t *window, int x, int y, int width, int height, const char *title);
 void window_add_component(window_t *window, window_component_t *component);
+void window_set_background(window_t *window, int enabled);
 
 /* Polymorphic methods (virtual functions) */
 void window_update(window_component_t *self);

@@ -30,6 +30,7 @@ void event_init(event_context_t *ctx)
         ctx->mouse->prev_x = -1;
         ctx->mouse->prev_y = -1;
         ctx->mouse->buttons_down = 0;
+        ctx->mouse->prev_buttons_down = 0;
         ctx->mouse->capture = NULL;
         ctx->mouse->drag_window = NULL;
         ctx->mouse->drag_offset_x = 0;
@@ -211,13 +212,16 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
     mouse_state_t *m = ctx->mouse;
     int consumed = EVENT_IGNORED;
 
-    // Get button state changes from kernel
-    uint8_t pressed = system_mouse_get_buttons_pressed();
-    uint8_t released = system_mouse_get_buttons_clicked();
+    // Refresh button state independently of movement so press/release works while stationary
+    uint8_t current = system_mouse_get_buttons_down();
+    uint8_t pressed = (uint8_t)(current & (uint8_t)~m->prev_buttons_down);
+    uint8_t released = (uint8_t)(m->prev_buttons_down & (uint8_t)~current);
+    m->buttons_down = current;
 
     // No events to process
     if (!mouse_moved && pressed == 0 && released == 0)
     {
+        m->prev_buttons_down = m->buttons_down;
         return EVENT_IGNORED;
     }
 
@@ -275,8 +279,6 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
     // Handle button presses
     if (pressed)
     {
-        m->buttons_down |= pressed;
-
         // Set mouse capture on first button press
         // This ensures all subsequent events go to the same window until release
         if (!m->capture)
@@ -320,8 +322,6 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
     // Handle button releases
     if (released)
     {
-        m->buttons_down &= (uint8_t)~released;
-
         if (released & MOUSE_BTN_LEFT)
         {
             if (handle_button_release(ctx, target, MOUSE_BTN_LEFT) == EVENT_CONSUMED)
@@ -346,6 +346,7 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
         }
     }
 
+    m->prev_buttons_down = m->buttons_down;
     return consumed;
 }
 

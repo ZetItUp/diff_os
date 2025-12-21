@@ -13,6 +13,7 @@ typedef struct wm_window
     void *pixels;
     int drew_once;
     char title[64];
+    int title_overridden;
 
     int x;
     int y;

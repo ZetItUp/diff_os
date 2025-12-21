@@ -32,7 +32,7 @@ static font_t *button_default_font(void)
 {
     if (!g_button_font)
     {
-        g_button_font = font_load_bdf("/system/fonts/spleen-6x12.bdf");
+        g_button_font = font_load_bdf("/system/fonts/spleen-8x16.bdf");
     }
     return g_button_font;
 }
@@ -174,6 +174,7 @@ bool button_handle_event(button_t *button, const diff_event_t *event)
     {
         int mx = event->mouse_x;
         int my = event->mouse_y;
+        bool left_down = (event->mouse_buttons & MOUSE_BTN_LEFT) != 0;
 
         bool inside = (mx >= bx && mx < bx + bw && my >= by && my < by + bh);
 
@@ -184,6 +185,22 @@ bool button_handle_event(button_t *button, const diff_event_t *event)
                 bool was_inside = button->mouse_inside;
                 button->mouse_inside = inside;
 
+                if (left_down && button->mouse_down)
+                {
+                    button->state = inside ? BUTTON_STATE_PRESSED : BUTTON_STATE_NORMAL;
+                    return true;
+                }
+                if (!left_down && button->mouse_down)
+                {
+                    button->mouse_down = false;
+                    button->state = inside ? BUTTON_STATE_HOVER : BUTTON_STATE_NORMAL;
+                    return true;
+                }
+                if (left_down && inside)
+                {
+                    // Ignore presses that started outside the button.
+                    return true;
+                }
                 if (inside && !was_inside)
                 {
                     // Mouse enter
@@ -191,7 +208,7 @@ bool button_handle_event(button_t *button, const diff_event_t *event)
                         button->state = BUTTON_STATE_HOVER;
                     return true;
                 }
-                else if (!inside && was_inside)
+                if (!inside && was_inside)
                 {
                     // Mouse leave
                     if (!button->mouse_down)
@@ -202,7 +219,7 @@ bool button_handle_event(button_t *button, const diff_event_t *event)
             }
 
             case MOUSE_ACTION_DOWN:
-                if (inside && (event->mouse_button & MOUSE_BTN_LEFT))
+                if (inside && ((event->mouse_button & MOUSE_BTN_LEFT) || left_down))
                 {
                     button->mouse_down = true;
                     button->state = BUTTON_STATE_PRESSED;
@@ -211,7 +228,7 @@ bool button_handle_event(button_t *button, const diff_event_t *event)
                 break;
 
             case MOUSE_ACTION_UP:
-                if (button->mouse_down && (event->mouse_button & MOUSE_BTN_LEFT))
+                if (button->mouse_down && ((event->mouse_button & MOUSE_BTN_LEFT) || !left_down))
                 {
                     button->mouse_down = false;
                     if (inside)
@@ -480,9 +497,12 @@ void button_paint(window_component_t *self)
     {
         int fw = font_width(font);
         int fh = font_height(font);
+        int ascent = font_ascent(font);
+        int descent = font_descent(font);
         int text_len = (int)strlen(button->text);
         int text_w = text_len * fw;
-        int text_h = fh;
+        int has_metrics = (ascent > 0 || descent > 0);
+        int text_h = has_metrics ? (ascent + descent) : fh;
 
         // Content area (inside border)
         int content_x = btn_x + BUTTON_BORDER;
@@ -495,7 +515,8 @@ void button_paint(window_component_t *self)
 
         // Center text
         int text_x = content_x + (content_w - text_w) / 2;
-        int text_y = content_y + (content_h - text_h) / 2;
+        int text_y = content_y + (content_h - text_h) / 2 +
+                     (has_metrics ? descent : 0);
 
         // Clip text to content area by only drawing visible characters
         int start_char = 0;

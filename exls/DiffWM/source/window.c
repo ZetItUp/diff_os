@@ -1,6 +1,7 @@
 #include <diffwm/window.h>
 #include <diffwm/diff_ipc.h>
 #include <diffwm/terminal_component.h>
+#include <diffgfx/draw.h>
 #include <stddef.h>
 
 void window_init(window_t *window, int x, int y, int width, int height, const char *title)
@@ -9,6 +10,9 @@ void window_init(window_t *window, int x, int y, int width, int height, const ch
 
     window->title = title;
     window->backbuffer = NULL;
+    window->flags = 0;
+    window->draw_background = 1;
+    window->presented = 0;
     window->child_count = 0;
     for (int i = 0; i < WINDOW_MAX_CHILDREN; i++)
     {
@@ -43,6 +47,14 @@ void window_add_component(window_t *window, window_component_t *component)
     {
         window->children[window->child_count++] = component;
     }
+}
+
+void window_set_background(window_t *window, int enabled)
+{
+    if (!window)
+        return;
+
+    window->draw_background = enabled ? 1 : 0;
 }
 
 void window_update(window_component_t *self)
@@ -84,9 +96,11 @@ void window_paint(window_component_t *self)
     if (!self->visible || !window->backbuffer)
         return;
 
-    // Clear backbuffer to black (fast path)
-    size_t total = (size_t)self->width * self->height;
-    memset32(window->backbuffer, 0xFF000000, total);
+    if (window->draw_background)
+    {
+        size_t total = (size_t)self->width * self->height;
+        memset32(window->backbuffer, color_rgb(192, 192, 192), total);
+    }
 
     // Render all child components
     for (int i = 0; i < window->child_count; i++)

@@ -3,7 +3,7 @@ PYTHON    := python3
 
 CFLAGS    := -ffreestanding -nostdlib -O0 -m32 -fno-pic -no-pie \
              -I../exls/DiffC/include -I../exls/DiffWM/includes -I../exls/DiffFonts/include \
-             -I../exls/DiffTGA/include \
+             -I../exls/DiffTGA/include -I../exls/DiffRuntime/include \
              -Wall -Wextra -fno-pic
 
 ELFDUMP   := ../tools/elfdump

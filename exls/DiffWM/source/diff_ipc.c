@@ -148,6 +148,9 @@ window_t* window_create(int x, int y, int width, int height, uint32_t flags, con
     win->mailbox = mailbox;
     win->wm_channel = wm_channel;
     win->next = NULL;
+    win->flags = flags;
+    win->draw_background = (flags & WINDOW_FLAG_NO_BACKGROUND) ? 0 : 1;
+    win->presented = 0;
     win->damage_pending = 0;
     win->damage_x_position = 0;
     win->damage_y_position = 0;
@@ -174,7 +177,28 @@ window_t* window_create(int x, int y, int width, int height, uint32_t flags, con
     win->base.update = window_update;
     win->base.draw = window_paint;
 
+    if (title && title[0] != '\0')
+    {
+        window_set_title(win, title);
+    }
+
     return win;
+}
+
+void window_set_title(window_t *window, const char *title)
+{
+    if (!window || !title)
+    {
+        return;
+    }
+
+    dwm_msg_t msg = {0};
+    msg.type = DWM_MSG_SET_TITLE;
+    msg.window_id = window->id;
+    strncpy(msg.set_title.title, title, DWM_TITLE_MAX - 1);
+    msg.set_title.title[DWM_TITLE_MAX - 1] = '\0';
+
+    send_message(window->wm_channel, &msg, sizeof(msg));
 }
 
 void window_present(window_t *window, const void *pixels)
@@ -201,6 +225,22 @@ void window_present(window_t *window, const void *pixels)
         {
             memcpy((uint8_t*)window->pixels + y * window->pitch, (const uint8_t*)pixels + y * pitch, pitch);
         }
+    }
+
+    if (!window->presented)
+    {
+        window->presented = 1;
+        window->damage_pending = 0;
+        window->damage_x_position = 0;
+        window->damage_y_position = 0;
+        window->damage_width = 0;
+        window->damage_height = 0;
+
+        dwm_msg_t msg = {0};
+        msg.type = DWM_MSG_DRAW;
+        msg.window_id = window->id;
+        send_message(window->wm_channel, &msg, sizeof(msg));
+        return;
     }
 
     if (window->damage_pending)

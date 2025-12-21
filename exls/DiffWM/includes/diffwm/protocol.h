@@ -75,8 +75,11 @@ typedef enum
     DWM_MSG_EVENT = 4,
     DWM_MSG_REQUEST_FOCUS = 5,
     DWM_MSG_FOCUS_CHANGED = 6,
-    DWM_MSG_DAMAGE = 7
+    DWM_MSG_DAMAGE = 7,
+    DWM_MSG_SET_TITLE = 8
 } dwm_msg_type_t;
+
+#define DWM_TITLE_MAX 64
 
 typedef struct
 {
@@ -98,6 +101,10 @@ typedef struct
     union
     {
         dwm_window_desc_t create;
+        struct
+        {
+            char title[DWM_TITLE_MAX];
+        } set_title;
         struct
         {
             uint32_t seq;

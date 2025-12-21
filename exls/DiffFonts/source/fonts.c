@@ -20,6 +20,8 @@ typedef struct
     font_type_t type;
     int width;
     int height;
+    int ascent;
+    int descent;
     glyph_t *glyphs[256];
     glyph_t *fallback;
 } font_bdf_t;
@@ -79,6 +81,20 @@ int font_height(const font_t *font)
 {
     if (!font || !font->impl) return 0;
     if (font->type == FONT_TYPE_BDF) return ((font_bdf_t*)font->impl)->height;
+    return 0;
+}
+
+int font_ascent(const font_t *font)
+{
+    if (!font || !font->impl) return 0;
+    if (font->type == FONT_TYPE_BDF) return ((font_bdf_t*)font->impl)->ascent;
+    return 0;
+}
+
+int font_descent(const font_t *font)
+{
+    if (!font || !font->impl) return 0;
+    if (font->type == FONT_TYPE_BDF) return ((font_bdf_t*)font->impl)->descent;
     return 0;
 }
 
@@ -188,6 +204,7 @@ font_t *font_load_bdf(const char *path)
 
     char line[256];
     int font_bbx_w = 0, font_bbx_h = 0;
+    int font_ascent = 0, font_descent = 0;
     font_bdf_t *bdf = (font_bdf_t*)calloc(1, sizeof(*bdf));
     if (!bdf)
     {
@@ -203,6 +220,14 @@ font_t *font_load_bdf(const char *path)
             sscanf(line + 16, "%d %d", &font_bbx_w, &font_bbx_h);
             bdf->width = font_bbx_w;
             bdf->height = font_bbx_h;
+        }
+        else if (strncmp(line, "FONT_ASCENT", 11) == 0)
+        {
+            sscanf(line + 12, "%d", &font_ascent);
+        }
+        else if (strncmp(line, "FONT_DESCENT", 12) == 0)
+        {
+            sscanf(line + 13, "%d", &font_descent);
         }
         else if (strncmp(line, "STARTCHAR", 9) == 0)
         {
@@ -236,6 +261,15 @@ font_t *font_load_bdf(const char *path)
         font_bdf_free(bdf);
         return NULL;
     }
+
+    if (font_ascent <= 0 && font_descent <= 0)
+    {
+        font_ascent = font_bbx_h;
+        font_descent = 0;
+    }
+
+    bdf->ascent = font_ascent;
+    bdf->descent = font_descent;
 
     font_t *font = (font_t*)calloc(1, sizeof(*font));
     if (!font)
