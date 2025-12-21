@@ -7,7 +7,7 @@ ELF2DEX   := ../DiffC/elf2dexlib.py
 GEN_IMPORTS := ../../tools/gen_imports.py
 LIBMAP    := ../../programs/libmap.json
 
-CFLAGS    := -ffreestanding -nostdlib -Wall -Wextra -O2 -Iincludes/ -I../DiffC/include -I../DiffFonts/include
+CFLAGS    := -ffreestanding -nostdlib -Wall -Wextra -O2 -Iincludes/ -I../DiffC/include -I../DiffFonts/include -I../DiffTGA/include
 SRCDIR    := source
 OBJDIR    := build
 EXLDIR    := exls
@@ -34,7 +34,7 @@ $(OBJDIR)/libdiffwm.elf: $(OBJS)
 
 $(OBJDIR)/imports.stamp: $(OBJDIR)/libdiffwm.elf
 	@echo "[GEN] imports for DiffWM"
-	$(PYTHON) $(GEN_IMPORTS) $(OBJDIR)/libdiffwm.elf $(OBJDIR) $(LIBMAP) diffc difffonts
+	$(PYTHON) $(GEN_IMPORTS) $(OBJDIR)/libdiffwm.elf $(OBJDIR) $(LIBMAP) diffc difffonts difftga
 	@touch $@
 
 exldir:

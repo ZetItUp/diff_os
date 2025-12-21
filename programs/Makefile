@@ -12,8 +12,11 @@ GEN_IMPORTS := ../tools/gen_imports.py
 
 OUT_ROOT  := ../image/programs
 
+# Excluded directories (templates, etc.)
+EXCLUDED_DIRS := window_template
+
 # All program directories where <dir>/<dir>.c exists
-ALL_PROGRAMS := $(foreach d,$(patsubst %/,%,$(wildcard */)),$(if $(wildcard $d/$d.c),$d))
+ALL_PROGRAMS := $(filter-out $(EXCLUDED_DIRS),$(foreach d,$(patsubst %/,%,$(wildcard */)),$(if $(wildcard $d/$d.c),$d)))
 
 # Programs with their own Makefile (multi-file builds)
 CUSTOM_PROGRAMS := $(foreach d,$(ALL_PROGRAMS),$(if $(wildcard $d/Makefile),$d))
