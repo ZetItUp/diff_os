@@ -54,3 +54,6 @@ wm_window_t *wm_find(uint32_t id);
 void wm_clear_region(int x, int y, int w, int h);
 void wm_add_dirty_rect(int x, int y, int w, int h);
 void wm_mark_needs_redraw(void);
+
+// Desktop icon handling
+int wm_desktop_handle_click(int x, int y);

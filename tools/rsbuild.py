@@ -14,8 +14,13 @@ Behavior:
         $APP_VERSION_MINOR -> 0 (default)
         $APP_ICON_NAME    -> directory basename
         $APP_ICON_DATA    -> empty string by default
+        $APP_ICON_PATH    -> empty string by default
         $STRING_KEY       -> empty string
         $STRING_VALUE     -> empty string
+    - APPLICATION_ICON can be specified as:
+        APPLICATION_ICON <name> ICON <tga_path>
+        APPLICATION_ICON <name> PATH <absolute_path>
+      ICON embeds the TGA bytes; PATH stores a filesystem path.
     - STRING entries are optional; if present, they are included.
     - Emits <dir>/<basename>.rsbin with a simple header + entry table +
       string table + data blob.
@@ -35,6 +40,10 @@ VERSION = 1
 TYPE_STRING = 1
 TYPE_U32 = 2
 TYPE_BLOB = 3
+
+ICON_KIND_NONE = 0
+ICON_KIND_EMBEDDED = 1
+ICON_KIND_PATH = 2
 
 
 def fnv1a_32(s: str) -> int:
@@ -70,6 +79,7 @@ def substitute(value: str, base: str) -> str:
         "$APP_VERSION_MINOR": "0",
         "$APP_ICON_NAME": base,
         "$APP_ICON_DATA": "",
+        "$APP_ICON_PATH": "",
         "$STRING_KEY": "",
         "$STRING_VALUE": "",
     }
@@ -79,7 +89,7 @@ def substitute(value: str, base: str) -> str:
     return out
 
 
-def parse_rs(lines: List[str], base: str) -> List[Entry]:
+def parse_rs(lines: List[str], base: str, dir_path: str) -> List[Entry]:
     entries: List[Entry] = []
     for raw in lines:
         line = raw.strip()
@@ -113,8 +123,35 @@ def parse_rs(lines: List[str], base: str) -> List[Entry]:
             entries.append(Entry(key, TYPE_U32, struct.pack("<I", val)))
         elif key == "APPLICATION_ICON":
             icon_name = tokens[0] if tokens else ""
-            icon_data = " ".join(tokens[1:]) if len(tokens) > 1 else ""
-            blob = struct.pack("<H", len(icon_name)) + icon_name.encode("utf-8") + icon_data.encode("utf-8")
+            icon_mode = tokens[1].upper() if len(tokens) > 1 else ""
+            icon_value = " ".join(tokens[2:]) if len(tokens) > 2 else ""
+            icon_kind = ICON_KIND_NONE
+            icon_payload = b""
+
+            if icon_mode == "ICON":
+                icon_kind = ICON_KIND_EMBEDDED
+                if icon_value:
+                    icon_path = icon_value
+                    if not os.path.isabs(icon_path):
+                        icon_path = os.path.join(dir_path, icon_path)
+                    try:
+                        with open(icon_path, "rb") as f:
+                            icon_payload = f.read()
+                    except OSError:
+                        icon_payload = b""
+            elif icon_mode == "PATH":
+                icon_kind = ICON_KIND_PATH
+                icon_payload = icon_value.encode("utf-8") if icon_value else b""
+            else:
+                # Backward compatible: treat remaining data as a path if present
+                icon_data = " ".join(tokens[1:]) if len(tokens) > 1 else ""
+                if icon_data:
+                    icon_kind = ICON_KIND_PATH
+                    icon_payload = icon_data.encode("utf-8")
+
+            blob = struct.pack("<HBBI", len(icon_name), icon_kind, 0, len(icon_payload))
+            blob += icon_name.encode("utf-8")
+            blob += icon_payload
             entries.append(Entry(key, TYPE_BLOB, blob))
         elif key == "STRING":
             if len(tokens) >= 1:
@@ -220,7 +257,7 @@ def main():
     with open(rs_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
-    entries = parse_rs(lines, base)
+    entries = parse_rs(lines, base, dir_path)
     blob, strtab_off, strtab_size, data_off = build_blob(entries)
 
     out_path = os.path.join(dir_path, f"{base}.rsbin")

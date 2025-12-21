@@ -81,6 +81,7 @@ enum
     SYSTEM_MOUSE_GET_BUTTONS_CLICKED = 67,
     SYSTEM_MESSAGE_GET_OWNER = 68,
     SYSTEM_PROCESS_GET_RESOURCES = 69,
+    SYSTEM_FILE_READLINK = 70,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -240,6 +241,12 @@ static inline __attribute__((always_inline)) int console_floor_clear(void)
 static inline int system_open (const char *path, int oflags, int mode)
 {
     return do_sys(SYSTEM_FILE_OPEN, (int)(uintptr_t)path, oflags, mode, 0);
+}
+
+static inline int system_readlink(const char *path, char *buf, size_t bufsize)
+{
+    return do_sys(SYSTEM_FILE_READLINK, (int)(uintptr_t)path, (int)(uintptr_t)buf,
+                  (int)bufsize, 0);
 }
 
 static inline int system_close(int file_descriptor)

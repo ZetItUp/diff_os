@@ -326,6 +326,29 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
         {
             if (handle_button_release(ctx, target, MOUSE_BTN_LEFT) == EVENT_CONSUMED)
                 consumed = EVENT_CONSUMED;
+            if (!target)
+            {
+                click_state_t *c = ctx->clicks;
+                int idx = event_button_index(MOUSE_BTN_LEFT);
+                if (idx >= 0 && c)
+                {
+                    uint64_t now = monotonic_ms();
+                    int is_dbl = (now - c->last_click_ms[idx] <= DWM_DBLCLICK_MS &&
+                                  c->last_click_window_id[idx] == 0 &&
+                                  abs(m->x - c->last_click_x[idx]) <= DWM_DBLCLICK_DIST &&
+                                  abs(m->y - c->last_click_y[idx]) <= DWM_DBLCLICK_DIST);
+
+                    c->last_click_ms[idx] = now;
+                    c->last_click_x[idx] = m->x;
+                    c->last_click_y[idx] = m->y;
+                    c->last_click_window_id[idx] = 0;
+
+                    if (is_dbl && wm_desktop_handle_click(m->x, m->y))
+                    {
+                        consumed = EVENT_CONSUMED;
+                    }
+                }
+            }
         }
         if (released & MOUSE_BTN_RIGHT)
         {

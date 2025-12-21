@@ -13,6 +13,7 @@
 #include <system/shared_mem.h>
 #include <diffwm/protocol.h>
 #include <difffonts/fonts.h>
+#include <dirent.h>
 
 // Diff Graphics Library
 #include <diffgfx/graphics.h>
@@ -32,6 +33,38 @@
 #define RS_TYPE_STRING 1
 #define RS_TYPE_U32    2
 #define RS_TYPE_BLOB   3
+
+#define DEX_MAGIC 0x58454400u  // "DEX\0"
+
+#define APP_ICON_KIND_NONE     0
+#define APP_ICON_KIND_EMBEDDED 1
+#define APP_ICON_KIND_PATH     2
+
+typedef struct __attribute__((packed)) dex_header
+{
+    uint32_t magic;
+    uint32_t version_major;
+    uint32_t version_minor;
+    uint32_t entry_offset;
+    uint32_t text_offset;
+    uint32_t text_size;
+    uint32_t rodata_offset;
+    uint32_t rodata_size;
+    uint32_t data_offset;
+    uint32_t data_size;
+    uint32_t bss_size;
+    uint32_t import_table_offset;
+    uint32_t import_table_count;
+    uint32_t reloc_table_offset;
+    uint32_t reloc_table_count;
+    uint32_t symbol_table_offset;
+    uint32_t symbol_table_count;
+    uint32_t strtab_offset;
+    uint32_t strtab_size;
+    uint32_t resources_offset;
+    uint32_t resources_size;
+    uint32_t reserved[6];
+} dex_header_t;
 
 typedef struct __attribute__((packed)) rs_header
 {
@@ -182,6 +215,22 @@ static char *rs_get_string(const uint8_t *blob, size_t sz, const char *key)
     }
 
     return s;
+}
+
+static const uint8_t *rs_get_blob(const uint8_t *blob, size_t sz, const char *key, uint32_t *out_sz)
+{
+    if (out_sz) *out_sz = 0;
+    if (!blob || sz < sizeof(rs_header_t)) return NULL;
+    const rs_header_t *hdr = (const rs_header_t *)blob;
+    if (hdr->magic != RS_MAGIC || hdr->version != RS_VERSION)
+    {
+        return NULL;
+    }
+    const rs_entry_t *e = rs_find_entry(hdr, blob, key);
+    if (!e || e->type != RS_TYPE_BLOB) return NULL;
+    if (e->data_off + e->data_size > sz) return NULL;
+    if (out_sz) *out_sz = e->data_size;
+    return blob + e->data_off;
 }
 
 static uint8_t *wm_fetch_process_resources(int pid, uint32_t *out_sz)
@@ -448,6 +497,461 @@ static int rects_intersect(int ax, int ay, int aw, int ah, int bx, int by, int b
            ay < by + bh && ay + ah > by;
 }
 
+typedef struct app_icon_info
+{
+    char name[NAME_MAX];
+    uint8_t kind;
+    const uint8_t *data;
+    uint32_t data_len;
+} app_icon_info_t;
+
+static int wm_parse_app_icon_blob(const uint8_t *data, size_t data_sz, app_icon_info_t *out)
+{
+    if (!data || data_sz < 8 || !out) return 0;
+
+    uint16_t name_len = (uint16_t)(data[0] | (data[1] << 8));
+    uint8_t kind = data[2];
+    uint32_t payload_len = (uint32_t)(data[4] |
+                                      (data[5] << 8) |
+                                      (data[6] << 16) |
+                                      (data[7] << 24));
+    size_t offset = 8;
+    if (offset + name_len > data_sz) return 0;
+    size_t copy_len = name_len;
+    if (copy_len >= sizeof(out->name)) copy_len = sizeof(out->name) - 1;
+    if (copy_len > 0)
+    {
+        memcpy(out->name, data + offset, copy_len);
+    }
+    out->name[copy_len] = '\0';
+    offset += name_len;
+    if (offset + payload_len > data_sz) return 0;
+
+    out->kind = kind;
+    out->data = data + offset;
+    out->data_len = payload_len;
+    return (kind != APP_ICON_KIND_NONE && payload_len > 0);
+}
+
+static int wm_read_all(int fd, void *buf, size_t size)
+{
+    uint8_t *dst = (uint8_t *)buf;
+    size_t total = 0;
+    while (total < size)
+    {
+        long r = system_read(fd, dst + total, (unsigned long)(size - total));
+        if (r <= 0)
+        {
+            return -1;
+        }
+        total += (size_t)r;
+    }
+    return 0;
+}
+
+static uint8_t *wm_load_dex_resources(const char *path, uint32_t *out_sz)
+{
+    if (out_sz) *out_sz = 0;
+    if (!path || !path[0]) return NULL;
+
+    int fd = system_open(path, 0, 0);
+    if (fd < 0) return NULL;
+
+    dex_header_t hdr;
+    if (wm_read_all(fd, &hdr, sizeof(hdr)) != 0)
+    {
+        system_close(fd);
+        return NULL;
+    }
+
+    if (hdr.magic != DEX_MAGIC || hdr.resources_offset == 0 || hdr.resources_size == 0)
+    {
+        system_close(fd);
+        return NULL;
+    }
+
+    long file_size = system_lseek(fd, 0, SEEK_END);
+    if (file_size < 0)
+    {
+        system_close(fd);
+        return NULL;
+    }
+
+    if ((uint32_t)file_size < hdr.resources_offset + hdr.resources_size)
+    {
+        system_close(fd);
+        return NULL;
+    }
+
+    if (system_lseek(fd, (long)hdr.resources_offset, SEEK_SET) < 0)
+    {
+        system_close(fd);
+        return NULL;
+    }
+
+    uint8_t *buf = malloc(hdr.resources_size);
+    if (!buf)
+    {
+        system_close(fd);
+        return NULL;
+    }
+
+    if (wm_read_all(fd, buf, hdr.resources_size) != 0)
+    {
+        free(buf);
+        system_close(fd);
+        return NULL;
+    }
+
+    system_close(fd);
+    if (out_sz) *out_sz = hdr.resources_size;
+    return buf;
+}
+
+static int wm_path_has_suffix(const char *path, const char *suffix)
+{
+    if (!path || !suffix) return 0;
+    size_t len = strlen(path);
+    size_t slen = strlen(suffix);
+    if (slen == 0 || len < slen) return 0;
+    return strcmp(path + (len - slen), suffix) == 0;
+}
+
+static tga_image_t *wm_load_icon_from_rs_blob(const uint8_t *blob, size_t sz)
+{
+    uint32_t icon_sz = 0;
+    const uint8_t *icon_blob = rs_get_blob(blob, sz, "APPLICATION_ICON", &icon_sz);
+    if (!icon_blob || icon_sz == 0) return NULL;
+
+    app_icon_info_t info;
+    memset(&info, 0, sizeof(info));
+    if (!wm_parse_app_icon_blob(icon_blob, icon_sz, &info))
+    {
+        return NULL;
+    }
+
+    if (info.kind == APP_ICON_KIND_PATH)
+    {
+        char path[256];
+        size_t copy_len = info.data_len;
+        if (copy_len >= sizeof(path)) copy_len = sizeof(path) - 1;
+        if (copy_len == 0) return NULL;
+        memcpy(path, info.data, copy_len);
+        path[copy_len] = '\0';
+        return tga_load(path);
+    }
+    if (info.kind == APP_ICON_KIND_EMBEDDED)
+    {
+        return tga_load_mem(info.data, info.data_len);
+    }
+
+    return NULL;
+}
+
+static tga_image_t *wm_load_icon_from_dex(const char *path)
+{
+    uint32_t rsz = 0;
+    uint8_t *rblob = wm_load_dex_resources(path, &rsz);
+    if (!rblob) return NULL;
+    tga_image_t *img = wm_load_icon_from_rs_blob(rblob, rsz);
+    free(rblob);
+    return img;
+}
+
+static void wm_apply_app_title_from_dex(const char *path, char *out, size_t out_sz)
+{
+    if (!path || !out || out_sz == 0) return;
+    uint32_t rsz = 0;
+    uint8_t *rblob = wm_load_dex_resources(path, &rsz);
+    if (!rblob) return;
+
+    char *title = rs_get_string(rblob, rsz, "APPLICATION_TITLE");
+    if (!title)
+    {
+        title = rs_get_string(rblob, rsz, "WINDOW_TITLE");
+    }
+
+    if (title)
+    {
+        strncpy(out, title, out_sz - 1);
+        out[out_sz - 1] = '\0';
+        free(title);
+    }
+
+    free(rblob);
+}
+
+// Desktop icons
+#ifndef DT_LNK
+#define DT_LNK 10
+#endif
+
+#define DESKTOP_MAX_ICONS 64
+#define DESKTOP_ICON_MARGIN 21
+#define DESKTOP_ICON_COL_GAP 5
+#define DESKTOP_ICON_ROW_GAP 5
+#define DESKTOP_ICON_LABEL_GAP 4
+
+typedef struct desktop_icon
+{
+    char name[NAME_MAX];
+    char path[256];
+    char launch_path[256];
+    uint8_t type;
+    tga_image_t *icon_img;
+    int icon_x;
+    int icon_y;
+    int bbox_x;
+    int bbox_y;
+    int bbox_w;
+    int bbox_h;
+    int label_x;
+    int label_y;
+} desktop_icon_t;
+
+static desktop_icon_t g_desktop_icons[DESKTOP_MAX_ICONS];
+static int g_desktop_icon_count = 0;
+static char g_desktop_root[256] = {0};
+static tga_image_t *g_desktop_default_icon = NULL;
+
+static void wm_desktop_layout_icons(void)
+{
+    if (g_desktop_icon_count <= 0)
+    {
+        return;
+    }
+
+    int font_w = g_title_font ? font_width(g_title_font) : 0;
+    int font_h = g_title_font ? font_height(g_title_font) : 0;
+    int label_h = g_title_font ? font_h : 0;
+
+    int x = DESKTOP_ICON_MARGIN;
+    int y = DESKTOP_ICON_MARGIN;
+
+    for (int i = 0; i < g_desktop_icon_count; ++i)
+    {
+        desktop_icon_t *icon = &g_desktop_icons[i];
+        tga_image_t *img = icon->icon_img ? icon->icon_img : g_desktop_default_icon;
+        int icon_w = img ? (int)img->width : 32;
+        int icon_h = img ? (int)img->height : 32;
+        int text_w = (g_title_font && icon->name[0]) ? (int)strlen(icon->name) * font_w : 0;
+        int bbox_w = icon_w;
+        int bbox_x = x;
+
+        if (text_w > icon_w)
+        {
+            int shift = (text_w - icon_w) / 2;
+            bbox_x = x - shift;
+            if (bbox_x < 0) bbox_x = 0;
+            bbox_w = text_w;
+        }
+
+        int total_h = icon_h + (label_h ? (DESKTOP_ICON_LABEL_GAP + label_h) : 0);
+
+        icon->icon_x = x;
+        icon->icon_y = y;
+        icon->bbox_x = bbox_x;
+        icon->bbox_y = y;
+        icon->bbox_w = bbox_w;
+        icon->bbox_h = total_h;
+        icon->label_x = x + (icon_w - text_w) / 2;
+        if (icon->label_x < 0) icon->label_x = 0;
+        icon->label_y = y + icon_h + DESKTOP_ICON_LABEL_GAP;
+
+        y += total_h + DESKTOP_ICON_ROW_GAP;
+        if (y + total_h > (int)g_mode.height)
+        {
+            y = DESKTOP_ICON_MARGIN;
+            x += icon_w + DESKTOP_ICON_COL_GAP;
+        }
+    }
+}
+
+static void wm_desktop_load_icons(void)
+{
+    g_desktop_icon_count = 0;
+    g_desktop_root[0] = '\0';
+
+    const char *paths[] = { "/users/default/desktop", "/desktop", "/home/desktop" };
+    DIR *dir = NULL;
+    for (int i = 0; i < (int)(sizeof(paths) / sizeof(paths[0])); ++i)
+    {
+        dir = opendir(paths[i]);
+        if (dir)
+        {
+            strncpy(g_desktop_root, paths[i], sizeof(g_desktop_root) - 1);
+            g_desktop_root[sizeof(g_desktop_root) - 1] = '\0';
+            break;
+        }
+    }
+
+    if (!dir)
+    {
+        return;
+    }
+
+    struct dirent ent;
+    while (g_desktop_icon_count < DESKTOP_MAX_ICONS && readdir(dir, &ent) == 0)
+    {
+        if (ent.d_name[0] == '\0' ||
+            (ent.d_name[0] == '.' && ent.d_name[1] == '\0') ||
+            (ent.d_name[0] == '.' && ent.d_name[1] == '.' && ent.d_name[2] == '\0'))
+        {
+            continue;
+        }
+
+        desktop_icon_t *icon = &g_desktop_icons[g_desktop_icon_count++];
+        memset(icon, 0, sizeof(*icon));
+        strncpy(icon->name, ent.d_name, sizeof(icon->name) - 1);
+        icon->type = ent.d_type;
+        snprintf(icon->path, sizeof(icon->path), "%s/%s", g_desktop_root, ent.d_name);
+        snprintf(icon->launch_path, sizeof(icon->launch_path), "%s", icon->path);
+
+        if (icon->type == DT_LNK)
+        {
+            char target[256];
+            int rc = system_readlink(icon->path, target, sizeof(target));
+            if (rc > 0)
+            {
+                strncpy(icon->launch_path, target, sizeof(icon->launch_path) - 1);
+                icon->launch_path[sizeof(icon->launch_path) - 1] = '\0';
+            }
+        }
+
+        if (wm_path_has_suffix(icon->launch_path, ".dex"))
+        {
+            icon->icon_img = wm_load_icon_from_dex(icon->launch_path);
+            wm_apply_app_title_from_dex(icon->launch_path, icon->name, sizeof(icon->name));
+        }
+    }
+
+    closedir(dir);
+    wm_desktop_layout_icons();
+}
+
+static void wm_blit_tga_alpha(const tga_image_t *img, int dst_x, int dst_y)
+{
+    if (!img || !img->pixels || !g_backbuffer) return;
+
+    int img_w = (int)img->width;
+    int img_h = (int)img->height;
+
+    int x0 = dst_x;
+    int y0 = dst_y;
+    int x1 = dst_x + img_w;
+    int y1 = dst_y + img_h;
+
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int)g_mode.width) x1 = (int)g_mode.width;
+    if (y1 > (int)g_mode.height) y1 = (int)g_mode.height;
+
+    int draw_w = x1 - x0;
+    int draw_h = y1 - y0;
+    if (draw_w <= 0 || draw_h <= 0) return;
+
+    int src_x = x0 - dst_x;
+    int src_y = y0 - dst_y;
+
+    for (int y = 0; y < draw_h; ++y)
+    {
+        uint32_t *dst = g_backbuffer + (size_t)(y0 + y) * g_backbuffer_stride + x0;
+        uint32_t *src = img->pixels + (size_t)(src_y + y) * img_w + src_x;
+
+        for (int x = 0; x < draw_w; ++x)
+        {
+            uint32_t pixel = src[x];
+            uint8_t alpha = (pixel >> 24) & 0xFF;
+
+            if (alpha == 0xFF)
+            {
+                dst[x] = pixel;
+            }
+            else if (alpha > 0)
+            {
+                uint32_t bg = dst[x];
+                uint32_t inv = 255 - alpha;
+
+                uint32_t r = (((pixel >> 16) & 0xFF) * alpha + ((bg >> 16) & 0xFF) * inv) / 255;
+                uint32_t g = (((pixel >> 8) & 0xFF) * alpha + ((bg >> 8) & 0xFF) * inv) / 255;
+                uint32_t b = ((pixel & 0xFF) * alpha + (bg & 0xFF) * inv) / 255;
+
+                dst[x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+}
+
+static void wm_draw_desktop_icons(int clip_x, int clip_y, int clip_w, int clip_h)
+{
+    if (g_desktop_icon_count <= 0)
+    {
+        return;
+    }
+
+    for (int i = 0; i < g_desktop_icon_count; ++i)
+    {
+        desktop_icon_t *icon = &g_desktop_icons[i];
+        if (!rects_intersect(clip_x, clip_y, clip_w, clip_h,
+                             icon->bbox_x, icon->bbox_y, icon->bbox_w, icon->bbox_h))
+        {
+            continue;
+        }
+
+        tga_image_t *img = icon->icon_img ? icon->icon_img : g_desktop_default_icon;
+        if (img)
+        {
+            wm_blit_tga_alpha(img, icon->icon_x, icon->icon_y);
+        }
+
+        if (g_title_font && icon->name[0])
+        {
+            font_draw_text(g_title_font,
+                           g_backbuffer,
+                           g_backbuffer_stride,
+                           icon->label_x,
+                           icon->label_y,
+                           icon->name,
+                           0xFFFFFFFF);
+        }
+    }
+}
+
+static int wm_desktop_icon_at(int x, int y)
+{
+    for (int i = 0; i < g_desktop_icon_count; ++i)
+    {
+        desktop_icon_t *icon = &g_desktop_icons[i];
+        if (x >= icon->bbox_x && x < icon->bbox_x + icon->bbox_w &&
+            y >= icon->bbox_y && y < icon->bbox_y + icon->bbox_h)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+int wm_desktop_handle_click(int x, int y)
+{
+    int idx = wm_desktop_icon_at(x, y);
+    if (idx < 0)
+    {
+        return 0;
+    }
+
+    desktop_icon_t *icon = &g_desktop_icons[idx];
+    if (icon->type == DT_DIR)
+    {
+        return 0;
+    }
+
+    const char *launch_path = icon->launch_path[0] ? icon->launch_path : icon->path;
+
+    int pid = spawn_process(launch_path, 0, NULL);
+    return (pid >= 0) ? 1 : 0;
+}
+
 static void wm_fill_bg_region(int x, int y, int w, int h)
 {
     if (!g_backbuffer) return;
@@ -501,6 +1005,7 @@ static void wm_repaint_dirty_region(void)
     g_disable_dirty_mark = 1;
 
     wm_fill_bg_region(min_x, min_y, dirty_w, dirty_h);
+    wm_draw_desktop_icons(min_x, min_y, dirty_w, dirty_h);
 
     // Collect windows so we can paint bottom-to-top (oldest first).
     wm_window_t *win_stack[128];
@@ -1443,6 +1948,7 @@ int main(void)
 
     // Load window skin and title font
     g_window_skin = tga_load("/system/graphics/window.tga");
+    g_desktop_default_icon = tga_load("/system/graphics/icons/empty_file.tga");
     g_title_font = font_load_bdf("/system/fonts/spleen-8x16.bdf");
     if (!g_title_font)
     {
@@ -1500,9 +2006,13 @@ int main(void)
     }
     g_backbuffer = g_buffers[g_active_fb];
 
+    wm_desktop_load_icons();
+
     // Initialize previous mouse position for dirty tracking
     g_mouse_state.prev_x = g_mouse_state.x;
     g_mouse_state.prev_y = g_mouse_state.y;
+
+    wm_draw_desktop_icons(0, 0, (int)g_mode.width, (int)g_mode.height);
 
     // Draw initial cursor
     wm_draw_cursor();

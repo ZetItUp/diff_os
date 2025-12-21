@@ -250,7 +250,7 @@ def build_dex(dumpfile, elffile, outfile, default_exl, import_map_path=None, for
 
     with open(rs_path, "r", encoding="utf-8") as f:
         rs_lines = f.readlines()
-    rs_entries = parse_rs(rs_lines, program_name)
+    rs_entries = parse_rs(rs_lines, program_name, program_dir)
     rs_blob, rs_strtab_off, rs_strtab_sz, rs_data_off = build_blob(rs_entries)
     # Persist the blob alongside the program for visibility/debugging.
     rs_out_path = os.path.join(program_dir, f"{program_name}.rsbin")

@@ -712,6 +712,12 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_FILE_READLINK:
+        {
+            ret = system_file_readlink((const char*)arg0, (char*)arg1, (size_t)arg2);
+
+            break;
+        }
         case SYSTEM_DIR_CREATE:
         {
             ret = system_mkdir((const char*)arg0);

@@ -79,6 +79,7 @@ enum
     SYSTEM_MOUSE_GET_BUTTONS_CLICKED = 67,
     SYSTEM_MESSAGE_GET_OWNER = 68,
     SYSTEM_PROCESS_GET_RESOURCES = 69,
+    SYSTEM_FILE_READLINK = 70,
 };
 
 struct syscall_frame 
@@ -135,6 +136,7 @@ int system_file_stat(const char *abs_path, filesystem_stat_t *user_st);
 int system_file_fstat(int file, filesystem_stat_t *user_st);
 int system_file_delete(const char *abs_path);
 int system_file_rename(const char *old_path, const char *new_path);
+int system_file_readlink(const char *abs_path, char *buf, size_t bufsize);
 int system_mkdir(const char *path);
 int system_rmdir(const char *path);
 int system_tty_read_user(void *user_buf, uint32_t len, int mode, void *color_buf);

@@ -52,3 +52,8 @@ off_t lseek(int fd, off_t offset, int whence)
 {
     return (off_t)system_lseek(fd, (long)offset, whence);
 }
+
+ssize_t readlink(const char *path, char *buf, size_t bufsize)
+{
+    return (ssize_t)system_readlink(path, buf, bufsize);
+}

@@ -465,3 +465,37 @@ int system_file_rename(const char *old_path, const char *new_path)
 
     return filesystem_rename(norm_old, norm_new);
 }
+
+// Read a symlink target. Returns target length on success, -1 on error.
+int system_file_readlink(const char *abs_path, char *buf, size_t bufsize)
+{
+    if (verify_fs_ready() != 0)
+        return -1;
+
+    if (!abs_path || !buf || bufsize == 0)
+        return -1;
+
+    char upath[KERNEL_MAX_PATH];
+    if (copy_string_from_user(upath, abs_path, sizeof(upath)) == -1)
+        return -1;
+
+    process_t *proc = process_current();
+    const char *base = process_cwd_path(proc);
+    char norm[KERNEL_MAX_PATH];
+    if (path_normalize(base, upath, norm, sizeof(norm)) != 0)
+        return -1;
+
+    char target[MAX_SYMLINK_TARGET];
+    int len = filesystem_readlink(norm, target, sizeof(target));
+    if (len < 0)
+        return -1;
+
+    size_t copy_len = (size_t)len + 1;
+    if (copy_len > bufsize)
+        copy_len = bufsize;
+
+    if (copy_to_user(buf, target, copy_len) != 0)
+        return -1;
+
+    return len;
+}

@@ -25,6 +25,7 @@ int close(int fd);
 ssize_t read(int fd, void *buf, size_t count);
 ssize_t write(int fd, const void *buf, size_t count);
 off_t lseek(int fd, off_t offset, int whence);
+ssize_t readlink(const char *path, char *buf, size_t bufsize);
 int exec_dex(const char *path, int argc, char **argv);
 int spawn_process(const char *path, int argc, char **argv);
 int chdir(const char *path);
