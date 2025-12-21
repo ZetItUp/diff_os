@@ -1,30 +1,74 @@
 /*
- * Window Template
+ * Launcher - Program launcher for DiffOS
  *
- * A minimal template for creating GUI window programs.
- * Copy this folder and rename to create a new window-based application.
+ * Allows the user to enter a program name or path and launch it.
  */
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 #include <system/threads.h>
 #include <diffwm/diffwm.h>
 #include <diffgfx/draw.h>
+#include <runtime/exec.h>
 
-#define WIN_W 300
-#define WIN_H 100
+#define WIN_W 320
+#define WIN_H 110
 
 static bool g_running = true;
+static bool g_launch_success = false;
+static window_t *g_win = NULL;
 
-static button_t btn_ok;
+static button_t btn_launch;
 static label_t lbl_info;
+static label_t lbl_error;
 static textbox_t txt_program;
 static char txt_program_buf[128];
 
-static void on_click(void *user_data)
+static void try_launch_program(void)
+{
+    const char *program = textbox_get_text(&txt_program);
+
+    if (!program || !*program)
+    {
+        label_set_text(&lbl_error, "Please enter a program name.");
+        window_paint(&g_win->base);
+        return;
+    }
+
+    /* Initialize runtime if not already done */
+    rt_init(NULL);
+
+    /* Try to resolve the program */
+    char resolved_path[RT_MAX_PATH];
+    int rc = rt_resolve(program, resolved_path, sizeof(resolved_path), RT_RESOLVE_ALL);
+
+    if (rc != RT_OK)
+    {
+        label_set_text(&lbl_error, "Program not found.");
+        window_paint(&g_win->base);
+        return;
+    }
+
+    /* Launch the program as a detached process */
+    int pid = rt_exec(program, 0, NULL, RT_SPAWN_DETACHED);
+
+    if (pid < 0)
+    {
+        label_set_text(&lbl_error, "Failed to start program.");
+        window_paint(&g_win->base);
+        return;
+    }
+
+    /* Success - exit launcher */
+    g_launch_success = true;
+    g_running = false;
+}
+
+static void on_launch_click(void *user_data)
 {
     (void)user_data;
-    g_running = false;
+    try_launch_program();
 }
 
 static void handle_key_event(const diff_event_t *ev)
@@ -32,20 +76,16 @@ static void handle_key_event(const diff_event_t *ev)
     if (!ev->key_pressed)
         return;
 
-    // Handle key press
-    // ev->key contains the key code
-    // ev->modifiers contains DIFF_MOD_SHIFT, DIFF_MOD_CTRL, etc.
-
-    (void)ev;
-}
-
-static void handle_mouse_event(const diff_event_t *ev)
-{
-    // ev->mouse_x, ev->mouse_y - cursor position (window-relative)
-    // ev->mouse_action - MOUSE_ACTION_MOVE, MOUSE_ACTION_DOWN, MOUSE_ACTION_UP, MOUSE_ACTION_CLICK
-    // ev->mouse_button - MOUSE_BTN_LEFT, MOUSE_BTN_RIGHT, MOUSE_BTN_MIDDLE
-
-    (void)ev;
+    /* Enter key also launches */
+    if (ev->key == '\n' || ev->key == '\r')
+    {
+        try_launch_program();
+    }
+    /* Escape key cancels */
+    else if (ev->key == 0x1B)
+    {
+        g_running = false;
+    }
 }
 
 static void handle_event(const diff_event_t *ev)
@@ -56,18 +96,6 @@ static void handle_event(const diff_event_t *ev)
             handle_key_event(ev);
             break;
 
-        case DIFF_EVENT_MOUSE:
-            handle_mouse_event(ev);
-            break;
-
-        case DIFF_EVENT_FOCUS_GAINED:
-            // Window gained focus
-            break;
-
-        case DIFF_EVENT_FOCUS_LOST:
-            // Window lost focus
-            break;
-
         default:
             break;
     }
@@ -75,54 +103,63 @@ static void handle_event(const diff_event_t *ev)
 
 int main(void)
 {
-    window_t *win = window_create(100, 100, WIN_W, WIN_H, 0, "Launcher");
-    if (!win)
+    g_win = window_create(100, 100, WIN_W, WIN_H, 0, "Run Program");
+    if (!g_win)
         return -1;
 
-    label_init(&lbl_info, 10, 20, "Enter the program name or full path to run\nthe program.");
+    /* Info label */
+    label_init(&lbl_info, 10, 15, "Enter the program name or path:");
 
-    button_init(&btn_ok, WIN_W - 75, WIN_H - 45, 70, 30, "Launch");
-    button_set_callback(&btn_ok, on_click, NULL);
+    /* Error/status label (initially empty) */
+    label_init(&lbl_error, 10, 35, "");
 
-    textbox_init(&txt_program, 10, WIN_H - 45, WIN_W - 95, 30,
+    /* Text input */
+    textbox_init(&txt_program, 10, WIN_H - 50, WIN_W - 90, 28,
                  txt_program_buf, (int)sizeof(txt_program_buf), NULL);
 
-    window_add_component(win, &lbl_info.base);
-    window_add_component(win, &txt_program.base);
-    window_add_component(win, &btn_ok.base);
+    /* Launch button */
+    button_init(&btn_launch, WIN_W - 75, WIN_H - 50, 65, 28, "Run");
+    button_set_callback(&btn_launch, on_launch_click, NULL);
 
-    window_request_focus(win);
+    window_add_component(g_win, &lbl_info.base);
+    window_add_component(g_win, &lbl_error.base);
+    window_add_component(g_win, &txt_program.base);
+    window_add_component(g_win, &btn_launch.base);
 
-    // Initial paint
-    window_paint(&win->base);
+    window_request_focus(g_win);
+
+    /* Initial paint */
+    window_paint(&g_win->base);
 
     while (g_running)
     {
         diff_event_t ev;
-        while (window_poll_event(win, &ev))
+        while (window_poll_event(g_win, &ev))
         {
             if (textbox_handle_event(&txt_program, &ev))
             {
-                window_paint(&win->base);
+                /* Clear error message when user types */
+                if (lbl_error.text && lbl_error.text[0] != '\0')
+                {
+                    label_set_text(&lbl_error, "");
+                }
+                window_paint(&g_win->base);
                 continue;
             }
 
-            if(button_handle_event(&btn_ok, &ev))
+            if (button_handle_event(&btn_launch, &ev))
             {
-                window_paint(&win->base);
+                window_paint(&g_win->base);
                 continue;
             }
 
             handle_event(&ev);
         }
 
-        // Repaint if needed
-        // window_paint(&win->base);
-
-        // Yield to other processes
         thread_yield();
     }
 
-    window_destroy(win);
-    return 0;
+    window_destroy(g_win);
+
+    return g_launch_success ? 0 : 1;
 }
