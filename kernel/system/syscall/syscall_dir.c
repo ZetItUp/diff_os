@@ -229,9 +229,10 @@ int system_read_dir(int handle, struct dirent *out)
 
         // Fill dirent data
         kdir.d_id   = fe->entry_id;
-        kdir.d_type = (fe->type == ENTRY_TYPE_DIR)  ? DT_DIR :
-                      (fe->type == ENTRY_TYPE_FILE) ? DT_REG : DT_UNKNOWN;
-        kdir.d_size = fe->file_size_bytes;
+        kdir.d_type = (fe->type == ENTRY_TYPE_DIR)    ? DT_DIR :
+                      (fe->type == ENTRY_TYPE_FILE)   ? DT_REG :
+                      (fe->type == ENTRY_TYPE_SYMLINK) ? DT_LNK : DT_UNKNOWN;
+        kdir.d_size = (fe->type == ENTRY_TYPE_SYMLINK) ? 0 : fe_file_size_bytes(fe);
 
         // Copy filename
         size_t src_len = 0;

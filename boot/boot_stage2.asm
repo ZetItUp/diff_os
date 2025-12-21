@@ -15,16 +15,20 @@ SUPERBLOCK_SEG  equ 0x1000
 FILETABLE_SEG   equ 0x3000
 
 ; ---- DiffFS on-disk layout constants ----
-FILE_ENTRY_SIZE         equ 0x140       ; sizeof(FileEntry) = 320 bytes
+; FileEntry structure with union for file/symlink data
+FILE_ENTRY_SIZE         equ 0x158       ; sizeof(FileEntry) = 344 bytes
 ENTRY_OFF_ENTRY_ID      equ 0x000       ; uint32
 ENTRY_OFF_PARENT_ID     equ 0x004       ; uint32
-ENTRY_OFF_TYPE          equ 0x008       ; uint32 (1=file, 2=dir)
+ENTRY_OFF_TYPE          equ 0x008       ; uint32 (1=file, 2=dir, 3=symlink)
 ENTRY_OFF_NAME          equ 0x00C       ; char[256]
-ENTRY_OFF_START_SECTOR  equ 0x10C       ; uint32
-ENTRY_OFF_SECTOR_COUNT  equ 0x110       ; uint32
+; Union starts at 0x10C - for files: start_sector/sector_count/file_size
+; For symlinks: target[48]
+ENTRY_OFF_START_SECTOR  equ 0x10C       ; uint32 (inside union.file)
+ENTRY_OFF_SECTOR_COUNT  equ 0x110       ; uint32 (inside union.file)
 
 ENTRY_TYPE_FILE         equ 1
 ENTRY_TYPE_DIR          equ 2
+ENTRY_TYPE_SYMLINK      equ 3
 MAX_FILES_TABLE         equ 256
 
 file_lba_low:       dw 0                ; LBA low word

@@ -482,7 +482,7 @@ const exl_t* load_exl(const FileTable *ft, const char *exl_name)
     }
 
     const FileEntry *fe = &ft->entries[fidx];
-    uint32_t sz = fe->file_size_bytes;
+    uint32_t sz = fe_file_size_bytes(fe);
     /* Läs in hela EXL-filen i temporär buffer (kernel only) */
     /* Läs in EXL i user buffer; avoids touching kernel heap with large files */
     uint8_t *filebuf = umalloc(sz);

@@ -494,18 +494,18 @@ void *load_ddf_module(const char *path, ddf_header_t **out_header, uint32_t *out
 
     fe = &file_table->entries[idx];
 
-    if (fe->type != ENTRY_TYPE_FILE || fe->file_size_bytes == 0)
+    if (fe->type != ENTRY_TYPE_FILE || fe_file_size_bytes(fe) == 0)
     {
         DDBG("[MODULE] ERROR: '%s' is not a regular file\n", path);
 
         return NULL;
     }
 
-    file_img = kmalloc(fe->file_size_bytes);
+    file_img = kmalloc(fe_file_size_bytes(fe));
 
     if (!file_img)
     {
-        DDBG("[MODULE] ERROR: OOM for module file image (%u bytes)\n", (unsigned)fe->file_size_bytes);
+        DDBG("[MODULE] ERROR: OOM for module file image (%u bytes)\n", (unsigned)fe_file_size_bytes(fe));
 
         return NULL;
     }

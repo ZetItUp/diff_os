@@ -272,7 +272,7 @@ static int read_at_entry(const FileEntry* fe, uint32_t offset, void* buffer, uin
         return 0;
     }
 
-    uint32_t file_size = fe->file_size_bytes;
+    uint32_t file_size = fe_file_size_bytes(fe);
 
     if (offset >= file_size)
     {
@@ -287,9 +287,9 @@ static int read_at_entry(const FileEntry* fe, uint32_t offset, void* buffer, uin
     }
 
     // Clamp to allocated sectors if file_size_bytes claims too much
-    uint64_t capacity_bytes = (uint64_t)fe->sector_count * (uint64_t)SECTOR_SIZE;
+    uint64_t capacity_bytes = (uint64_t)fe_sector_count(fe) * (uint64_t)SECTOR_SIZE;
 
-    if ((uint64_t)fe->file_size_bytes > capacity_bytes)
+    if ((uint64_t)fe_file_size_bytes(fe) > capacity_bytes)
     {
         uint32_t cap_left = (uint32_t)(capacity_bytes > offset ? (capacity_bytes - offset) : 0);
 
@@ -302,12 +302,12 @@ static int read_at_entry(const FileEntry* fe, uint32_t offset, void* buffer, uin
     uint32_t sector_index_in_file = offset / SECTOR_SIZE;
     uint32_t sector_byte_offset = offset % SECTOR_SIZE;
 
-    if (sector_index_in_file >= fe->sector_count)
+    if (sector_index_in_file >= fe_sector_count(fe))
     {
         return 0;
     }
 
-    uint32_t first_sector_lba = fe->start_sector + sector_index_in_file;
+    uint32_t first_sector_lba = fe_start_sector(fe) + sector_index_in_file;
 
     // Hard bounds against disk
     if (superblock.total_sectors && (first_sector_lba >= superblock.total_sectors))
@@ -348,7 +348,7 @@ static int read_at_entry(const FileEntry* fe, uint32_t offset, void* buffer, uin
         sector_byte_offset = 0;
         first_sector_lba++;
 
-        if ((first_sector_lba - fe->start_sector) >= fe->sector_count)
+        if ((first_sector_lba - fe_start_sector(fe)) >= fe_sector_count(fe))
         {
             break;
         }
@@ -1069,9 +1069,9 @@ int read_file(const FileTable* table, const char* path, void* buffer)
         return -1;
     }
 
-    start_sector = table->entries[index].start_sector;
-    sector_count = table->entries[index].sector_count;
-    file_size_bytes = table->entries[index].file_size_bytes;
+    start_sector = fe_start_sector(&table->entries[index]);
+    sector_count = fe_sector_count(&table->entries[index]);
+    file_size_bytes = fe_file_size_bytes(&table->entries[index]);
 
     spin_unlock(&file_table_lock);
 
@@ -1525,12 +1525,12 @@ int filesystem_read(int fd, void* buffer, uint32_t count)
         return -1;
     }
 
-    if (off >= fe->file_size_bytes)
+    if (off >= fe_file_size_bytes(fe))
     {
         return 0;
     }
 
-    uint32_t remain = fe->file_size_bytes - off;
+    uint32_t remain = fe_file_size_bytes(fe) - off;
 
     if (count > remain)
     {
@@ -1576,7 +1576,7 @@ int32_t filesystem_lseek(int fd, int32_t off, int whence)
     }
     else if (whence == SEEK_END)
     {
-        base = (int64_t)fe->file_size_bytes;
+        base = (int64_t)fe_file_size_bytes(fe);
     }
     else
     {
@@ -1589,9 +1589,9 @@ int32_t filesystem_lseek(int fd, int32_t off, int whence)
     {
         proposed = 0;
     }
-    if (proposed > (int64_t)fe->file_size_bytes)
+    if (proposed > (int64_t)fe_file_size_bytes(fe))
     {
-        proposed = (int64_t)fe->file_size_bytes;
+        proposed = (int64_t)fe_file_size_bytes(fe);
     }
 
     uint32_t new_off = (uint32_t)proposed;
@@ -1614,7 +1614,7 @@ int filesystem_stat(const char* path, filesystem_stat_t* st)
     }
 
     const FileEntry* fe = &file_table->entries[idx];
-    st->size = fe->file_size_bytes;
+    st->size = fe_file_size_bytes(fe);
 
     return 0;
 }
@@ -1632,7 +1632,7 @@ int filesystem_fstat(int fd, filesystem_stat_t* st)
         return -1;
     }
 
-    st->size = fe->file_size_bytes;
+    st->size = fe_file_size_bytes(fe);
 
     return 0;
 }
@@ -1791,9 +1791,9 @@ int filesystem_create(const char* path, uint32_t initial_size)
     entry->parent_id = parent_id;
     entry->type = ENTRY_TYPE_FILE;
     (void)strlcpy(entry->filename, filename, MAX_FILENAME_LEN);
-    entry->start_sector = first_sector;
-    entry->sector_count = sectors_needed;
-    entry->file_size_bytes = 0; // Start with 0, will grow as data is written
+    entry->data.file.start_sector = first_sector;
+    entry->data.file.sector_count = sectors_needed;
+    entry->data.file.file_size_bytes = 0; // Start with 0, will grow as data is written
     entry->created_timestamp = 0;  // TODO: Add timestamp support
     entry->modified_timestamp = 0;
 
@@ -1926,21 +1926,21 @@ static int write_at_entry(FileEntry* fe, uint32_t offset, const void* buffer, ui
     // Check if we need to expand the file
     uint32_t end_offset = offset + count;
     uint64_t needed_bytes = (uint64_t)end_offset;
-    uint64_t capacity_bytes = (uint64_t)fe->sector_count * (uint64_t)SECTOR_SIZE;
+    uint64_t capacity_bytes = (uint64_t)fe->data.file.sector_count * (uint64_t)SECTOR_SIZE;
 
     if (needed_bytes > capacity_bytes)
     {
         // Need to allocate more sectors
         uint32_t needed_sectors = (uint32_t)((needed_bytes + SECTOR_SIZE - 1) / SECTOR_SIZE);
-        uint32_t additional_sectors = needed_sectors - fe->sector_count;
+        uint32_t additional_sectors = needed_sectors - fe->data.file.sector_count;
 
         if (additional_sectors > 0)
         {
             DDBG("[Diff FS] write_at_entry: file needs expansion from %u to %u sectors\n",
-                 fe->sector_count, needed_sectors);
+                 fe->data.file.sector_count, needed_sectors);
 
             // Try to allocate contiguous sectors right after the current file
-            uint32_t expected_sector = fe->start_sector + fe->sector_count;
+            uint32_t expected_sector = fe->data.file.start_sector + fe->data.file.sector_count;
 
             // Check if the next sectors are free
             int can_extend_contiguous = 1;
@@ -1964,7 +1964,7 @@ static int write_at_entry(FileEntry* fe, uint32_t offset, const void* buffer, ui
                 }
 
                 // Update file entry
-                fe->sector_count = needed_sectors;
+                fe->data.file.sector_count = needed_sectors;
                 sector_bitmap_dirty = 1;
 
                 DDBG("[Diff FS] write_at_entry: expanded file to %u sectors\n", needed_sectors);
@@ -1981,12 +1981,12 @@ static int write_at_entry(FileEntry* fe, uint32_t offset, const void* buffer, ui
     sector_index_in_file = offset / SECTOR_SIZE;
     sector_byte_offset = offset % SECTOR_SIZE;
 
-    if (sector_index_in_file >= fe->sector_count)
+    if (sector_index_in_file >= fe->data.file.sector_count)
     {
         return 0;
     }
 
-    first_sector_lba = fe->start_sector + sector_index_in_file;
+    first_sector_lba = fe->data.file.start_sector + sector_index_in_file;
 
     // Bounds check
     if (superblock.total_sectors && (first_sector_lba >= superblock.total_sectors))
@@ -2054,16 +2054,16 @@ static int write_at_entry(FileEntry* fe, uint32_t offset, const void* buffer, ui
         sector_byte_offset = 0;
         first_sector_lba++;
 
-        if ((first_sector_lba - fe->start_sector) >= fe->sector_count)
+        if ((first_sector_lba - fe->data.file.start_sector) >= fe->data.file.sector_count)
         {
             break;
         }
     }
 
     // Update file size if we extended it
-    if (end_offset > fe->file_size_bytes)
+    if (end_offset > fe->data.file.file_size_bytes)
     {
-        fe->file_size_bytes = end_offset;
+        fe->data.file.file_size_bytes = end_offset;
     }
 
     return (int)bytes_written;
@@ -2107,7 +2107,7 @@ int filesystem_write(int fd, const void* buffer, uint32_t count)
     off = filesystem_get_offset_for_fd(fd);
 
     DDBG("[Diff FS] filesystem_write: fd=%d idx=%d off=%u count=%u sectors=%u\n",
-         fd, idx, off, count, fe->sector_count);
+         fd, idx, off, count, fe->data.file.sector_count);
 
     r = write_at_entry(fe, off, buffer, count);
 
@@ -2157,8 +2157,8 @@ int filesystem_delete(const char* path)
     }
 
     // Free the sectors
-    uint32_t start_sector = entry->start_sector;
-    uint32_t sector_count = entry->sector_count;
+    uint32_t start_sector = entry->data.file.start_sector;
+    uint32_t sector_count = entry->data.file.sector_count;
 
     // Clear the file entry
     memset(entry, 0, sizeof(FileEntry));
@@ -2330,4 +2330,184 @@ int filesystem_rename(const char* old_path, const char* new_path)
     DDBG("[Diff FS] filesystem_rename: renamed '%s' to '%s'\n", old_path, new_path);
 
     return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Symlink operations
+// ---------------------------------------------------------------------------
+
+int filesystem_symlink(const char* target, const char* linkpath)
+{
+    char parent_path[512];
+    char linkname[MAX_FILENAME_LEN];
+    uint32_t parent_id;
+    int entry_idx;
+    FileEntry* entry;
+
+    if (!target || !target[0] || !linkpath || !linkpath[0] || !file_table)
+    {
+        return -1;
+    }
+
+    // Check target length
+    size_t target_len = 0;
+    while (target[target_len] != '\0') target_len++;
+
+    if (target_len >= MAX_SYMLINK_TARGET)
+    {
+        DDBG("[Diff FS] filesystem_symlink: target too long (%u >= %u)\n",
+             (unsigned)target_len, MAX_SYMLINK_TARGET);
+        return -1;
+    }
+
+    // Split linkpath into parent directory and link name
+    if (split_path(linkpath, parent_path, sizeof(parent_path),
+                   linkname, sizeof(linkname)) != 0)
+    {
+        return -1;
+    }
+
+    spin_lock(&file_table_lock);
+
+    // Find parent directory
+    if (parent_path[0] == '/' && parent_path[1] == '\0')
+    {
+        parent_id = detect_root_id(file_table);
+    }
+    else
+    {
+        int parent_idx = find_entry_by_path_nolock(file_table, parent_path);
+        if (parent_idx < 0)
+        {
+            spin_unlock(&file_table_lock);
+            DDBG("[Diff FS] filesystem_symlink: parent dir '%s' not found\n", parent_path);
+            return -1;
+        }
+
+        if (file_table->entries[parent_idx].type != ENTRY_TYPE_DIR)
+        {
+            spin_unlock(&file_table_lock);
+            DDBG("[Diff FS] filesystem_symlink: parent '%s' is not a directory\n", parent_path);
+            return -1;
+        }
+
+        parent_id = file_table->entries[parent_idx].entry_id;
+    }
+
+    // Check if link already exists
+    if (find_entry_in_dir(file_table, parent_id, linkname) >= 0)
+    {
+        spin_unlock(&file_table_lock);
+        DDBG("[Diff FS] filesystem_symlink: '%s' already exists\n", linkpath);
+        return -2;
+    }
+
+    // Allocate file entry
+    entry_idx = find_free_entry(file_bitmap, MAX_FILES);
+    if (entry_idx < 0)
+    {
+        spin_unlock(&file_table_lock);
+        DDBG("[Diff FS] filesystem_symlink: no free file entries\n");
+        return -1;
+    }
+
+    // Create the symlink entry
+    set_bitmap_bit(file_bitmap, entry_idx);
+    entry = &file_table->entries[entry_idx];
+    memset(entry, 0, sizeof(FileEntry));
+
+    entry->entry_id = (uint32_t)(entry_idx + 1);
+    entry->parent_id = parent_id;
+    entry->type = ENTRY_TYPE_SYMLINK;
+    (void)strlcpy(entry->filename, linkname, MAX_FILENAME_LEN);
+
+    // Store target in the symlink union member
+    (void)strlcpy(entry->data.symlink.target, target, MAX_SYMLINK_TARGET);
+
+    entry->created_timestamp = 0;
+    entry->modified_timestamp = 0;
+
+    file_table->count++;
+
+    spin_unlock(&file_table_lock);
+
+    // Write file table to disk
+    if (write_file_table(&superblock) != 0)
+    {
+        DDBG("[Diff FS] filesystem_symlink: failed to write file table\n");
+        return -1;
+    }
+
+    DDBG("[Diff FS] filesystem_symlink: created '%s' -> '%s'\n", linkpath, target);
+
+    return 0;
+}
+
+int filesystem_readlink(const char* path, char* buf, size_t bufsize)
+{
+    int idx;
+
+    if (!path || !path[0] || !buf || bufsize == 0 || !file_table)
+    {
+        return -1;
+    }
+
+    spin_lock(&file_table_lock);
+
+    idx = find_entry_by_path_nolock(file_table, path);
+    if (idx < 0)
+    {
+        spin_unlock(&file_table_lock);
+        return -1;
+    }
+
+    const FileEntry* entry = &file_table->entries[idx];
+
+    if (entry->type != ENTRY_TYPE_SYMLINK)
+    {
+        spin_unlock(&file_table_lock);
+        DDBG("[Diff FS] filesystem_readlink: '%s' is not a symlink\n", path);
+        return -1;
+    }
+
+    // Copy target to buffer
+    const char* target = entry->data.symlink.target;
+    size_t target_len = 0;
+    while (target[target_len] != '\0' && target_len < MAX_SYMLINK_TARGET)
+    {
+        target_len++;
+    }
+
+    size_t copy_len = (target_len < bufsize - 1) ? target_len : (bufsize - 1);
+    memcpy(buf, target, copy_len);
+    buf[copy_len] = '\0';
+
+    spin_unlock(&file_table_lock);
+
+    return (int)target_len;
+}
+
+int filesystem_is_symlink(const char* path)
+{
+    int idx;
+
+    if (!path || !path[0] || !file_table)
+    {
+        return 0;
+    }
+
+    spin_lock(&file_table_lock);
+
+    idx = find_entry_by_path_nolock(file_table, path);
+    if (idx < 0)
+    {
+        spin_unlock(&file_table_lock);
+        return 0;
+    }
+
+    int is_symlink = (file_table->entries[idx].type == ENTRY_TYPE_SYMLINK) ? 1 : 0;
+
+    spin_unlock(&file_table_lock);
+
+    return is_symlink;
 }

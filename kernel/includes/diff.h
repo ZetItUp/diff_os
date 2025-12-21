@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
 
 // Types
 
@@ -23,9 +24,16 @@
 typedef enum
 {
     ENTRY_TYPE_INVALID = 0,
-    ENTRY_TYPE_FILE = 1,
-    ENTRY_TYPE_DIR = 2
+    ENTRY_TYPE_FILE    = 1,
+    ENTRY_TYPE_DIR     = 2,
+    ENTRY_TYPE_SYMLINK = 3
 } EntryType;
+
+/* Feature flags for superblock */
+#define DIFF_FEATURE_SYMLINKS  0x00000001
+
+/* Maximum symlink target length (inline in FileEntry) */
+#define MAX_SYMLINK_TARGET 48
 
 typedef struct
 {
@@ -33,13 +41,31 @@ typedef struct
     uint32_t parent_id;
     EntryType type;
     char filename[MAX_FILENAME_LEN];
-    uint32_t start_sector;
-    uint32_t sector_count;
-    uint32_t file_size_bytes;
+
+    union {
+        /* For ENTRY_TYPE_FILE and ENTRY_TYPE_DIR */
+        struct {
+            uint32_t start_sector;
+            uint32_t sector_count;
+            uint32_t file_size_bytes;
+        } file;
+
+        /* For ENTRY_TYPE_SYMLINK */
+        struct {
+            char target[MAX_SYMLINK_TARGET];  /* Target path (null-terminated) */
+        } symlink;
+    } data;
+
     uint32_t created_timestamp;
     uint32_t modified_timestamp;
-    uint8_t reserved[32];
+    uint8_t reserved[20];  /* Reduced from 32 to maintain struct size */
 } __attribute__((packed)) FileEntry;
+
+/* Compatibility macros for accessing file fields */
+#define fe_start_sector(fe)    ((fe)->data.file.start_sector)
+#define fe_sector_count(fe)    ((fe)->data.file.sector_count)
+#define fe_file_size_bytes(fe) ((fe)->data.file.file_size_bytes)
+#define fe_symlink_target(fe)  ((fe)->data.symlink.target)
 
 typedef struct
 {
@@ -114,6 +140,11 @@ int filesystem_delete(const char *path);
 int filesystem_rename(const char *old_path, const char *new_path);
 int filesystem_mkdir(const char *path);
 int filesystem_rmdir(const char *path);
+
+// Symlink operations
+int filesystem_symlink(const char *target, const char *linkpath);
+int filesystem_readlink(const char *path, char *buf, size_t bufsize);
+int filesystem_is_symlink(const char *path);
 
 // Bitmaps
 

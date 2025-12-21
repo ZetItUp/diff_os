@@ -326,7 +326,7 @@ char* find_shell_path(const FileTable *table, const char *cfg_path)
 
     fe = &table->entries[idx];
 
-    cfg_data = (char *)kmalloc(fe->sector_count * 512 + 1);
+    cfg_data = (char *)kmalloc(fe_sector_count(fe) * 512 + 1);
     if (!cfg_data)
     {
         printf("[SHELL] Out of memory reading '%s'\n", norm_cfg);

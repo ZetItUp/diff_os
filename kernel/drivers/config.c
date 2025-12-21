@@ -219,7 +219,7 @@ void load_drivers(const FileTable* table, const char* cfg_path)
 
     fe = &table->entries[idx];
 
-    syscfg_data = (char *)kmalloc(fe->sector_count * 512 + 1);
+    syscfg_data = (char *)kmalloc(fe_sector_count(fe) * 512 + 1);
 
     if (!syscfg_data)
     {

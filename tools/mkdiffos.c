@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define SECTOR_SIZE 512
 #define RESERVED_STAGE2_SECTORS 31
@@ -15,9 +16,16 @@
 typedef enum
 {
     ENTRY_TYPE_INVALID = 0,
-    ENTRY_TYPE_FILE = 1,
-    ENTRY_TYPE_DIR  = 2
+    ENTRY_TYPE_FILE    = 1,
+    ENTRY_TYPE_DIR     = 2,
+    ENTRY_TYPE_SYMLINK = 3
 } EntryType;
+
+/* Feature flags for superblock */
+#define DIFF_FEATURE_SYMLINKS  0x00000001
+
+/* Maximum symlink target length */
+#define MAX_SYMLINK_TARGET 48
 
 typedef struct
 {
@@ -25,12 +33,24 @@ typedef struct
     uint32_t parent_id;
     EntryType type;
     char filename[MAX_FILENAME_LEN];
-    uint32_t start_sector;
-    uint32_t sector_count;
-    uint32_t file_size_bytes;
+
+    union {
+        /* For ENTRY_TYPE_FILE and ENTRY_TYPE_DIR */
+        struct {
+            uint32_t start_sector;
+            uint32_t sector_count;
+            uint32_t file_size_bytes;
+        } file;
+
+        /* For ENTRY_TYPE_SYMLINK */
+        struct {
+            char target[MAX_SYMLINK_TARGET];
+        } symlink;
+    } data;
+
     uint32_t created_timestamp;
     uint32_t modified_timestamp;
-    uint8_t reserved[32];
+    uint8_t reserved[20];
 } __attribute__((packed)) FileEntry;
 
 typedef struct
@@ -90,12 +110,36 @@ static void add_dir_recursive(const char *host_path, uint32_t parent_id,
         snprintf(fullpath, sizeof(fullpath), "%s/%s", host_path, ent->d_name);
 
         struct stat st = {0};
-        if (stat(fullpath, &st) < 0)
+        if (lstat(fullpath, &st) < 0)
         {
             continue;
         }
 
-        if (S_ISDIR(st.st_mode))
+        if (S_ISLNK(st.st_mode))
+        {
+            /* Handle symlinks */
+            char target[MAX_SYMLINK_TARGET];
+            ssize_t len = readlink(fullpath, target, sizeof(target) - 1);
+            if (len < 0 || len >= (ssize_t)sizeof(target))
+            {
+                printf("Warning: skipping symlink '%s' (target too long or error)\n", fullpath);
+                continue;
+            }
+            target[len] = '\0';
+
+            int idx = table->count;
+            if (idx >= MAX_FILES) { closedir(dir); return; }
+
+            table->entries[idx].entry_id  = idx + 1;
+            table->entries[idx].parent_id = parent_id;
+            table->entries[idx].type      = ENTRY_TYPE_SYMLINK;
+            snprintf(table->entries[idx].filename, MAX_FILENAME_LEN, "%s", ent->d_name);
+            snprintf(table->entries[idx].data.symlink.target, MAX_SYMLINK_TARGET, "%s", target);
+            table->count++;
+
+            printf("Adding symlink: %s -> %s\n", fullpath, target);
+        }
+        else if (S_ISDIR(st.st_mode))
         {
             /* Undvik dubblett: 'system' under root skapas manuellt i main(). */
             if (parent_id == 1 && strcmp(ent->d_name, "system") == 0)
@@ -110,9 +154,9 @@ static void add_dir_recursive(const char *host_path, uint32_t parent_id,
             table->entries[idx].parent_id = parent_id;
             table->entries[idx].type      = ENTRY_TYPE_DIR;
             snprintf(table->entries[idx].filename, MAX_FILENAME_LEN, "%s", ent->d_name);
-            table->entries[idx].start_sector   = 0;
-            table->entries[idx].sector_count   = 0;
-            table->entries[idx].file_size_bytes= 0;
+            table->entries[idx].data.file.start_sector   = 0;
+            table->entries[idx].data.file.sector_count   = 0;
+            table->entries[idx].data.file.file_size_bytes= 0;
             table->count++;
 
             add_dir_recursive(fullpath, (uint32_t)(idx + 1), table, (parent_id == 2) ? 1 : 0);
@@ -131,9 +175,9 @@ static void add_dir_recursive(const char *host_path, uint32_t parent_id,
             table->entries[idx].parent_id = parent_id;
             table->entries[idx].type      = ENTRY_TYPE_FILE;
             snprintf(table->entries[idx].filename, MAX_FILENAME_LEN, "%s", ent->d_name);
-            table->entries[idx].file_size_bytes = (uint32_t)st.st_size;
-            table->entries[idx].start_sector    = 0;
-            table->entries[idx].sector_count    = 0;
+            table->entries[idx].data.file.file_size_bytes = (uint32_t)st.st_size;
+            table->entries[idx].data.file.start_sector    = 0;
+            table->entries[idx].data.file.sector_count    = 0;
             table->count++;
         }
     }
@@ -236,7 +280,7 @@ int main(int argc, char *argv[])
     table.entries[2].parent_id = 2;
     table.entries[2].type      = ENTRY_TYPE_FILE;
     snprintf(table.entries[2].filename, MAX_FILENAME_LEN, "kernel.bin");
-    table.entries[2].file_size_bytes = (uint32_t)kernel_size;
+    table.entries[2].data.file.file_size_bytes = (uint32_t)kernel_size;
     table.count = 3;
 
     /* Lägg in allt under image/system (hoppa över kernel.bin där) och sedan resten under image */
@@ -264,9 +308,9 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        uint32_t file_sectors = (table.entries[i].file_size_bytes + SECTOR_SIZE - 1) / SECTOR_SIZE;
-        table.entries[i].start_sector = next_sector;
-        table.entries[i].sector_count = file_sectors;
+        uint32_t file_sectors = (table.entries[i].data.file.file_size_bytes + SECTOR_SIZE - 1) / SECTOR_SIZE;
+        table.entries[i].data.file.start_sector = next_sector;
+        table.entries[i].data.file.sector_count = file_sectors;
         next_sector += file_sectors;
     }
 
@@ -338,6 +382,7 @@ int main(int argc, char *argv[])
     sb.sector_bitmap_sector      = sector_bitmap_sector;
     sb.sector_bitmap_size        = sector_bitmap_size;
     sb.root_dir_id               = 1;
+    sb.feature_flags             = DIFF_FEATURE_SYMLINKS;
 
     fseek(out, (long)sb_sector * SECTOR_SIZE, SEEK_SET);
     fwrite(&sb, sizeof(sb), 1, out);
@@ -382,7 +427,7 @@ int main(int argc, char *argv[])
         {
             char path[1024];
             build_full_file_path(&table, i, path, sizeof(path));
-            printf("Writing %s -> sector %u\n", path, table.entries[i].start_sector);
+            printf("Writing %s -> sector %u\n", path, table.entries[i].data.file.start_sector);
             f = fopen(path, "rb");
             if (!f)
             {
@@ -395,7 +440,7 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        fseek(out, (long)table.entries[i].start_sector * SECTOR_SIZE, SEEK_SET);
+        fseek(out, (long)table.entries[i].data.file.start_sector * SECTOR_SIZE, SEEK_SET);
 
         while ((rd = fread(buffer, 1, SECTOR_SIZE, f)) > 0)
         {

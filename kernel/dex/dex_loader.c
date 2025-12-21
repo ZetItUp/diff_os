@@ -876,7 +876,7 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     }
 
     fe = &ft->entries[file_index];
-    if (!fe->file_size_bytes)
+    if (!fe_file_size_bytes(fe))
     {
         DEX_DBG("[DEX] ERROR: Empty file: %s\n", path);
 
@@ -884,11 +884,11 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     }
 
     // Read whole file into temporary buffer
-    buffer = (uint8_t *)kmalloc(fe->file_size_bytes);
-    
+    buffer = (uint8_t *)kmalloc(fe_file_size_bytes(fe));
+
     if (!buffer)
     {
-        DEX_DBG("[DEX] ERROR: Unable to allocate %u bytes\n", fe->file_size_bytes);
+        DEX_DBG("[DEX] ERROR: Unable to allocate %u bytes\n", fe_file_size_bytes(fe));
 
         return -3;
     }
@@ -902,7 +902,7 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     }
 
     // Load image into user space
-    rc = dex_load(buffer, fe->file_size_bytes, &dex);
+    rc = dex_load(buffer, fe_file_size_bytes(fe), &dex);
     if (rc != 0)
     {
         kfree(buffer);
@@ -1032,21 +1032,21 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     }
 
     fe = &ft->entries[file_index];
-    if (!fe->file_size_bytes)
+    if (!fe_file_size_bytes(fe))
     {
         DEX_DBG("[DEX] ERROR: Empty file: %s\n", path);
         return -3;
     }
 
-    buffer = (uint8_t *)kmalloc(fe->file_size_bytes);
+    buffer = (uint8_t *)kmalloc(fe_file_size_bytes(fe));
     if (!buffer)
     {
-        DEX_DBG("[DEX] ERROR: Unable to allocate %u bytes\n", fe->file_size_bytes);
+        DEX_DBG("[DEX] ERROR: Unable to allocate %u bytes\n", fe_file_size_bytes(fe));
         return -4;
     }
 
     DEX_DBG("Trying to read_file(%p, %s, buffer)\n", (void*)ft, path);
-    DEX_DBG("Buffer attempted to allocate: %d bytes\n", fe->file_size_bytes);
+    DEX_DBG("Buffer attempted to allocate: %d bytes\n", fe_file_size_bytes(fe));
 
     // Read into kernel buffer directly (no PAGE_USER hack)
     if (read_file(ft, path, buffer) < 0)
@@ -1071,7 +1071,7 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     paging_free_all_user();
     paging_user_heap_reset();
 
-    load_rc = dex_load(buffer, fe->file_size_bytes, &dex);
+    load_rc = dex_load(buffer, fe_file_size_bytes(fe), &dex);
     if (load_rc != 0)
     {
         paging_switch_address_space(cr3_parent);
@@ -1194,7 +1194,7 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
 
     // Also keep a kernel copy of the resources (if present) for cross-process queries
     if (dex.header && dex.header->resources_size &&
-        dex.header->resources_offset + dex.header->resources_size <= fe->file_size_bytes)
+        dex.header->resources_offset + dex.header->resources_size <= fe_file_size_bytes(fe))
     {
         uint32_t rsz = dex.header->resources_size;
         uint8_t *kres = (uint8_t *)kmalloc(rsz);

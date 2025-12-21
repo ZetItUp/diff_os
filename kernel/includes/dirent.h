@@ -15,6 +15,9 @@
 #ifndef DT_DIR
 #define DT_DIR     4
 #endif
+#ifndef DT_LNK
+#define DT_LNK     10
+#endif
 
 typedef struct dirent {
     uint32_t d_id;            
