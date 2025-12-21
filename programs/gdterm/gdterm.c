@@ -18,6 +18,8 @@
 
 #define WIN_W 640
 #define WIN_H 600
+#define TERMINAL_PADDING_LEFT 8
+#define TERMINAL_PADDING_TOP 8
 
 // VGA color to RGB mapping
 static term_color_t vga_to_color(uint8_t vga_color)
@@ -55,6 +57,7 @@ static term_color_t vga_attr_to_color(uint8_t attr)
 
 // Terminal component
 static terminal_component_t g_terminal;
+static int g_terminal_font_height = 0;
 
 static const char *g_shell_name = "Different Terminal";
 static const unsigned g_ver_major = 1;
@@ -74,6 +77,78 @@ static int g_child_count = 0;
 static bool g_prompt_blocked = false;
 static bool g_need_prompt = false;
 static bool g_should_quit = false;
+static bool g_has_focus = false;
+
+static void window_damage_terminal_full(window_t *window);
+
+static int terminal_visible_line_count(int font_height_value)
+{
+    if (font_height_value <= 0)
+    {
+        return 1;
+    }
+
+    int usable_height = g_terminal.base.height - TERMINAL_PADDING_TOP;
+    int max_visible_lines = usable_height / font_height_value;
+    if (max_visible_lines < 1) max_visible_lines = 1;
+    if (max_visible_lines > TERM_MAX_LINES) max_visible_lines = TERM_MAX_LINES;
+    return max_visible_lines;
+}
+
+static void window_damage_terminal_full(window_t *window)
+{
+    if (!window)
+    {
+        return;
+    }
+
+    window_damage(window,
+                  g_terminal.base.x,
+                  g_terminal.base.y,
+                  g_terminal.base.width,
+                  g_terminal.base.height);
+}
+
+static void window_damage_terminal_line(window_t *window, int line_index)
+{
+    if (!window || g_terminal_font_height <= 0)
+    {
+        return;
+    }
+
+    int max_visible_lines = terminal_visible_line_count(g_terminal_font_height);
+    if (line_index < 0)
+    {
+        return;
+    }
+
+    if (line_index >= max_visible_lines)
+    {
+        window_damage_terminal_full(window);
+        return;
+    }
+
+    int x_position = g_terminal.base.x + TERMINAL_PADDING_LEFT;
+    int y_position = g_terminal.base.y + TERMINAL_PADDING_TOP + line_index * g_terminal_font_height;
+    int width = g_terminal.base.width - TERMINAL_PADDING_LEFT;
+    int height = g_terminal_font_height;
+
+    window_damage(window, x_position, y_position, width, height);
+}
+
+static void window_damage_logo(window_t *window)
+{
+    if (!window || !g_logo_img || !g_logo_img->pixels)
+    {
+        return;
+    }
+
+    window_damage(window,
+                  g_logo_picture.base.x,
+                  g_logo_picture.base.y,
+                  g_logo_picture.base.width,
+                  g_logo_picture.base.height);
+}
 
 static void term_puts_colored(const char *s, term_color_t color)
 {
@@ -398,12 +473,15 @@ int main(void)
     if (!win)
         return -1;
 
+    window_request_focus(win);
+
     font_t *font = font_load_bdf("/system/fonts/spleen-6x12.bdf");
     if (!font)
     {
         window_destroy(win);
         return -2;
     }
+    g_terminal_font_height = font_height(font);
 
     // Initialize terminal component
     terminal_component_init(&g_terminal, 0, 0, WIN_W, WIN_H, font);
@@ -465,10 +543,24 @@ int main(void)
     char prompt[256];
     snprintf(prompt, sizeof(prompt), "%s> ", g_cwd);
     terminal_puts(&g_terminal, prompt);
+    window_damage_terminal_full(win);
 
     if (drain_tty_output())
     {
         dirty = 1;
+        window_damage_terminal_full(win);
+    }
+
+    if (g_logo_img && g_logo_enabled)
+    {
+        dirty = 1;
+        window_damage_logo(win);
+    }
+
+    if (dirty)
+    {
+        window_paint(&win->base);
+        dirty = 0;
     }
 
     int input_pos = 0;
@@ -476,15 +568,22 @@ int main(void)
 
     while (!g_should_quit)
     {
+        if (!g_has_focus)
+        {
+            window_request_focus(win);
+        }
+
         if (drain_tty_output())
         {
             dirty = 1;
+            window_damage_terminal_full(win);
         }
 
         if (g_logo_dirty)
         {
             dirty = 1;
             g_logo_dirty = 0;
+            window_damage_logo(win);
         }
 
         reap_children(&dirty);
@@ -494,11 +593,22 @@ int main(void)
             terminal_puts(&g_terminal, prompt);
             dirty = 1;
             g_need_prompt = false;
+            window_damage_terminal_line(win, g_terminal.cursor_y);
         }
 
         diff_event_t ev;
         while (window_poll_event(win, &ev))
         {
+            if (ev.type == DIFF_EVENT_FOCUS_GAINED)
+            {
+                g_has_focus = true;
+                continue;
+            }
+            if (ev.type == DIFF_EVENT_FOCUS_LOST)
+            {
+                g_has_focus = false;
+                continue;
+            }
             if (ev.type != DIFF_EVENT_KEY || !ev.key_pressed)
             {
                 continue;
@@ -542,6 +652,7 @@ int main(void)
                     g_need_prompt = true;
                 }
                 dirty = 1;
+                window_damage_terminal_full(win);
             }
             else if (c == '\b' || c == 127) // Backspace
             {
@@ -551,15 +662,18 @@ int main(void)
                     input_line[input_pos] = '\0';
                     terminal_backspace(&g_terminal);
                     dirty = 1;
+                    window_damage_terminal_line(win, g_terminal.cursor_y);
                 }
             }
             else if (c >= 32 && c < 127) // Printable character
             {
                 if (input_pos < (int)sizeof(input_line) - 1)
                 {
+                    int previous_cursor_y_position = g_terminal.cursor_y;
                     input_line[input_pos++] = c;
                     terminal_putchar(&g_terminal, c);
                     dirty = 1;
+                    window_damage_terminal_line(win, previous_cursor_y_position);
                 }
             }
         }

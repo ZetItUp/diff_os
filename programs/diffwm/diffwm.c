@@ -110,6 +110,23 @@ static volatile int g_needs_redraw = 0;
 void wm_mark_needs_redraw(void) { g_needs_redraw = 1; }
 static void wm_redraw_focus_dirty(void);
 static int g_disable_dirty_mark = 0;
+static int rects_touch_or_overlap(int ax, int ay, int aw, int ah,
+                                  int bx, int by, int bw, int bh)
+{
+    return aw > 0 && ah > 0 && bw > 0 && bh > 0 &&
+           ax <= bx + bw && ax + aw >= bx &&
+           ay <= by + bh && ay + ah >= by;
+}
+
+static dirty_rect_t rect_union(dirty_rect_t a, dirty_rect_t b)
+{
+    int x0 = (a.x < b.x) ? a.x : b.x;
+    int y0 = (a.y < b.y) ? a.y : b.y;
+    int x1 = (a.x + a.w > b.x + b.w) ? a.x + a.w : b.x + b.w;
+    int y1 = (a.y + a.h > b.y + b.h) ? a.y + a.h : b.y + b.h;
+    dirty_rect_t r = { x0, y0, x1 - x0, y1 - y0 };
+    return r;
+}
 
 // Resource helpers
 static uint32_t rs_fnv1a(const char *s)
@@ -333,6 +350,42 @@ void wm_add_dirty_rect(int x, int y, int w, int h)
     if (y + h > (int)g_mode.height) h = (int)g_mode.height - y;
     if (w <= 0 || h <= 0) return;
 
+    dirty_rect_t incoming = { x, y, w, h };
+
+    for (int i = 0; i < g_dirty_count; ++i)
+    {
+        dirty_rect_t *r = &g_dirty_rects[i];
+        if (rects_touch_or_overlap(r->x, r->y, r->w, r->h,
+                                   incoming.x, incoming.y, incoming.w, incoming.h))
+        {
+            dirty_rect_t merged = rect_union(*r, incoming);
+            g_dirty_rects[i] = merged;
+
+            for (int j = 0; j < g_dirty_count; )
+            {
+                if (j == i)
+                {
+                    ++j;
+                    continue;
+                }
+                dirty_rect_t *o = &g_dirty_rects[j];
+                if (rects_touch_or_overlap(merged.x, merged.y, merged.w, merged.h,
+                                           o->x, o->y, o->w, o->h))
+                {
+                    merged = rect_union(merged, *o);
+                    g_dirty_rects[i] = merged;
+                    g_dirty_rects[j] = g_dirty_rects[g_dirty_count - 1];
+                    g_dirty_count--;
+                    continue;
+                }
+                ++j;
+            }
+
+            g_needs_redraw = 1;
+            return;
+        }
+    }
+
     // If full, just mark entire screen dirty
     if (g_dirty_count >= MAX_DIRTY_RECTS)
     {
@@ -344,10 +397,7 @@ void wm_add_dirty_rect(int x, int y, int w, int h)
         return;
     }
 
-    g_dirty_rects[g_dirty_count].x = x;
-    g_dirty_rects[g_dirty_count].y = y;
-    g_dirty_rects[g_dirty_count].w = w;
-    g_dirty_rects[g_dirty_count].h = h;
+    g_dirty_rects[g_dirty_count] = incoming;
     g_dirty_count++;
     g_needs_redraw = 1;
 }
@@ -566,7 +616,21 @@ static void wm_bring_to_front(wm_window_t *window)
 // Set focus to a specific window, sending events to old and new focused windows
 void wm_set_focus(wm_window_t *window)
 {
-    if (g_focused == window) return;
+    if (g_focused == window)
+    {
+        if (window)
+        {
+            wm_bring_to_front(window);
+            g_event_ctx.windows = g_windows;
+            g_event_ctx.focused = window;
+            if (!window->focus_notified)
+            {
+                event_send_focus(window, 1);
+                window->focus_notified = 1;
+            }
+        }
+        return;
+    }
 
     wm_window_t *old_focus = g_focused;
 
@@ -587,6 +651,7 @@ void wm_set_focus(wm_window_t *window)
     if (g_focused)
     {
         event_send_focus(g_focused, 1);
+        g_focused->focus_notified = 1;
     }
 
     g_prev_focus = old_focus;
@@ -633,6 +698,11 @@ static void wm_add_window(wm_window_t *window)
         // Send focus lost event to the old window
         event_send_focus(old_focus, 0);
     }
+
+    // Mark the new window's decorated bounds as dirty so it renders on first present.
+    int nx, ny, nw, nh;
+    wm_get_decor_bounds(window, &nx, &ny, &nw, &nh);
+    wm_add_dirty_rect(nx, ny, nw, nh);
 
     g_needs_redraw = 1;
 }
@@ -914,6 +984,8 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     window->mailbox = client_channel;
     window->wm_channel = g_mailbox;
     window->drew_once = 0;
+    window->focus_notified = 0;
+    window->client_drawn = 0;
     strncpy(window->title, "Window", sizeof(window->title) - 1);
 
     // Try to get window title from client's resources
@@ -1195,6 +1267,8 @@ static void wm_draw_window(const dwm_msg_t *msg)
         dirty_h = y0 + max_y + border - dirty_y0;
     }
     wm_add_dirty_rect(dirty_x0, dirty_y0, dirty_w, dirty_h);
+
+    window->drew_once = 1;
 }
 
 static void wm_handle_message(const dwm_msg_t *msg)
@@ -1224,6 +1298,13 @@ static void wm_handle_message(const dwm_msg_t *msg)
                 }
 
                 send_message(client_channel, reply, sizeof(*reply));
+
+                wm_window_t *created_window = wm_find(reply->create.id);
+                if (created_window)
+                {
+                    wm_set_focus(created_window);
+                }
+
                 free(reply);
 
                 break;
@@ -1235,8 +1316,62 @@ static void wm_handle_message(const dwm_msg_t *msg)
             }
         case DWM_MSG_DRAW:
             {
-                wm_draw_window(msg);
+                wm_window_t *window = wm_find(msg->window_id);
+                if (window)
+                {
+                    int first_client_draw = !window->client_drawn;
+                    window->client_drawn = 1;
+                    int dx, dy, dw, dh;
+                    wm_get_decor_bounds(window, &dx, &dy, &dw, &dh);
+                    wm_add_dirty_rect(dx, dy, dw, dh);
+                    if (first_client_draw)
+                    {
+                        wm_repaint_dirty_region();
+                        wm_draw_cursor();
+                        wm_request_present();
+                    }
+                }
                 g_needs_redraw = 1;  // Mark as dirty for batched rendering
+                break;
+            }
+        case DWM_MSG_DAMAGE:
+            {
+                wm_window_t *window = wm_find(msg->window_id);
+                if (!window)
+                {
+                    break;
+                }
+
+                if (msg->damage.width <= 0 || msg->damage.height <= 0)
+                {
+                    break;
+                }
+
+                int first_client_draw = !window->client_drawn;
+                window->client_drawn = 1;
+
+                // Redraw full decorations to avoid missing borders/title during partial updates.
+                int decor_x_position = 0;
+                int decor_y_position = 0;
+                int decor_width = 0;
+                int decor_height = 0;
+                wm_get_decor_bounds(window,
+                                    &decor_x_position,
+                                    &decor_y_position,
+                                    &decor_width,
+                                    &decor_height);
+
+                wm_add_dirty_rect(decor_x_position,
+                                  decor_y_position,
+                                  decor_width,
+                                  decor_height);
+                if (first_client_draw)
+                {
+                    wm_repaint_dirty_region();
+                    wm_draw_cursor();
+                    wm_request_present();
+                }
+                g_needs_redraw = 1;
                 break;
             }
         case DWM_MSG_EVENT:

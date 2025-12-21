@@ -62,6 +62,33 @@ static void putc_at(terminal_component_t *term, int x, int y, char c, term_color
     term->lines[y].text[term->lines[y].len] = '\0';
 }
 
+static void terminal_scroll_buffer(terminal_component_t *term, int lines)
+{
+    if (!term || lines <= 0)
+    {
+        return;
+    }
+
+    if (lines >= TERM_MAX_LINES)
+    {
+        lines = TERM_MAX_LINES - 1;
+    }
+
+    int remaining = TERM_MAX_LINES - lines;
+    for (int i = 0; i < remaining; i++)
+    {
+        term->lines[i] = term->lines[i + lines];
+    }
+
+    for (int i = remaining; i < TERM_MAX_LINES; i++)
+    {
+        term->lines[i].len = 0;
+        term->lines[i].text[0] = '\0';
+    }
+
+    term->line_count = remaining;
+}
+
 void terminal_component_init(terminal_component_t *term, int x, int y, int width, int height, font_t *font)
 {
     if (!term)
@@ -108,6 +135,13 @@ void terminal_putchar(terminal_component_t *term, char c)
     {
         term->cursor_y++;
         term->cursor_x = 0;
+        if (term->cursor_y >= TERM_MAX_LINES)
+        {
+            terminal_scroll_buffer(term, 1);
+            term->cursor_y = TERM_MAX_LINES - 1;
+        }
+        ensure_line(term, term->cursor_y);
+        term->view_offset = 0; // auto-scroll to bottom on new line
         return;
     }
 
@@ -125,6 +159,12 @@ void terminal_putchar(terminal_component_t *term, char c)
     {
         term->cursor_x = 0;
         term->cursor_y++;
+        if (term->cursor_y >= TERM_MAX_LINES)
+        {
+            terminal_scroll_buffer(term, 1);
+            term->cursor_y = TERM_MAX_LINES - 1;
+        }
+        ensure_line(term, term->cursor_y);
     }
 }
 

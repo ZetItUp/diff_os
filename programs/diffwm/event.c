@@ -358,6 +358,12 @@ int event_process_keyboard(event_context_t *ctx)
 
     while (system_keyboard_event_try(&kev))
     {
+        if (!ctx->focused && ctx->windows)
+        {
+            wm_set_focus(ctx->windows);
+            ctx->focused = wm_get_focused();
+        }
+
         // Keyboard events always go to focused window
         if (ctx->focused)
         {

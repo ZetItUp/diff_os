@@ -28,6 +28,28 @@ static int dwm_mailbox(void)
     return channel;
 }
 
+static void window_send_damage_message(window_t *window,
+                                       int x_position,
+                                       int y_position,
+                                       int width,
+                                       int height)
+{
+    if (!window || width <= 0 || height <= 0)
+    {
+        return;
+    }
+
+    dwm_msg_t msg = {0};
+    msg.type = DWM_MSG_DAMAGE;
+    msg.window_id = window->id;
+    msg.damage.x_position = (int16_t)x_position;
+    msg.damage.y_position = (int16_t)y_position;
+    msg.damage.width = (int16_t)width;
+    msg.damage.height = (int16_t)height;
+
+    send_message(window->wm_channel, &msg, sizeof(msg));
+}
+
 window_t* window_create(int x, int y, int width, int height, uint32_t flags, const char *title)
 {
     int wm_channel = dwm_mailbox();
@@ -126,6 +148,11 @@ window_t* window_create(int x, int y, int width, int height, uint32_t flags, con
     win->mailbox = mailbox;
     win->wm_channel = wm_channel;
     win->next = NULL;
+    win->damage_pending = 0;
+    win->damage_x_position = 0;
+    win->damage_y_position = 0;
+    win->damage_width = 0;
+    win->damage_height = 0;
 
     /* Allocate backbuffer for rendering */
     win->backbuffer = malloc((size_t)width * height * sizeof(uint32_t));
@@ -160,7 +187,11 @@ void window_present(window_t *window, const void *pixels)
     int pitch = window->base.width * 4;
 
     // Optimize: if pitch matches, do a single memcpy instead of line-by-line
-    if(pitch == window->pitch)
+    if(pixels == window->pixels)
+    {
+        // Caller already rendered directly into shared memory.
+    }
+    else if(pitch == window->pitch)
     {
         memcpy(window->pixels, pixels, (size_t)pitch * window->base.height);
     }
@@ -172,11 +203,41 @@ void window_present(window_t *window, const void *pixels)
         }
     }
 
-    dwm_msg_t msg =
+    if (window->damage_pending)
     {
-        .type = DWM_MSG_DRAW,
-        .window_id = window->id,
-    };
+        int window_width = window->base.width;
+        int window_height = window->base.height;
+
+        int x_position_start = window->damage_x_position;
+        int y_position_start = window->damage_y_position;
+        int x_position_end = x_position_start + window->damage_width;
+        int y_position_end = y_position_start + window->damage_height;
+
+        if (x_position_start < 0) x_position_start = 0;
+        if (y_position_start < 0) y_position_start = 0;
+        if (x_position_end > window_width) x_position_end = window_width;
+        if (y_position_end > window_height) y_position_end = window_height;
+
+        window->damage_pending = 0;
+        window->damage_x_position = 0;
+        window->damage_y_position = 0;
+        window->damage_width = 0;
+        window->damage_height = 0;
+
+        if (x_position_end > x_position_start && y_position_end > y_position_start)
+        {
+            window_send_damage_message(window,
+                                       x_position_start,
+                                       y_position_start,
+                                       x_position_end - x_position_start,
+                                       y_position_end - y_position_start);
+            return;
+        }
+    }
+
+    dwm_msg_t msg = {0};
+    msg.type = DWM_MSG_DRAW;
+    msg.window_id = window->id;
 
     int rc = send_message(window->wm_channel, &msg, sizeof(msg));
     if (rc < 0)

@@ -70,11 +70,12 @@ typedef struct
 typedef enum
 {
     DWM_MSG_CREATE_WINDOW = 1,
-    DWM_MSG_DESTROY_WINDOW,
-    DWM_MSG_DRAW,
-    DWM_MSG_EVENT,
-    DWM_MSG_REQUEST_FOCUS,
-    DWM_MSG_FOCUS_CHANGED
+    DWM_MSG_DESTROY_WINDOW = 2,
+    DWM_MSG_DRAW = 3,
+    DWM_MSG_EVENT = 4,
+    DWM_MSG_REQUEST_FOCUS = 5,
+    DWM_MSG_FOCUS_CHANGED = 6,
+    DWM_MSG_DAMAGE = 7
 } dwm_msg_type_t;
 
 typedef struct
@@ -101,6 +102,13 @@ typedef struct
         {
             uint32_t seq;
         } draw;
+        struct
+        {
+            int16_t x_position;
+            int16_t y_position;
+            int16_t width;
+            int16_t height;
+        } damage;
         diff_event_t event;
     };
 } dwm_msg_t;

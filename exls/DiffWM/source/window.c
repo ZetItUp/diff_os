@@ -22,6 +22,11 @@ void window_init(window_t *window, int x, int y, int width, int height, const ch
     window->mailbox = -1;
     window->wm_channel = -1;
     window->next = NULL;
+    window->damage_pending = 0;
+    window->damage_x_position = 0;
+    window->damage_y_position = 0;
+    window->damage_width = 0;
+    window->damage_height = 0;
 
     window->base.update = window_update;
     window->base.draw = window_paint;

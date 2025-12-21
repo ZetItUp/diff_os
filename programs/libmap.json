@@ -17,5 +17,12 @@
     "tga_load",
     "tga_load_mem",
     "tga_free"
+  ],
+  "difffonts.exl": [
+    "font_load_bdf",
+    "font_destroy",
+    "font_width",
+    "font_height",
+    "font_draw_text"
   ]
 }

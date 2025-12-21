@@ -30,3 +30,4 @@
 #include <diffwm/terminal_component.h>
 #include <diffwm/text_utils.h>
 #include <diffwm/diff_ipc.h>
+#include <diffwm/damage.h>

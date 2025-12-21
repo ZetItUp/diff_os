@@ -22,6 +22,8 @@ typedef struct wm_window
     int pitch;
     int mailbox;    // Client mailbox channel index for replies/events
     int wm_channel; // Channel index to talk to WM
+    int focus_notified;
+    int client_drawn;
     struct wm_window *next;
 } wm_window_t;
 

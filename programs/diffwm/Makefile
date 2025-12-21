@@ -18,12 +18,14 @@ DEFAULT_EXL := diffc.exl
 SRCS      := diffwm.c event.c theme.c
 OBJS      := $(SRCS:%.c=build/%.o)
 TARGET    := diffwm
+HEADERS   := ../../exls/DiffWM/includes/diffwm/protocol.h
+LOCAL_HEADERS := wm_internal.h event.h theme.h
 
 .PHONY: all clean
 
 all: $(OUT_ROOT)/$(TARGET)/$(TARGET).dex
 
-build/%.o: %.c
+build/%.o: %.c $(HEADERS) $(LOCAL_HEADERS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -31,7 +33,7 @@ build/%.o: %.c
 build/$(TARGET).elf: $(OBJS)
 	$(CC) $(CFLAGS) -r -o $@ $(OBJS)
 
-$(OUT_ROOT)/$(TARGET)/$(TARGET).dex: build/$(TARGET).elf
+$(OUT_ROOT)/$(TARGET)/$(TARGET).dex: build/$(TARGET).elf $(LIBMAP)
 	@mkdir -p $(OUT_ROOT)/$(TARGET)
 	$(PYTHON) $(GEN_IMPORTS) build/$(TARGET).elf build $(LIBMAP) $(DEFAULT_EXL)
 	$(ELFDUMP) build/$(TARGET).elf build/dump.txt

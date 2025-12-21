@@ -27,6 +27,13 @@ typedef struct window_t
     int mailbox;    /* Client mailbox channel index for replies/events */
     int wm_channel; /* Channel index to talk to WM */
     struct window_t *next;
+
+    // Pending damage tracking (window-local coordinates)
+    int damage_pending;
+    int damage_x_position;
+    int damage_y_position;
+    int damage_width;
+    int damage_height;
 } window_t;
 
 /* High-level window API for GUI programming */
