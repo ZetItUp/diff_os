@@ -57,6 +57,22 @@ void window_set_background(window_t *window, int enabled)
     window->draw_background = enabled ? 1 : 0;
 }
 
+int window_has_minimize_button(const window_t *window)
+{
+    if (!window)
+        return 0;
+
+    return (window->flags & WINDOW_NO_MINIMIZE) == 0;
+}
+
+int window_has_maximize_button(const window_t *window)
+{
+    if (!window)
+        return 0;
+
+    return (window->flags & WINDOW_NO_MAXIMIZE) == 0;
+}
+
 void window_update(window_component_t *self)
 {
     window_t *window = (window_t*)self;

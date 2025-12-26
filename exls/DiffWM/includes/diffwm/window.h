@@ -44,6 +44,8 @@ typedef struct window_t
 void window_init(window_t *window, int x, int y, int width, int height, const char *title);
 void window_add_component(window_t *window, window_component_t *component);
 void window_set_background(window_t *window, int enabled);
+int window_has_minimize_button(const window_t *window);
+int window_has_maximize_button(const window_t *window);
 
 /* Polymorphic methods (virtual functions) */
 void window_update(window_component_t *self);

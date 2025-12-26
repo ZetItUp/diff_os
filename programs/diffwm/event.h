@@ -29,6 +29,7 @@ typedef struct mouse_state
     uint8_t prev_buttons_down;
     struct wm_window *capture;      // Window that captured mouse
     struct wm_window *drag_window;  // Window being dragged
+    struct wm_window *hover_window; // Window currently hovered
     int drag_offset_x;
     int drag_offset_y;
 } mouse_state_t;

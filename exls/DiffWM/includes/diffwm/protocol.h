@@ -21,6 +21,10 @@
 #define DWM_CONTENT_OFFSET_X  DWM_BORDER_WIDTH
 #define DWM_CONTENT_OFFSET_Y  (DWM_TITLEBAR_HEIGHT + DWM_BORDER_WIDTH)
 
+// Window flags shared between WM and client
+#define WINDOW_NO_MINIMIZE 0x00000001u
+#define WINDOW_NO_MAXIMIZE 0x00000002u
+
 typedef enum
 {
     DIFF_EVENT_NONE = 0,

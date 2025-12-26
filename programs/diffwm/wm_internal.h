@@ -19,12 +19,15 @@ typedef struct wm_window
     int y;
     uint32_t width;
     uint32_t height;
+    uint32_t flags;
 
     int pitch;
     int mailbox;    // Client mailbox channel index for replies/events
     int wm_channel; // Channel index to talk to WM
     int focus_notified;
     int client_drawn;
+    uint8_t titlebar_hover_button;
+    uint8_t titlebar_pressed_button;
     struct wm_window *next;
 } wm_window_t;
 
@@ -40,6 +43,7 @@ typedef struct wm_window
 wm_window_t *wm_get_windows(void);
 wm_window_t *wm_get_focused(void);
 void wm_set_focused(wm_window_t *window);
+void wm_request_close(wm_window_t *window);
 
 // Window decoration bounds
 void wm_get_decor_bounds(const wm_window_t *win, int *x, int *y, int *w, int *h);

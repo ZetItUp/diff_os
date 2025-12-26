@@ -27,6 +27,7 @@
 #include "event.h"
 #include "theme.h"
 #include "settings.h"
+#include "titlebar.h"
 
 // Resource parsing (matches rsbuild.py output)
 #define RS_MAGIC      0x53525845u /* 'EXRS' */
@@ -95,6 +96,7 @@ static void wm_draw_window(const dwm_msg_t *msg);
 static void wm_apply_window_resources(wm_window_t *window, int client_mailbox_channel);
 static void wm_draw_cursor(void);
 static int wm_update_mouse(void);
+static void wm_remove_window(uint32_t id);
 
 // Event system context
 static mouse_state_t g_mouse_state;
@@ -105,6 +107,19 @@ static event_context_t g_event_ctx;
 wm_window_t *wm_get_windows(void) { return g_windows; }
 wm_window_t *wm_get_focused(void) { return g_focused; }
 void wm_set_focused(wm_window_t *window) { g_focused = window; }
+void wm_request_close(wm_window_t *window)
+{
+    if (!window)
+    {
+        return;
+    }
+
+    dwm_msg_t msg = {0};
+    msg.type = DWM_MSG_DESTROY_WINDOW;
+    msg.window_id = window->id;
+    send_message(window->mailbox, &msg, sizeof(msg));
+    wm_remove_window(window->id);
+}
 
 // Video mode and backbuffer
 static video_mode_info_t g_mode;
@@ -120,17 +135,6 @@ static uint64_t g_last_present_ms = 0;
 // Cursor theme and state
 static cursor_theme_t g_cursor_theme;
 static cursor_type_t g_current_cursor = CURSOR_NORMAL;
-
-// Window skin and title font
-static tga_image_t *g_window_skin = NULL;
-font_t *g_title_font = NULL;
-
-// Tint colors for active/inactive windows (ARGB format)
-#define TITLE_TINT_ACTIVE   color_rgb(42, 112, 255)  // Cornflower blue
-#define TITLE_TINT_INACTIVE color_rgb(63, 63, 116)  // Gray
-#define BODY_TINT_ACTIVE    0xFF4A4A8A  // Dark blue-purple
-#define BODY_TINT_INACTIVE  color_rgb(63, 63, 116)  // Dark gray
-
 
 // Dirty rectangle tracking
 #define MAX_DIRTY_RECTS 16
@@ -291,99 +295,10 @@ static void wm_apply_window_resources(wm_window_t *window, int client_mailbox_ch
     free(rblob);
 }
 
-// Blend helper: tint a color
-static inline uint32_t blend_tint(uint32_t base, uint32_t tint)
-{
-    uint32_t br = (base >> 16) & 0xFF;
-    uint32_t bg = (base >> 8) & 0xFF;
-    uint32_t bb = base & 0xFF;
-
-    uint32_t tr = (tint >> 16) & 0xFF;
-    uint32_t tg = (tint >> 8) & 0xFF;
-    uint32_t tb = tint & 0xFF;
-
-    // Multiply blend
-    uint32_t r = (br * tr) / 255;
-    uint32_t g = (bg * tg) / 255;
-    uint32_t b = (bb * tb) / 255;
-
-    return 0xFF000000 | (r << 16) | (g << 8) | b;
-}
-
-// Blend a skin pixel with alpha over background, then apply tint
-static inline uint32_t blend_skin_px(uint32_t bg, uint32_t skin, uint32_t tint)
-{
-    uint32_t alpha = (skin >> 24) & 0xFF;
-    if (alpha == 0) return bg;
-
-    // Extract skin RGB
-    uint32_t sr = (skin >> 16) & 0xFF;
-    uint32_t sg = (skin >> 8) & 0xFF;
-    uint32_t sb = skin & 0xFF;
-
-    // Apply tint to skin
-    uint32_t tr = (tint >> 16) & 0xFF;
-    uint32_t tg = (tint >> 8) & 0xFF;
-    uint32_t tb = tint & 0xFF;
-    sr = (sr * tr) / 255;
-    sg = (sg * tg) / 255;
-    sb = (sb * tb) / 255;
-
-    if (alpha == 0xFF)
-    {
-        return 0xFF000000 | (sr << 16) | (sg << 8) | sb;
-    }
-
-    // Alpha blend over background
-    uint32_t inv = 255 - alpha;
-    uint32_t br = (bg >> 16) & 0xFF;
-    uint32_t bgc = (bg >> 8) & 0xFF;
-    uint32_t bb = bg & 0xFF;
-
-    uint32_t r = (sr * alpha + br * inv) / 255;
-    uint32_t g = (sg * alpha + bgc * inv) / 255;
-    uint32_t b = (sb * alpha + bb * inv) / 255;
-
-    return 0xFF000000 | (r << 16) | (g << 8) | b;
-}
-
 // Compute bounding box of a window including borders and titlebar
 void wm_get_decor_bounds(const wm_window_t *win, int *x, int *y, int *w, int *h)
 {
-    if (!win || !x || !y || !w || !h) return;
-
-    const int border = 2;
-
-    int min_x = win->x - border;
-    int min_y = win->y - border;
-    int max_x = win->x + (int)win->width + border;
-    int max_y = win->y + (int)win->height + border;
-
-    if (g_window_skin && g_window_skin->pixels && g_title_font)
-    {
-        int fw = font_width(g_title_font);
-        int fh = font_height(g_title_font);
-        int title_w = (int)strlen(win->title) * fw + TITLE_PADDING_X;
-        int title_h = fh + TITLE_PADDING_Y;
-        int title_x = win->x;
-        if (title_x + title_w > (int)g_mode.width)
-        {
-            title_x = (int)g_mode.width - title_w;
-            if (title_x < 0) title_x = 0;
-        }
-        int title_y = win->y - title_h;
-        if (title_y < 0) title_y = 0;
-
-        if (title_x < min_x) min_x = title_x;
-        if (title_y < min_y) min_y = title_y;
-        if (title_x + title_w > max_x) max_x = title_x + title_w;
-        if (title_y + title_h > max_y) max_y = title_y + title_h;
-    }
-
-    *x = min_x;
-    *y = min_y;
-    *w = max_x - min_x;
-    *h = max_y - min_y;
+    titlebar_get_decor_bounds(win, (int)g_mode.width, (int)g_mode.height, x, y, w, h);
 }
 
 // Add a dirty rectangle (will be merged/clipped later)
@@ -723,9 +638,10 @@ static void wm_desktop_layout_icons(void)
         return;
     }
 
-    int font_w = g_title_font ? font_width(g_title_font) : 0;
-    int font_h = g_title_font ? font_height(g_title_font) : 0;
-    int label_h = g_title_font ? font_h : 0;
+    font_t *title_font = titlebar_get_font();
+    int font_w = title_font ? font_width(title_font) : 0;
+    int font_h = title_font ? font_height(title_font) : 0;
+    int label_h = title_font ? font_h : 0;
 
     int x = DESKTOP_ICON_MARGIN;
     int y = DESKTOP_ICON_MARGIN;
@@ -736,7 +652,7 @@ static void wm_desktop_layout_icons(void)
         tga_image_t *img = icon->icon_img ? icon->icon_img : g_desktop_default_icon;
         int icon_w = img ? (int)img->width : 32;
         int icon_h = img ? (int)img->height : 32;
-        int text_w = (g_title_font && icon->name[0]) ? (int)strlen(icon->name) * font_w : 0;
+        int text_w = (title_font && icon->name[0]) ? (int)strlen(icon->name) * font_w : 0;
         int bbox_w = icon_w;
         int bbox_x = x;
 
@@ -969,6 +885,8 @@ static void wm_draw_desktop_icons(int clip_x, int clip_y, int clip_w, int clip_h
         return;
     }
 
+    font_t *title_font = titlebar_get_font();
+
     for (int i = 0; i < g_desktop_icon_count; ++i)
     {
         desktop_icon_t *icon = &g_desktop_icons[i];
@@ -991,10 +909,10 @@ static void wm_draw_desktop_icons(int clip_x, int clip_y, int clip_w, int clip_h
             }
         }
 
-        if (g_title_font && icon->name[0])
+        if (title_font && icon->name[0])
         {
             uint32_t text_color = icon->selected ? ICON_TINT_SELECTED : 0xFFFFFFFF;
-            font_draw_text(g_title_font,
+            font_draw_text(title_font,
                            g_backbuffer,
                            g_backbuffer_stride,
                            icon->label_x,
@@ -1608,6 +1526,7 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     window->y = desc->y;
     window->width = desc->width;
     window->height = desc->height;
+    window->flags = desc->flags;
     window->pitch = desc->width * 4;
     window->mailbox = client_channel;
     window->wm_channel = g_mailbox;
@@ -1615,6 +1534,8 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     window->focus_notified = 0;
     window->client_drawn = 0;
     window->title_overridden = 0;
+    window->titlebar_hover_button = 0;
+    window->titlebar_pressed_button = 0;
     strncpy(window->title, "Window", sizeof(window->title) - 1);
 
     // Try to get window title from client's resources
@@ -1665,236 +1586,14 @@ static void wm_draw_window(const dwm_msg_t *msg)
         }
     }
 
-    // Draw window skin if available
+    // Draw titlebar and window frame decorations
     const int is_focused = (window == g_focused);
-    uint32_t title_tint = is_focused ? TITLE_TINT_ACTIVE : TITLE_TINT_INACTIVE;
-    uint32_t body_tint = is_focused ? BODY_TINT_ACTIVE : BODY_TINT_INACTIVE;
-    const int border = 2;
-    int have_title = 0;
-    int title_x = x0;
-    int title_y = y0;
-    int title_w = 0;
-    int title_h = 0;
-
-    if (g_window_skin && g_window_skin->pixels && g_title_font)
-    {
-        const int fw = font_width(g_title_font);
-        const int fh = font_height(g_title_font);
-        title_w = (int)strlen(window->title) * fw + TITLE_PADDING_X;
-        title_h = fh + TITLE_PADDING_Y;
-        title_x = x0;
-        if (title_x + title_w > (int)g_mode.width)
-        {
-            title_x = (int)g_mode.width - title_w;
-            if (title_x < 0) title_x = 0;
-        }
-        title_y = y0 - title_h;
-        if (title_y < 0) title_y = 0;
-        have_title = 1;
-
-        // Helpers to sample from skin
-        const uint32_t *skin = g_window_skin->pixels;
-        int skin_w = (int)g_window_skin->width;
-        #define SKIN(x,y) skin[(y) * skin_w + (x)]
-
-        // Draw title bar using slices
-        // Top-left 2x2 corner from (0,0)
-        for (int dy = 0; dy < 2; ++dy)
-        {
-            int ry = title_y + dy;
-            if (ry < 0 || ry >= (int)g_mode.height) continue;
-            uint32_t *row = g_backbuffer + (size_t)ry * g_backbuffer_stride;
-            for (int dx = 0; dx < 2; ++dx)
-            {
-                int rx = title_x + dx;
-                if (rx >= 0 && rx < (int)g_mode.width)
-                {
-                    row[rx] = blend_skin_px(row[rx], SKIN(dx, dy), title_tint);
-                }
-            }
-            // Top-right 2x2 corner from (3,0)
-            for (int dx = 0; dx < 2; ++dx)
-            {
-                int rx = title_x + title_w - 2 + dx;
-                if (rx >= 0 && rx < (int)g_mode.width)
-                {
-                    row[rx] = blend_skin_px(row[rx], SKIN(3 + dx, dy), title_tint);
-                }
-            }
-        }
-        // Bottom corners of title bar from (0,2) and (3,2)
-        for (int dy = 0; dy < 2; ++dy)
-        {
-            int ry = title_y + title_h - 2 + dy;
-            if (ry < 0 || ry >= (int)g_mode.height) continue;
-            uint32_t *row = g_backbuffer + (size_t)ry * g_backbuffer_stride;
-            for (int dx = 0; dx < 2; ++dx)
-            {
-                int rx = title_x + dx;
-                if (rx >= 0 && rx < (int)g_mode.width)
-                    row[rx] = blend_skin_px(row[rx], SKIN(dx, 2 + dy), title_tint);
-                int rxr = title_x + title_w - 2 + dx;
-                if (rxr >= 0 && rxr < (int)g_mode.width)
-                    row[rxr] = blend_skin_px(row[rxr], SKIN(3 + dx, 2 + dy), title_tint);
-            }
-        }
-        // Top/bottom edges of title bar
-        for (int dx = 2; dx < title_w - 2; ++dx)
-        {
-            int rx = title_x + dx;
-            if (rx < 0 || rx >= (int)g_mode.width) continue;
-            for (int dy = 0; dy < 2; ++dy)
-            {
-                int ry = title_y + dy;
-                if (ry >= 0 && ry < (int)g_mode.height)
-                    g_backbuffer[(size_t)ry * g_backbuffer_stride + rx] =
-                        blend_skin_px(g_backbuffer[(size_t)ry * g_backbuffer_stride + rx],
-                                      SKIN(2, dy), title_tint);
-                int ryb = title_y + title_h - 2 + dy;
-                if (ryb >= 0 && ryb < (int)g_mode.height)
-                    g_backbuffer[(size_t)ryb * g_backbuffer_stride + rx] =
-                        blend_skin_px(g_backbuffer[(size_t)ryb * g_backbuffer_stride + rx],
-                                      SKIN(2, 2 + dy), title_tint);
-            }
-        }
-        // Left/right edges of title bar
-        for (int dy = 2; dy < title_h - 2; ++dy)
-        {
-            int ry = title_y + dy;
-            if (ry < 0 || ry >= (int)g_mode.height) continue;
-            uint32_t *row = g_backbuffer + (size_t)ry * g_backbuffer_stride;
-            for (int dx = 0; dx < 2; ++dx)
-            {
-                int rx = title_x + dx;
-                if (rx >= 0 && rx < (int)g_mode.width)
-                    row[rx] = blend_skin_px(row[rx], SKIN(dx, 2), title_tint);
-                int rxr = title_x + title_w - 2 + dx;
-                if (rxr >= 0 && rxr < (int)g_mode.width)
-                    row[rxr] = blend_skin_px(row[rxr], SKIN(3 + dx, 2), title_tint);
-            }
-        }
-        // Title bar fill
-        for (int dy = 2; dy < title_h - 2; ++dy)
-        {
-            int ry = title_y + dy;
-            if (ry < 0 || ry >= (int)g_mode.height) continue;
-            uint32_t *row = g_backbuffer + (size_t)ry * g_backbuffer_stride;
-            for (int dx = 2; dx < title_w - 2; ++dx)
-            {
-                int rx = title_x + dx;
-                if (rx >= 0 && rx < (int)g_mode.width)
-                {
-                    row[rx] = blend_skin_px(row[rx], SKIN(2, 2), title_tint);
-                }
-            }
-        }
-        // Draw title text
-        int text_y = title_y + ((title_h - font_height(g_title_font)) / 2) + 4;
-        font_draw_text(g_title_font,
-                       g_backbuffer,
-                       g_backbuffer_stride,
-                       title_x + (TITLE_PADDING_X / 2),
-                       text_y,
-                       window->title,
-                       is_focused ? 0xFFFFFFFF : 0xFFB0B0B0);
-
-        // Body frame using skin slices - draw OUTSIDE the window content
-        int body_x = x0 - 2;
-        int body_y = y0 - 2;
-        int body_w = max_x + 4;
-        int body_h = max_y + 4;
-
-        // Body corners from (0,4), (3,4), (0,6), (3,6)
-        for (int dy = 0; dy < 2; ++dy)
-        {
-            int ry = body_y + dy;
-            if (ry >= 0 && ry < (int)g_mode.height)
-            {
-                uint32_t *row = g_backbuffer + (size_t)ry * g_backbuffer_stride;
-                for (int dx = 0; dx < 2; ++dx)
-                {
-                    int rx = body_x + dx;
-                    if (rx >= 0 && rx < (int)g_mode.width)
-                        row[rx] = blend_skin_px(row[rx], SKIN(dx, 4 + dy), body_tint);
-                    int rxr = body_x + body_w - 2 + dx;
-                    if (rxr >= 0 && rxr < (int)g_mode.width)
-                        row[rxr] = blend_skin_px(row[rxr], SKIN(3 + dx, 4 + dy), body_tint);
-                }
-            }
-        }
-        for (int dy = 0; dy < 2; ++dy)
-        {
-            int ry = body_y + body_h - 2 + dy;
-            if (ry >= 0 && ry < (int)g_mode.height)
-            {
-                uint32_t *row = g_backbuffer + (size_t)ry * g_backbuffer_stride;
-                for (int dx = 0; dx < 2; ++dx)
-                {
-                    int rx = body_x + dx;
-                    if (rx >= 0 && rx < (int)g_mode.width)
-                        row[rx] = blend_skin_px(row[rx], SKIN(dx, 6 + dy), body_tint);
-                    int rxr = body_x + body_w - 2 + dx;
-                    if (rxr >= 0 && rxr < (int)g_mode.width)
-                        row[rxr] = blend_skin_px(row[rxr], SKIN(3 + dx, 6 + dy), body_tint);
-                }
-            }
-        }
-        // Top/bottom edges of body
-        for (int dx = 2; dx < body_w - 2; ++dx)
-        {
-            int rx = body_x + dx;
-            if (rx < 0 || rx >= (int)g_mode.width) continue;
-            if (body_y >= 0)
-                g_backbuffer[(size_t)body_y * g_backbuffer_stride + rx] =
-                    blend_skin_px(g_backbuffer[(size_t)body_y * g_backbuffer_stride + rx],
-                                  SKIN(2, 4), body_tint);
-            if (body_y + 1 < (int)g_mode.height)
-                g_backbuffer[(size_t)(body_y + 1) * g_backbuffer_stride + rx] =
-                    blend_skin_px(g_backbuffer[(size_t)(body_y + 1) * g_backbuffer_stride + rx],
-                                  SKIN(2, 5), body_tint);
-            int by = body_y + body_h - 2;
-            if (by >= 0 && by < (int)g_mode.height)
-                g_backbuffer[(size_t)by * g_backbuffer_stride + rx] =
-                    blend_skin_px(g_backbuffer[(size_t)by * g_backbuffer_stride + rx],
-                                  SKIN(2, 6), body_tint);
-            if (by + 1 >= 0 && by + 1 < (int)g_mode.height)
-                g_backbuffer[(size_t)(by + 1) * g_backbuffer_stride + rx] =
-                    blend_skin_px(g_backbuffer[(size_t)(by + 1) * g_backbuffer_stride + rx],
-                                  SKIN(2, 7), body_tint);
-        }
-        // Left/right edges of body
-        for (int dy = 2; dy < body_h - 2; ++dy)
-        {
-            int ry = body_y + dy;
-            if (ry < 0 || ry >= (int)g_mode.height) continue;
-            uint32_t *row = g_backbuffer + (size_t)ry * g_backbuffer_stride;
-            for (int dx = 0; dx < 2; ++dx)
-            {
-                int rx = body_x + dx;
-                if (rx >= 0 && rx < (int)g_mode.width)
-                    row[rx] = blend_skin_px(row[rx], SKIN(dx, 6), body_tint);
-                int rxr = body_x + body_w - 2 + dx;
-                if (rxr >= 0 && rxr < (int)g_mode.width)
-                    row[rxr] = blend_skin_px(row[rxr], SKIN(3 + dx, 6), body_tint);
-            }
-        }
-
-        #undef SKIN
-    }
+    titlebar_draw(window, g_backbuffer, g_backbuffer_stride,
+                  (int)g_mode.width, (int)g_mode.height, is_focused);
 
     // Mark dirty area covering window, borders, and title bar
     int dirty_x0, dirty_y0, dirty_w, dirty_h;
-    if (have_title)
-    {
-        wm_get_decor_bounds(window, &dirty_x0, &dirty_y0, &dirty_w, &dirty_h);
-    }
-    else
-    {
-        dirty_x0 = x0 - border;
-        dirty_y0 = y0 - border;
-        dirty_w = x0 + max_x + border - dirty_x0;
-        dirty_h = y0 + max_y + border - dirty_y0;
-    }
+    wm_get_decor_bounds(window, &dirty_x0, &dirty_y0, &dirty_w, &dirty_h);
     wm_add_dirty_rect(dirty_x0, dirty_y0, dirty_w, dirty_h);
 
     window->drew_once = 1;
@@ -2069,18 +1768,9 @@ int main(void)
         // Theme load failed, but we can continue without cursors
     }
 
-    // Load window skin and title font
-    g_window_skin = tga_load("/system/graphics/window.tga");
+    // Initialize titlebar (loads window skin and title font)
+    titlebar_init();
     g_desktop_default_icon = tga_load("/system/graphics/icons/empty_file.tga");
-    g_title_font = font_load_bdf("/system/fonts/spleen-8x16.bdf");
-    if (!g_title_font)
-    {
-        g_title_font = font_load_bdf("/system/fonts/spleen-6x12.bdf");
-    }
-    if (!g_title_font)
-    {
-        g_title_font = font_load_bdf("/system/fonts/spleen-5x8.bdf");
-    }
 
     // Set mouse bounds and center cursor
     system_mouse_set_bounds((int)g_mode.width, (int)g_mode.height);

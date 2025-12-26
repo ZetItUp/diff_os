@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <system/messaging.h>
+#include <system/process.h>
 #include <system/shared_mem.h>
 #include <system/threads.h>
 
@@ -294,6 +295,12 @@ int window_poll_event(window_t *window, diff_event_t *event)
     if(try_receive_message(window->mailbox, &msg, sizeof(msg)) <= 0)
     {
         return 0;
+    }
+
+    if (msg.type == DWM_MSG_DESTROY_WINDOW && msg.window_id == window->id)
+    {
+        window_destroy(window);
+        process_exit(0);
     }
 
     if(msg.type != DWM_MSG_EVENT || msg.window_id != window->id)

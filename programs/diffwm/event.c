@@ -1,5 +1,6 @@
 #include "event.h"
 #include "wm_internal.h"
+#include "titlebar.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -7,10 +8,6 @@
 #include <syscall.h>
 #include <time.h>
 #include <system/messaging.h>
-#include <difffonts/fonts.h>
-
-// External font for titlebar hit testing
-extern font_t *g_title_font;
 
 // Screen dimensions (set via event context)
 static int g_screen_width = 0;
@@ -33,6 +30,7 @@ void event_init(event_context_t *ctx)
         ctx->mouse->prev_buttons_down = 0;
         ctx->mouse->capture = NULL;
         ctx->mouse->drag_window = NULL;
+        ctx->mouse->hover_window = NULL;
         ctx->mouse->drag_offset_x = 0;
         ctx->mouse->drag_offset_y = 0;
     }
@@ -73,25 +71,20 @@ wm_window_t *event_find_window_at(event_context_t *ctx, int x, int y)
 
 int event_point_in_titlebar(wm_window_t *win, int x, int y)
 {
-    if (!win || !g_title_font)
+    if (!win)
     {
         return 0;
     }
 
-    int fw = font_width(g_title_font);
-    int fh = font_height(g_title_font);
-    int title_w = (int)strlen(win->title) * fw + TITLE_PADDING_X;
-    int title_h = fh + TITLE_PADDING_Y;
-    int title_x = win->x;
-
-    if (title_x + title_w > g_screen_width)
+    int title_x = 0;
+    int title_y = 0;
+    int title_w = 0;
+    int title_h = 0;
+    if (!titlebar_get_title_rect(win, g_screen_width, g_screen_height,
+                                 &title_x, &title_y, &title_w, &title_h))
     {
-        title_x = g_screen_width - title_w;
-        if (title_x < 0) title_x = 0;
+        return 0;
     }
-
-    int title_y = win->y - title_h;
-    if (title_y < 0) title_y = 0;
 
     return (x >= title_x && x < title_x + title_w &&
             y >= title_y && y < title_y + title_h);
@@ -166,6 +159,47 @@ static int handle_button_press(event_context_t *ctx, wm_window_t *target, uint8_
     return EVENT_CONSUMED;
 }
 
+static void event_mark_window_dirty(wm_window_t *window)
+{
+    if (!window)
+    {
+        return;
+    }
+
+    int dx, dy, dw, dh;
+    wm_get_decor_bounds(window, &dx, &dy, &dw, &dh);
+    wm_add_dirty_rect(dx, dy, dw, dh);
+    wm_mark_needs_redraw();
+}
+
+static void event_set_titlebar_hover_button(wm_window_t *window, int button)
+{
+    if (!window)
+    {
+        return;
+    }
+
+    if (window->titlebar_hover_button != (uint8_t)button)
+    {
+        window->titlebar_hover_button = (uint8_t)button;
+        event_mark_window_dirty(window);
+    }
+}
+
+static void event_set_titlebar_pressed_button(wm_window_t *window, int button)
+{
+    if (!window)
+    {
+        return;
+    }
+
+    if (window->titlebar_pressed_button != (uint8_t)button)
+    {
+        window->titlebar_pressed_button = (uint8_t)button;
+        event_mark_window_dirty(window);
+    }
+}
+
 // Handle button release for a specific button
 // Returns EVENT_CONSUMED if handled
 static int handle_button_release(event_context_t *ctx, wm_window_t *target, uint8_t button)
@@ -232,6 +266,18 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
     // Mouse capture ensures all events go to the window that received the initial press
     wm_window_t *target = m->capture ? m->capture : hover;
 
+    // Update titlebar button hover state
+    if (m->hover_window && m->hover_window != hover)
+    {
+        event_set_titlebar_hover_button(m->hover_window, TITLEBAR_BUTTON_NONE);
+    }
+    m->hover_window = hover;
+    if (hover)
+    {
+        int hover_button = titlebar_hit_test_button(hover, g_screen_width, g_screen_height, m->x, m->y);
+        event_set_titlebar_hover_button(hover, hover_button);
+    }
+
     // Handle mouse movement
     if (mouse_moved)
     {
@@ -279,6 +325,8 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
     // Handle button presses
     if (pressed)
     {
+        int pressed_title_button = TITLEBAR_BUTTON_NONE;
+
         // Set mouse capture on first button press
         // This ensures all subsequent events go to the same window until release
         if (!m->capture)
@@ -292,8 +340,20 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
             wm_set_focus(target);
         }
 
-        // Start drag if clicking on titlebar
+        // Titlebar button press handling
+        if (target && (pressed & MOUSE_BTN_LEFT))
+        {
+            pressed_title_button = titlebar_hit_test_button(target, g_screen_width, g_screen_height, m->x, m->y);
+            if (pressed_title_button != TITLEBAR_BUTTON_NONE)
+            {
+                event_set_titlebar_pressed_button(target, pressed_title_button);
+                m->drag_window = NULL;
+            }
+        }
+
+        // Start drag if clicking on titlebar (but not on a button)
         if (target && (pressed & MOUSE_BTN_LEFT) &&
+            pressed_title_button == TITLEBAR_BUTTON_NONE &&
             event_point_in_titlebar(target, m->x, m->y))
         {
             m->drag_window = target;
@@ -304,7 +364,10 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
         // Send button press events
         if (pressed & MOUSE_BTN_LEFT)
         {
-            if (handle_button_press(ctx, target, MOUSE_BTN_LEFT) == EVENT_CONSUMED)
+            if (pressed_title_button == TITLEBAR_BUTTON_NONE &&
+                handle_button_press(ctx, target, MOUSE_BTN_LEFT) == EVENT_CONSUMED)
+                consumed = EVENT_CONSUMED;
+            if (pressed_title_button != TITLEBAR_BUTTON_NONE)
                 consumed = EVENT_CONSUMED;
         }
         if (pressed & MOUSE_BTN_RIGHT)
@@ -324,33 +387,60 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
     {
         if (released & MOUSE_BTN_LEFT)
         {
-            if (handle_button_release(ctx, target, MOUSE_BTN_LEFT) == EVENT_CONSUMED)
-                consumed = EVENT_CONSUMED;
-            if (!target)
+            int handled_title_button = 0;
+            if (target && target->titlebar_pressed_button != TITLEBAR_BUTTON_NONE)
             {
-                click_state_t *c = ctx->clicks;
-                int idx = event_button_index(MOUSE_BTN_LEFT);
-                if (idx >= 0 && c)
+                int pressed_button = target->titlebar_pressed_button;
+                int released_button = titlebar_hit_test_button(target, g_screen_width, g_screen_height, m->x, m->y);
+                event_set_titlebar_pressed_button(target, TITLEBAR_BUTTON_NONE);
+                handled_title_button = 1;
+
+                if (released_button == pressed_button)
                 {
-                    uint64_t now = monotonic_ms();
-                    int is_dbl = (now - c->last_click_ms[idx] <= DWM_DBLCLICK_MS &&
-                                  c->last_click_window_id[idx] == 0 &&
-                                  abs(m->x - c->last_click_x[idx]) <= DWM_DBLCLICK_DIST &&
-                                  abs(m->y - c->last_click_y[idx]) <= DWM_DBLCLICK_DIST);
-
-                    c->last_click_ms[idx] = now;
-                    c->last_click_x[idx] = m->x;
-                    c->last_click_y[idx] = m->y;
-                    c->last_click_window_id[idx] = 0;
-
-                    // Single click: select/deselect icons
-                    wm_desktop_handle_single_click(m->x, m->y);
-                    consumed = EVENT_CONSUMED;
-
-                    // Double click: also launch the app
-                    if (is_dbl && wm_desktop_handle_click(m->x, m->y))
+                    if (pressed_button == TITLEBAR_BUTTON_CLOSE)
                     {
+                        if (m->capture == target) m->capture = NULL;
+                        if (m->drag_window == target) m->drag_window = NULL;
+                        if (m->hover_window == target) m->hover_window = NULL;
+                        wm_request_close(target);
+                        m->prev_buttons_down = m->buttons_down;
+                        return EVENT_CONSUMED;
+                    }
+                }
+
+                consumed = EVENT_CONSUMED;
+            }
+
+            if (!handled_title_button)
+            {
+                if (handle_button_release(ctx, target, MOUSE_BTN_LEFT) == EVENT_CONSUMED)
+                    consumed = EVENT_CONSUMED;
+                if (!target)
+                {
+                    click_state_t *c = ctx->clicks;
+                    int idx = event_button_index(MOUSE_BTN_LEFT);
+                    if (idx >= 0 && c)
+                    {
+                        uint64_t now = monotonic_ms();
+                        int is_dbl = (now - c->last_click_ms[idx] <= DWM_DBLCLICK_MS &&
+                                      c->last_click_window_id[idx] == 0 &&
+                                      abs(m->x - c->last_click_x[idx]) <= DWM_DBLCLICK_DIST &&
+                                      abs(m->y - c->last_click_y[idx]) <= DWM_DBLCLICK_DIST);
+
+                        c->last_click_ms[idx] = now;
+                        c->last_click_x[idx] = m->x;
+                        c->last_click_y[idx] = m->y;
+                        c->last_click_window_id[idx] = 0;
+
+                        // Single click: select/deselect icons
+                        wm_desktop_handle_single_click(m->x, m->y);
                         consumed = EVENT_CONSUMED;
+
+                        // Double click: also launch the app
+                        if (is_dbl && wm_desktop_handle_click(m->x, m->y))
+                        {
+                            consumed = EVENT_CONSUMED;
+                        }
                     }
                 }
             }

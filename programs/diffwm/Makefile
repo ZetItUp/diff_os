@@ -15,11 +15,11 @@ LIBMAP    := ../libmap.json
 DEFAULT_EXL := diffc.exl
 
 # All source files in this directory
-SRCS      := diffwm.c event.c theme.c
+SRCS      := diffwm.c event.c theme.c titlebar.c
 OBJS      := $(SRCS:%.c=build/%.o)
 TARGET    := diffwm
 HEADERS   := ../../exls/DiffWM/includes/diffwm/protocol.h
-LOCAL_HEADERS := wm_internal.h event.h theme.h
+LOCAL_HEADERS := wm_internal.h event.h theme.h settings.h titlebar.h
 
 .PHONY: all clean
 
