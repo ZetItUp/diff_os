@@ -57,3 +57,4 @@ void wm_mark_needs_redraw(void);
 
 // Desktop icon handling
 int wm_desktop_handle_click(int x, int y);
+int wm_desktop_handle_single_click(int x, int y);

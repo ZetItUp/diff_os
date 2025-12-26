@@ -983,6 +983,7 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
         p->heap_base = base;
         p->heap_end  = initial_end;  // Set to initial committed size
         p->heap_max  = max;
+        p->heap_alloc_next = base;   // Start allocations from heap base
         DEX_DBG("[DEX] exec: PID=%d heap_base=%p heap_end=%p heap_max=%p\n",
                p->pid, (void *)p->heap_base, (void *)p->heap_end, (void *)p->heap_max);
     }
@@ -1183,6 +1184,7 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     p->heap_base = base;
     p->heap_end  = initial_end;  // Set to initial committed size, not base
     p->heap_max  = max;
+    p->heap_alloc_next = base;   // Start allocations from heap base
     paging_adopt_pending_reservations(cr3_child, p);
 
     DEX_DBG("[DEX] PID=%d heap_base=%p heap_end=%p heap_max=%p\n",

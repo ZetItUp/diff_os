@@ -45,6 +45,7 @@ typedef struct process
     uintptr_t heap_base;
     uintptr_t heap_end;
     uintptr_t heap_max;
+    uintptr_t heap_alloc_next;  // Next VA for umalloc allocations (per-process)
 
     // Memory reservations for demand paging (per-process)
     #define MAX_PROCESS_RESERVATIONS 16

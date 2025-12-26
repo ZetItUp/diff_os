@@ -1,26 +1,17 @@
 @echo off
 setlocal
-
-REM Källa: WSL UNC-path
 set SRC=Z:\home\zet\os\build\diffos.img
-
-REM Mål: lokal NTFS-path
 set DST=C:\temp\diffos.img
-
-REM Skapa katalog om den saknas
 if not exist "C:\temp" (
     mkdir "C:\temp"
 )
 
-echo Kopierar %SRC% till %DST% ...
 copy /Y "%SRC%" "%DST%"
 if errorlevel 1 (
     echo Kopieringen misslyckades. Kan inte lasa diffos.img via WSL-UNC.
     pause
     exit /b 1
 )
-
-echo Startar QEMU med snabbare grafik...
 
 REM Performance options:
 REM   -accel whpx      = Windows Hypervisor Platform (requires Hyper-V enabled)

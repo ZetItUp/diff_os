@@ -26,6 +26,7 @@
 #include "wm_internal.h"
 #include "event.h"
 #include "theme.h"
+#include "settings.h"
 
 // Resource parsing (matches rsbuild.py output)
 #define RS_MAGIC      0x53525845u /* 'EXRS' */
@@ -707,6 +708,7 @@ typedef struct desktop_icon
     int bbox_h;
     int label_x;
     int label_y;
+    int selected;
 } desktop_icon_t;
 
 static desktop_icon_t g_desktop_icons[DESKTOP_MAX_ICONS];
@@ -882,6 +884,84 @@ static void wm_blit_tga_alpha(const tga_image_t *img, int dst_x, int dst_y)
     }
 }
 
+static void wm_blit_tga_alpha_tinted(const tga_image_t *img, int dst_x, int dst_y, uint32_t tint)
+{
+    if (!img || !img->pixels || !g_backbuffer) return;
+
+    int img_w = (int)img->width;
+    int img_h = (int)img->height;
+
+    int x0 = dst_x;
+    int y0 = dst_y;
+    int x1 = dst_x + img_w;
+    int y1 = dst_y + img_h;
+
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int)g_mode.width) x1 = (int)g_mode.width;
+    if (y1 > (int)g_mode.height) y1 = (int)g_mode.height;
+
+    int draw_w = x1 - x0;
+    int draw_h = y1 - y0;
+    if (draw_w <= 0 || draw_h <= 0) return;
+
+    int src_x = x0 - dst_x;
+    int src_y = y0 - dst_y;
+
+    uint32_t tr = (tint >> 16) & 0xFF;
+    uint32_t tg = (tint >> 8) & 0xFF;
+    uint32_t tb = tint & 0xFF;
+
+    for (int y = 0; y < draw_h; ++y)
+    {
+        uint32_t *dst = g_backbuffer + (size_t)(y0 + y) * g_backbuffer_stride + x0;
+        uint32_t *src = img->pixels + (size_t)(src_y + y) * img_w + src_x;
+
+        for (int x = 0; x < draw_w; ++x)
+        {
+            uint32_t pixel = src[x];
+            uint8_t alpha = (pixel >> 24) & 0xFF;
+
+            if (alpha == 0)
+            {
+                continue;
+            }
+
+            // Apply tint using additive blend (lighten effect)
+            uint32_t pr = (pixel >> 16) & 0xFF;
+            uint32_t pg = (pixel >> 8) & 0xFF;
+            uint32_t pb = pixel & 0xFF;
+
+            // Blend tint with pixel (screen blend for lightening)
+            pr = pr + ((255 - pr) * tr) / 512;
+            pg = pg + ((255 - pg) * tg) / 512;
+            pb = pb + ((255 - pb) * tb) / 512;
+
+            if (pr > 255) pr = 255;
+            if (pg > 255) pg = 255;
+            if (pb > 255) pb = 255;
+
+            uint32_t tinted = 0xFF000000 | (pr << 16) | (pg << 8) | pb;
+
+            if (alpha == 0xFF)
+            {
+                dst[x] = tinted;
+            }
+            else
+            {
+                uint32_t bg = dst[x];
+                uint32_t inv = 255 - alpha;
+
+                uint32_t r = (pr * alpha + ((bg >> 16) & 0xFF) * inv) / 255;
+                uint32_t g = (pg * alpha + ((bg >> 8) & 0xFF) * inv) / 255;
+                uint32_t b = (pb * alpha + (bg & 0xFF) * inv) / 255;
+
+                dst[x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+}
+
 static void wm_draw_desktop_icons(int clip_x, int clip_y, int clip_w, int clip_h)
 {
     if (g_desktop_icon_count <= 0)
@@ -901,18 +981,26 @@ static void wm_draw_desktop_icons(int clip_x, int clip_y, int clip_w, int clip_h
         tga_image_t *img = icon->icon_img ? icon->icon_img : g_desktop_default_icon;
         if (img)
         {
-            wm_blit_tga_alpha(img, icon->icon_x, icon->icon_y);
+            if (icon->selected)
+            {
+                wm_blit_tga_alpha_tinted(img, icon->icon_x, icon->icon_y, ICON_TINT_SELECTED);
+            }
+            else
+            {
+                wm_blit_tga_alpha(img, icon->icon_x, icon->icon_y);
+            }
         }
 
         if (g_title_font && icon->name[0])
         {
+            uint32_t text_color = icon->selected ? ICON_TINT_SELECTED : 0xFFFFFFFF;
             font_draw_text(g_title_font,
                            g_backbuffer,
                            g_backbuffer_stride,
                            icon->label_x,
                            icon->label_y,
                            icon->name,
-                           0xFFFFFFFF);
+                           text_color);
         }
     }
 }
@@ -930,6 +1018,41 @@ static int wm_desktop_icon_at(int x, int y)
     }
 
     return -1;
+}
+
+static void wm_desktop_deselect_all(void)
+{
+    for (int i = 0; i < g_desktop_icon_count; ++i)
+    {
+        if (g_desktop_icons[i].selected)
+        {
+            g_desktop_icons[i].selected = 0;
+            wm_add_dirty_rect(g_desktop_icons[i].bbox_x, g_desktop_icons[i].bbox_y,
+                              g_desktop_icons[i].bbox_w, g_desktop_icons[i].bbox_h);
+        }
+    }
+}
+
+int wm_desktop_handle_single_click(int x, int y)
+{
+    int idx = wm_desktop_icon_at(x, y);
+
+    // Deselect all icons first
+    wm_desktop_deselect_all();
+
+    if (idx < 0)
+    {
+        // Clicked on empty space - just deselect
+        wm_mark_needs_redraw();
+        return 0;
+    }
+
+    // Select the clicked icon
+    g_desktop_icons[idx].selected = 1;
+    wm_add_dirty_rect(g_desktop_icons[idx].bbox_x, g_desktop_icons[idx].bbox_y,
+                      g_desktop_icons[idx].bbox_w, g_desktop_icons[idx].bbox_h);
+    wm_mark_needs_redraw();
+    return 1;
 }
 
 int wm_desktop_handle_click(int x, int y)

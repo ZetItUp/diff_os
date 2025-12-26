@@ -343,6 +343,11 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
                     c->last_click_y[idx] = m->y;
                     c->last_click_window_id[idx] = 0;
 
+                    // Single click: select/deselect icons
+                    wm_desktop_handle_single_click(m->x, m->y);
+                    consumed = EVENT_CONSUMED;
+
+                    // Double click: also launch the app
                     if (is_dbl && wm_desktop_handle_click(m->x, m->y))
                     {
                         consumed = EVENT_CONSUMED;

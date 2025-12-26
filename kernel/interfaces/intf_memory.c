@@ -177,6 +177,7 @@ void system_brk_init_window(uintptr_t heap_base, uintptr_t heap_size)
     p->heap_base = base;
     p->heap_end  = base;
     p->heap_max  = max;
+    p->heap_alloc_next = base;  // Start allocations from heap base
 
     // Pre-create page tables for the whole heap window (4MB steps)
     uintptr_t start4m = base & ~((uintptr_t)0x400000u - 1u);

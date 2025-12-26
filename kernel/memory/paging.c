@@ -57,9 +57,27 @@ static uint16_t phys_page_refcnt[MAX_PHYS_PAGES];
 
 // Scratch-map state
 static uint32_t g_kmap_temp_mapped_phys = 0;
-static uint32_t uheap_next = UHEAP_BASE;
+static uint32_t uheap_next = UHEAP_BASE;  // Global fallback for kernel context
 static uint32_t kmap_va1 = 0;
 static uint32_t kmap_va2 = 0;
+
+// Helper: get current heap_alloc_next (per-process or global fallback)
+static inline uint32_t get_heap_alloc_next(void)
+{
+    process_t *p = process_current();
+    if (p && p->pid > 0 && p->heap_alloc_next >= USER_MIN)
+        return (uint32_t)p->heap_alloc_next;
+    return uheap_next;
+}
+
+// Helper: set current heap_alloc_next (per-process or global fallback)
+static inline void set_heap_alloc_next(uint32_t val)
+{
+    process_t *p = process_current();
+    if (p && p->pid > 0)
+        p->heap_alloc_next = val;
+    uheap_next = val;  // Always update global as fallback
+}
 
 // Direkta PT-pekare för scratch (för att undvika rekursion)
 static uint32_t *g_kmap_pt1 = NULL;
@@ -1130,7 +1148,8 @@ static void* umalloc_core(size_t size, size_t alignment, uint32_t flags, int wit
     if (alignment < PAGE_SIZE_4KB) alignment = PAGE_SIZE_4KB;
 
     size_t bytes = ALIGN_UP(size, PAGE_SIZE_4KB);
-    uint32_t vstart = ALIGN_UP(uheap_next, alignment);
+    uint32_t cur_heap_next = get_heap_alloc_next();
+    uint32_t vstart = ALIGN_UP(cur_heap_next, alignment);
     uint32_t va = vstart;
 
     if (with_guards && (flags & UMEM_GUARD_BEFORE))
@@ -1170,7 +1189,7 @@ static void* umalloc_core(size_t size, size_t alignment, uint32_t flags, int wit
 
     if (!(flags & UMEM_NOZERO)) memset((void*)vstart, 0, bytes);
 
-    uheap_next = vend;
+    set_heap_alloc_next(vend);
     return (void*)vstart;
 }
 
@@ -1572,8 +1591,9 @@ int paging_handle_cow_fault(uintptr_t fault_va)
     uint32_t new_pa = alloc_phys_page();
     if (!new_pa) return -5;
 
-    uint32_t temp_va = ALIGN_UP(uheap_next, PAGE_SIZE_4KB);
-    uheap_next = temp_va + PAGE_SIZE_4KB;
+    uint32_t cur_heap_next = get_heap_alloc_next();
+    uint32_t temp_va = ALIGN_UP(cur_heap_next, PAGE_SIZE_4KB);
+    set_heap_alloc_next(temp_va + PAGE_SIZE_4KB);
 
     if (map_4kb_page_flags(temp_va, new_pa, PAGE_PRESENT | PAGE_RW | PAGE_USER) != 0)
     {
@@ -2111,7 +2131,7 @@ void paging_free_all_user(void)
 
 void paging_user_heap_reset(void)
 {
-    uheap_next = UHEAP_BASE;
+    set_heap_alloc_next(UHEAP_BASE);
     uresv_count = 0;
 }
 
@@ -2121,7 +2141,7 @@ void paging_set_user_heap(uintptr_t addr)
     {
         addr = USER_MIN;
     }
-    uheap_next = PAGE_ALIGN_UP((uint32_t)addr);
+    set_heap_alloc_next(PAGE_ALIGN_UP((uint32_t)addr));
 }
 
 void paging_adopt_pending_reservations(uint32_t cr3_phys, process_t *p)

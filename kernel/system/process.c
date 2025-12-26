@@ -322,6 +322,7 @@ void process_init(void)
     k->heap_base = 0;
     k->heap_end = 0;
     k->heap_max = 0;
+    k->heap_alloc_next = 0;
     k->reservation_count = 0;
     process_assign_default_cwd(k);
     process_set_exec_root(k, "/");
@@ -459,6 +460,7 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
     p->heap_base = heap_base;
     p->heap_end  = heap_end;
     p->heap_max  = heap_max;
+    p->heap_alloc_next = heap_base;  // Start allocations from heap base
 
     process_link(p);
 
