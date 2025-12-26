@@ -17,7 +17,7 @@ static tga_image_t *g_btn_close = NULL;
 static tga_image_t *g_btn_close_hover = NULL;
 static tga_image_t *g_btn_close_pressed = NULL;
 
-#define TITLEBAR_TEXT_BUTTON_PADDING 20
+#define TITLEBAR_TEXT_BUTTON_PADDING 15
 
 void titlebar_init(void)
 {
@@ -63,7 +63,7 @@ int titlebar_get_height(void)
     {
         return 0;
     }
-    return font_height(g_title_font) + TITLE_PADDING_Y;
+    return font_height(g_title_font) + TITLE_PADDING_Y + 4;
 }
 
 static int titlebar_window_has_minimize(const wm_window_t *win)
@@ -118,7 +118,7 @@ static int titlebar_compute_layout(const wm_window_t *win, int screen_width, int
     int fw = font_width(g_title_font);
     int fh = font_height(g_title_font);
     int text_w = (int)strlen(win->title) * fw;
-    int title_h = fh + TITLE_PADDING_Y;
+    int title_h = fh + TITLE_PADDING_Y + 4;
 
     int button_total_w = 0;
     int button_count = 0;
@@ -145,7 +145,7 @@ static int titlebar_compute_layout(const wm_window_t *win, int screen_width, int
     int title_w = text_w + TITLE_PADDING_X;
     if (button_total_w > 0)
     {
-        title_w += TITLEBAR_TEXT_BUTTON_PADDING + button_total_w;
+        title_w += TITLEBAR_TEXT_BUTTON_PADDING + button_total_w + 2;
     }
 
     int title_x = win->x;
@@ -158,7 +158,7 @@ static int titlebar_compute_layout(const wm_window_t *win, int screen_width, int
     int title_y = win->y - title_h;
     if (title_y < 0) title_y = 0;
 
-    int text_x = title_x + (TITLE_PADDING_X / 2);
+    int text_x = title_x + (TITLE_PADDING_X / 2) + 4;
     int button_x = text_x + text_w + TITLEBAR_TEXT_BUTTON_PADDING;
 
     for (int i = 0; i < button_count && i < max_buttons; ++i)

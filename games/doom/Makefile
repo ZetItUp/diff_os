@@ -18,7 +18,7 @@ OBJDIR    := $(BUILDDIR)/obj
 DG_WIDTH  ?= 640
 DG_HEIGHT ?= 400
 
-CFLAGS := -ffreestanding -nostdlib -O2 -m32 -fno-pic -fno-plt \
+CFLAGS := -ffreestanding -nostdlib -O2 -m32 -fno-pic -fno-plt -std=gnu11 \
 		  -mno-mmx -mno-sse -mno-sse2 -mno-sse3 -mno-ssse3 \
           -mno-sse4.1 -mno-sse4.2 -mno-avx -mno-avx2 -mno-fma \
 		  -fno-asynchronous-unwind-tables -fno-unwind-tables \

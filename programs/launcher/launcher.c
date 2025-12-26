@@ -103,7 +103,9 @@ static void handle_event(const diff_event_t *ev)
 
 int main(void)
 {
-    g_win = window_create(100, 100, WIN_W, WIN_H, 0, "Run Program");
+    g_win = window_create(100, 100, WIN_W, WIN_H,
+                          WINDOW_NO_MINIMIZE | WINDOW_NO_MAXIMIZE,
+                          "Run Program");
     if (!g_win)
         return -1;
 
