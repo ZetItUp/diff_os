@@ -80,9 +80,36 @@ static void file_putch(int ch, void *ctx)
 }
 
 /* ====== FILE-handling ====== */
-static FILE _stdin = {0, FILE_CAN_READ, 0, 0, -1};
-static FILE _stdout = {1, FILE_CAN_WRITE, 0, 0, -1};
-static FILE _stderr = {2, FILE_CAN_WRITE, 0, 0, -1};
+static FILE _stdin = {
+    .file_descriptor = 0,
+    .flags = FILE_CAN_READ,
+    .error = 0,
+    .eof = 0,
+    .ungot = -1,
+    .buffer = {0},
+    .buffer_pos = 0,
+    .buffer_len = 0,
+};
+static FILE _stdout = {
+    .file_descriptor = 1,
+    .flags = FILE_CAN_WRITE,
+    .error = 0,
+    .eof = 0,
+    .ungot = -1,
+    .buffer = {0},
+    .buffer_pos = 0,
+    .buffer_len = 0,
+};
+static FILE _stderr = {
+    .file_descriptor = 2,
+    .flags = FILE_CAN_WRITE,
+    .error = 0,
+    .eof = 0,
+    .ungot = -1,
+    .buffer = {0},
+    .buffer_pos = 0,
+    .buffer_len = 0,
+};
 
 FILE *stdin = &_stdin;
 FILE *stdout = &_stdout;
@@ -151,6 +178,11 @@ int fclose(FILE *file)
 {
     if (!file) return -1;
 
+    if (file == stdin || file == stdout || file == stderr)
+    {
+        return 0;
+    }
+
     int rc = system_close(file->file_descriptor);
     free(file);
     return rc < 0 ? -1 : 0;
@@ -158,6 +190,8 @@ int fclose(FILE *file)
 
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *file)
 {
+    FILE tmp;
+    file = coerce_stream(file, &tmp, /*want_write=*/0);
     if (!file || !ptr || !size || !nmemb) return 0;
     if (!(file->flags & FILE_CAN_READ)) {
         file->error = 1;
@@ -226,6 +260,8 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *file)
 
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *file)
 {
+    FILE tmp;
+    file = coerce_stream(file, &tmp, /*want_write=*/1);
     if (!file || !ptr || !size || !nmemb) return 0;
     if (!(file->flags & FILE_CAN_WRITE)) {
         file->error = 1;
@@ -261,7 +297,12 @@ struct bufctx {
 };
 
 static void putch_sink(int ch, void *ctx) {
-    (void)ctx;
+    FILE *out = (FILE *)ctx;
+    if (out) {
+        unsigned char c = (unsigned char)ch;
+        (void)fwrite(&c, 1, 1, out);
+        return;
+    }
     system_putchar((char)ch);
 }
 
@@ -534,7 +575,7 @@ int printf(const char *fmt, ...)
 int vprintf(const char *fmt, va_list ap)
 {
     if (!is_valid_userspace_ptr(fmt, 1)) return -1;
-    return vcbprintf(putch_sink, NULL, fmt, ap);
+    return vcbprintf(putch_sink, stdout, fmt, ap);
 }
 
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
@@ -562,20 +603,21 @@ int snprintf(char *buf, size_t size, const char *fmt, ...)
 int puts(const char *s)
 {
     s = safe_str(s);
-    int len = 0;
-    
-    while (*s) {
-        system_putchar(*s++);
-        len++;
+    size_t len = strlen(s);
+    if (len) {
+        if (fwrite(s, 1, len, stdout) != len) {
+            return EOF;
+        }
     }
-    system_putchar('\n');
-    return len + 1;
+    if (fputc('\n', stdout) == EOF) {
+        return EOF;
+    }
+    return (int)len + 1;
 }
 
 int putchar(int c)
 {
-    system_putchar((char)c);
-    return (unsigned char)c;
+    return fputc(c, stdout);
 }
 
 /* ====== Additional FILE operations ====== */

@@ -18,6 +18,7 @@
 #include "timer.h"
 #include "system/shared_mem.h"
 #include "system/tty.h"
+#include "system/signal.h"
 
 struct dirent;
 
@@ -718,6 +719,36 @@ int system_call_dispatch(struct syscall_frame *f)
 
             break;
         }
+        case SYSTEM_SIGNAL_SET:
+        {
+            ret = system_signal_set(arg0, (user_sighandler_t)(uintptr_t)arg1,
+                                    (uint32_t)(uintptr_t)arg2);
+            break;
+        }
+        case SYSTEM_SIGNAL_SEND:
+        {
+            ret = system_signal_send(arg0, arg1);
+            break;
+        }
+        case SYSTEM_SIGNAL_RETURN:
+        {
+            ret = system_signal_return((uint32_t)(uintptr_t)arg0, f);
+            if (ret == 0)
+            {
+                regs_set = 1;
+            }
+            break;
+        }
+        case SYSTEM_SIGNAL_SETMASK:
+        {
+            ret = system_signal_setmask((uint32_t)arg0);
+            break;
+        }
+        case SYSTEM_SIGNAL_GETMASK:
+        {
+            ret = system_signal_getmask((uint32_t*)(uintptr_t)arg0);
+            break;
+        }
         case SYSTEM_DIR_CREATE:
         {
             ret = system_mkdir((const char*)arg0);
@@ -924,6 +955,8 @@ int system_call_dispatch(struct syscall_frame *f)
     {
         ret = (int)f->eax;
     }
+
+    signal_maybe_deliver_syscall(process_current(), f);
 
     // Safety: never try to iret to a NULL EIP. If the saved user EIP
     // got clobbered, terminate the current process/thread instead of

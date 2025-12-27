@@ -103,6 +103,39 @@ static mouse_state_t g_mouse_state;
 static click_state_t g_click_state;
 static event_context_t g_event_ctx;
 
+// Track child processes spawned by the WM so we can reap them.
+#define WM_MAX_CHILDREN 128
+static int g_child_pids[WM_MAX_CHILDREN];
+static int g_child_count = 0;
+
+static void wm_remember_child(int pid)
+{
+    if (pid <= 0 || g_child_count >= WM_MAX_CHILDREN)
+    {
+        return;
+    }
+
+    g_child_pids[g_child_count++] = pid;
+}
+
+static void wm_reap_children(void)
+{
+    for (int i = 0; i < g_child_count; )
+    {
+        int status = 0;
+        int rc = system_wait_pid_nohang(g_child_pids[i], &status);
+
+        if (rc > 0 || rc < 0)
+        {
+            g_child_pids[i] = g_child_pids[g_child_count - 1];
+            g_child_count--;
+            continue;
+        }
+
+        ++i;
+    }
+}
+
 // Accessors for event.c
 wm_window_t *wm_get_windows(void) { return g_windows; }
 wm_window_t *wm_get_focused(void) { return g_focused; }
@@ -630,6 +663,7 @@ static desktop_icon_t g_desktop_icons[DESKTOP_MAX_ICONS];
 static int g_desktop_icon_count = 0;
 static char g_desktop_root[256] = {0};
 static tga_image_t *g_desktop_default_icon = NULL;
+static tga_image_t *g_desktop_text_icon = NULL;
 
 static void wm_desktop_layout_icons(void)
 {
@@ -740,6 +774,10 @@ static void wm_desktop_load_icons(void)
         {
             icon->icon_img = wm_load_icon_from_dex(icon->launch_path);
             wm_apply_app_title_from_dex(icon->launch_path, icon->name, sizeof(icon->name));
+        }
+        else if (wm_path_has_suffix(icon->launch_path, ".txt"))
+        {
+            icon->icon_img = g_desktop_text_icon;
         }
     }
 
@@ -990,6 +1028,10 @@ int wm_desktop_handle_click(int x, int y)
     const char *launch_path = icon->launch_path[0] ? icon->launch_path : icon->path;
 
     int pid = spawn_process(launch_path, 0, NULL);
+    if (pid >= 0)
+    {
+        wm_remember_child(pid);
+    }
     return (pid >= 0) ? 1 : 0;
 }
 
@@ -1771,6 +1813,7 @@ int main(void)
     // Initialize titlebar (loads window skin and title font)
     titlebar_init();
     g_desktop_default_icon = tga_load("/system/graphics/icons/empty_file.tga");
+    g_desktop_text_icon = tga_load("/system/graphics/icons/text_file.tga");
 
     // Set mouse bounds and center cursor
     system_mouse_set_bounds((int)g_mode.width, (int)g_mode.height);
@@ -1835,7 +1878,11 @@ int main(void)
     g_last_present_ms = monotonic_ms();
 
     const char *client_path = "/programs/gdterm/gdterm.dex";
-    spawn_process(client_path, 0, NULL);
+    int initial_pid = spawn_process(client_path, 0, NULL);
+    if (initial_pid >= 0)
+    {
+        wm_remember_child(initial_pid);
+    }
 
     dwm_msg_t *msg = (dwm_msg_t *)malloc(sizeof(dwm_msg_t));
     if (!msg)
@@ -1894,6 +1941,9 @@ int main(void)
 
         // Deliver keyboard events to the currently focused window
         event_process_keyboard(&g_event_ctx);
+
+        // Reap any exited child processes to avoid zombie buildup
+        wm_reap_children();
     }
 
     free(g_backbuffer);

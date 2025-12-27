@@ -88,6 +88,7 @@ KERNEL_SRC = \
 	kernel/system/messaging.c \
 	kernel/system/shared_mem.c \
 	kernel/system/tty.c \
+	kernel/system/signal.c \
 	kernel/system/pci.c \
 	kernel/dex/dex_loader.c \
 	kernel/dex/exl_loader.c \

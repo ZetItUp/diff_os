@@ -82,6 +82,11 @@ enum
     SYSTEM_MESSAGE_GET_OWNER = 68,
     SYSTEM_PROCESS_GET_RESOURCES = 69,
     SYSTEM_FILE_READLINK = 70,
+    SYSTEM_SIGNAL_SET = 71,
+    SYSTEM_SIGNAL_SEND = 72,
+    SYSTEM_SIGNAL_RETURN = 73,
+    SYSTEM_SIGNAL_SETMASK = 74,
+    SYSTEM_SIGNAL_GETMASK = 75,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -596,4 +601,29 @@ static inline __attribute__((always_inline)) uint8_t system_mouse_get_buttons_pr
 static inline __attribute__((always_inline)) uint8_t system_mouse_get_buttons_clicked(void)
 {
     return (uint8_t)do_sys(SYSTEM_MOUSE_GET_BUTTONS_CLICKED, 0, 0, 0, 0);
+}
+
+static inline __attribute__((always_inline)) int system_signal_set(int sig, void *handler, void *trampoline)
+{
+    return do_sys(SYSTEM_SIGNAL_SET, sig, (int)(uintptr_t)handler, (int)(uintptr_t)trampoline, 0);
+}
+
+static inline __attribute__((always_inline)) int system_signal_send(int pid, int sig)
+{
+    return do_sys(SYSTEM_SIGNAL_SEND, pid, sig, 0, 0);
+}
+
+static inline __attribute__((always_inline)) int system_signal_return(void *frame_ptr)
+{
+    return do_sys(SYSTEM_SIGNAL_RETURN, (int)(uintptr_t)frame_ptr, 0, 0, 0);
+}
+
+static inline __attribute__((always_inline)) int system_signal_setmask(uint32_t mask)
+{
+    return do_sys(SYSTEM_SIGNAL_SETMASK, (int)mask, 0, 0, 0);
+}
+
+static inline __attribute__((always_inline)) int system_signal_getmask(uint32_t *mask)
+{
+    return do_sys(SYSTEM_SIGNAL_GETMASK, (int)(uintptr_t)mask, 0, 0, 0);
 }

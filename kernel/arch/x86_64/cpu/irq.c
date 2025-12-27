@@ -7,6 +7,7 @@
 #include "stdio.h"
 #include "drivers/driver.h"
 #include "system/scheduler.h"
+#include "system/signal.h"
 
 irq_handler_t irq_handlers[NUM_IRQS];
 static int g_use_apic = 0;
@@ -33,6 +34,8 @@ void irq_handler_c(unsigned irq_ptr, void *context)
     {
         printf("[IRQ] Unhandled vector %u (real=%u)\n", irq, real_irq);
     }
+
+    signal_maybe_deliver_frame(process_current(), (struct stack_frame *)context);
     
     // Send EOI to either APIC or PIC
     if (g_use_apic)

@@ -65,14 +65,19 @@ void tty_putc(int ch)
 {
     process_t *p = process_current();
 
-    if (p && p->tty_out)
+    if (p)
     {
-        char c = (char)ch;
-
-        if (tty_write(p->tty_out, &c, 1) > 0)
+        if (p->tty_out)
         {
-            return;
+            char c = (char)ch;
+
+            if (tty_write(p->tty_out, &c, 1) > 0)
+            {
+                return;
+            }
         }
+        // No controlling tty: discard output for user processes.
+        return;
     }
 
     putch((char)ch & 0xFF);

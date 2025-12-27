@@ -357,7 +357,7 @@ static tty_t *process_clone_tty(tty_t *parent_tty)
         return parent_tty;
     }
 
-    return tty_create();
+    return NULL;
 }
 
 // Create a kernel process with one thread
@@ -389,6 +389,14 @@ process_t *process_create_kernel(void (*entry)(void *),
     p->waiter = NULL;
     p->tty_out = process_clone_tty(parent ? parent->tty_out : NULL);
     p->tty_in  = process_clone_tty(parent ? parent->tty_in : NULL);
+    if (!p->tty_out)
+    {
+        p->tty_out = tty_create();
+    }
+    if (!p->tty_in)
+    {
+        p->tty_in = tty_create();
+    }
     if (!p->tty_out || !p->tty_in)
     {
         if (p->tty_out) tty_destroy(p->tty_out);
@@ -425,7 +433,8 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
                                         size_t user_stack_size,
                                         uintptr_t heap_base,
                                         uintptr_t heap_end,
-                                        uintptr_t heap_max)
+                                        uintptr_t heap_max,
+                                        int inherit_tty)
 {
     process_t *p = process_alloc();
 
@@ -443,9 +452,20 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
     p->live_threads = 0;
     p->main_thread = NULL;
     p->waiter = NULL;
-    p->tty_out = process_clone_tty(parent ? parent->tty_out : NULL);
-    p->tty_in  = process_clone_tty(parent ? parent->tty_in : NULL);
-    if (!p->tty_out || !p->tty_in)
+    if (inherit_tty)
+    {
+        if (parent && parent->tty_out && parent->tty_in)
+        {
+            p->tty_out = process_clone_tty(parent->tty_out);
+            p->tty_in  = process_clone_tty(parent->tty_in);
+        }
+        else
+        {
+            p->tty_out = tty_create();
+            p->tty_in  = tty_create();
+        }
+    }
+    if (inherit_tty && (!p->tty_out || !p->tty_in))
     {
         if (p->tty_out) tty_destroy(p->tty_out);
         if (p->tty_in)  tty_destroy(p->tty_in);
@@ -501,7 +521,8 @@ process_t *process_create_user(uint32_t user_eip,
                                size_t user_stack_size,
                                uintptr_t heap_base,
                                uintptr_t heap_end,
-                                uintptr_t heap_max)
+                               uintptr_t heap_max,
+                               int inherit_tty)
 {
     uint32_t new_cr3 = paging_new_address_space();
 
@@ -520,7 +541,8 @@ process_t *process_create_user(uint32_t user_eip,
                                         user_stack_size,
                                         heap_base,
                                         heap_end,
-                                        heap_max);
+                                        heap_max,
+                                        inherit_tty);
 }
 
 // Create an additional user thread in the current process

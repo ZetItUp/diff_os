@@ -21,6 +21,7 @@ wrtest=/programs/writetest/writetest.dex
 threadtest=/programs/threadtest/threadtest.dex
 fpstest=/programs/fpstest/fpstest.dex
 mousetest=/programs/mousetest/mousetest.dex
+sigtest=/programs/sigtest/sigtest.dex
 
 # Games
 doom=/games/doom/doom.dex

@@ -7,6 +7,7 @@
 #include "paging.h"
 #include "system/syscall.h"
 #include "system/process.h"
+#include "system/signal.h"
 #include "debug.h"
 #include "system/usercopy.h"
 #include <stdint.h>
@@ -308,6 +309,7 @@ static void print_page_fault(struct stack_frame *f, uint32_t cr2, uint32_t cr3, 
 
 void fault_handler(struct stack_frame *frame)
 {
+    int user_mode = ((frame->cs & 3u) == 3u);
     if (frame->int_no == 1)
     {
         if (debug_handle_single_step(frame)) return;
@@ -317,6 +319,12 @@ void fault_handler(struct stack_frame *frame)
 
     if (frame->int_no == 13) // #GP
     {
+        if (user_mode)
+        {
+            signal_send_to_process(process_current(), SIGSEGV);
+            signal_maybe_deliver_frame(process_current(), frame);
+            return;
+        }
         uint32_t err = frame->err_code;
         uint32_t idx = (err >> 3) & 0x1FFF;
         int ext = err & 1;
@@ -352,6 +360,13 @@ void fault_handler(struct stack_frame *frame)
             return;
         }
 
+        if (user_mode)
+        {
+            signal_send_to_process(process_current(), SIGSEGV);
+            signal_maybe_deliver_frame(process_current(), frame);
+            return;
+        }
+
         // Ohanterad -> skriv info och stoppa
         print_page_fault(frame, cr2, cr3, handled);
         for (;;)
@@ -359,6 +374,24 @@ void fault_handler(struct stack_frame *frame)
     }
     else
     {
+        if (user_mode)
+        {
+            int sig = 0;
+            switch (frame->int_no)
+            {
+                case 0:  sig = SIGFPE; break;
+                case 6:  sig = SIGILL; break;
+                case 8:  sig = SIGSEGV; break;
+                case 10: sig = SIGSEGV; break;
+                case 11: sig = SIGSEGV; break;
+                case 12: sig = SIGSEGV; break;
+                default: sig = SIGILL; break;
+            }
+            signal_send_to_process(process_current(), sig);
+            signal_maybe_deliver_frame(process_current(), frame);
+            return;
+        }
+
         // Fallback: minimal serial och häng (PF-säkert)
         panic_serial_init();
         panic_puts("==== CPU EXCEPTION ====\n");

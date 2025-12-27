@@ -11,12 +11,14 @@
 #include <diffwm/diffwm.h>
 #include <diffgfx/draw.h>
 #include <runtime/exec.h>
+#include <system/process.h>
 
 #define WIN_W 320
 #define WIN_H 110
 
 static bool g_running = true;
 static bool g_launch_success = false;
+static bool g_launch_in_progress = false;
 static window_t *g_win = NULL;
 
 static button_t btn_launch;
@@ -25,19 +27,25 @@ static label_t lbl_error;
 static textbox_t txt_program;
 static char txt_program_buf[128];
 
-static void try_launch_program(void)
+static int try_launch_program(void)
 {
+    if (g_launch_in_progress || g_launch_success)
+    {
+        return 0;
+    }
+
     const char *program = textbox_get_text(&txt_program);
 
     if (!program || !*program)
     {
         label_set_text(&lbl_error, "Please enter a program name.");
         window_paint(&g_win->base);
-        return;
+        return 0;
     }
 
     /* Initialize runtime if not already done */
     rt_init(NULL);
+    g_launch_in_progress = true;
 
     /* Try to resolve the program */
     char resolved_path[RT_MAX_PATH];
@@ -47,22 +55,33 @@ static void try_launch_program(void)
     {
         label_set_text(&lbl_error, "Program not found.");
         window_paint(&g_win->base);
-        return;
+        g_launch_in_progress = false;
+        return 0;
     }
 
-    /* Launch the program as a detached process */
-    int pid = rt_exec(program, 0, NULL, RT_SPAWN_DETACHED);
+    /* Launch the program as a child process */
+    int pid = rt_exec(resolved_path, 0, NULL, 0);
 
     if (pid < 0)
     {
         label_set_text(&lbl_error, "Failed to start program.");
         window_paint(&g_win->base);
-        return;
+        g_launch_in_progress = false;
+        return 0;
     }
 
     /* Success - exit launcher */
     g_launch_success = true;
     g_running = false;
+    if (g_win)
+    {
+        window_destroy(g_win);
+        g_win = NULL;
+    }
+    // Wait for the child to exit so we don't leak a zombie if no parent waits.
+    int status = 0;
+    process_wait(pid, &status);
+    return 1;
 }
 
 static void on_launch_click(void *user_data)
@@ -136,7 +155,7 @@ int main(void)
     while (g_running)
     {
         diff_event_t ev;
-        while (window_poll_event(g_win, &ev))
+        while (g_running && g_win && window_poll_event(g_win, &ev))
         {
             if (textbox_handle_event(&txt_program, &ev))
             {
@@ -145,17 +164,28 @@ int main(void)
                 {
                     label_set_text(&lbl_error, "");
                 }
-                window_paint(&g_win->base);
+                if (g_win)
+                {
+                    window_paint(&g_win->base);
+                }
                 continue;
             }
 
             if (button_handle_event(&btn_launch, &ev))
             {
-                window_paint(&g_win->base);
+                if (g_win)
+                {
+                    window_paint(&g_win->base);
+                }
                 continue;
             }
 
             handle_event(&ev);
+
+            if (!g_running || !g_win)
+            {
+                break;
+            }
         }
 
         thread_yield();
