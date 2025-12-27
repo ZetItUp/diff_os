@@ -29,6 +29,11 @@ int console_get_color(uint8_t *fg, uint8_t *bg)
 
 int console_set_bgcolor(uint8_t bg)
 {
+    if (bg == CONSOLE_COLOR_DEFAULT)
+    {
+        return console_set_color(CONSOLE_COLOR_DEFAULT, CONSOLE_COLOR_DEFAULT);
+    }
+
     bg &= 0x0F;
 
     uint8_t cur_fg = 0;
@@ -64,6 +69,11 @@ int console_get_bgcolor(uint8_t *bg)
 
 int console_set_fgcolor(uint8_t fg)
 {
+    if (fg == CONSOLE_COLOR_DEFAULT)
+    {
+        return console_set_color(CONSOLE_COLOR_DEFAULT, CONSOLE_COLOR_DEFAULT);
+    }
+
     fg &= 0x0F;
 
     uint8_t cur_bg = 0;

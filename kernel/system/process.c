@@ -20,7 +20,6 @@
 #include "system/messaging.h"
 #include "system/shared_mem.h"
 #include "interfaces.h"
-#include "system/tty.h"
 
 extern void enter_user_mode(uint32_t entry_eip, uint32_t user_stack_top) __attribute__((noreturn));
 
@@ -166,18 +165,6 @@ static void process_cleanup_resources(process_t *p)
     messaging_cleanup_process(p->pid);
     shared_memory_cleanup_process(p->pid);
     vbe_release_owner(p->pid);
-
-    // Drop TTY endpoints (refcounted, so shared consoles stay alive).
-    if (p->tty_out)
-    {
-        tty_destroy(p->tty_out);
-        p->tty_out = NULL;
-    }
-    if (p->tty_in)
-    {
-        tty_destroy(p->tty_in);
-        p->tty_in = NULL;
-    }
 
     if (p->resources_kernel)
     {
@@ -327,37 +314,11 @@ void process_init(void)
     process_assign_default_cwd(k);
     process_set_exec_root(k, "/");
 
-    // Give the kernel process a default TTY pair so children inherit a live console.
-    k->tty_out = tty_create();
-    k->tty_in  = tty_create();
-    if (!k->tty_out || !k->tty_in)
-    {
-        printf("[PROC] FATAL: failed to create kernel TTY endpoints\n");
-        if (k->tty_out) tty_destroy(k->tty_out);
-        if (k->tty_in)  tty_destroy(k->tty_in);
-        kfree(k);
-        return;
-    }
-
-    k->tty_attr = 0x07;
-
     // Link and set as current
     process_link(k);
     g_current = k;
 
     DDBG("[PROC] init: kernel pid=%d cr3=%08x\n", k->pid, k->cr3);
-}
-
-// Helper for inheriting a tty (or creating new if none)
-static tty_t *process_clone_tty(tty_t *parent_tty)
-{
-    if (parent_tty)
-    {
-        tty_add_ref(parent_tty);
-        return parent_tty;
-    }
-
-    return NULL;
 }
 
 // Create a kernel process with one thread
@@ -387,24 +348,6 @@ process_t *process_create_kernel(void (*entry)(void *),
     p->live_threads = 0;
     p->main_thread = NULL;
     p->waiter = NULL;
-    p->tty_out = process_clone_tty(parent ? parent->tty_out : NULL);
-    p->tty_in  = process_clone_tty(parent ? parent->tty_in : NULL);
-    if (!p->tty_out)
-    {
-        p->tty_out = tty_create();
-    }
-    if (!p->tty_in)
-    {
-        p->tty_in = tty_create();
-    }
-    if (!p->tty_out || !p->tty_in)
-    {
-        if (p->tty_out) tty_destroy(p->tty_out);
-        if (p->tty_in)  tty_destroy(p->tty_in);
-        kfree(p);
-        return NULL;
-    }
-    p->tty_attr = parent ? parent->tty_attr : 0x07;
     process_inherit_cwd_from_parent(p, p->parent);
     process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 
@@ -433,8 +376,7 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
                                         size_t user_stack_size,
                                         uintptr_t heap_base,
                                         uintptr_t heap_end,
-                                        uintptr_t heap_max,
-                                        int inherit_tty)
+                                        uintptr_t heap_max)
 {
     process_t *p = process_alloc();
 
@@ -452,27 +394,6 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
     p->live_threads = 0;
     p->main_thread = NULL;
     p->waiter = NULL;
-    if (inherit_tty)
-    {
-        if (parent && parent->tty_out && parent->tty_in)
-        {
-            p->tty_out = process_clone_tty(parent->tty_out);
-            p->tty_in  = process_clone_tty(parent->tty_in);
-        }
-        else
-        {
-            p->tty_out = tty_create();
-            p->tty_in  = tty_create();
-        }
-    }
-    if (inherit_tty && (!p->tty_out || !p->tty_in))
-    {
-        if (p->tty_out) tty_destroy(p->tty_out);
-        if (p->tty_in)  tty_destroy(p->tty_in);
-        kfree(p);
-        return NULL;
-    }
-    p->tty_attr = parent ? parent->tty_attr : 0x07;
     process_inherit_cwd_from_parent(p, p->parent);
     process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 
@@ -521,8 +442,7 @@ process_t *process_create_user(uint32_t user_eip,
                                size_t user_stack_size,
                                uintptr_t heap_base,
                                uintptr_t heap_end,
-                               uintptr_t heap_max,
-                               int inherit_tty)
+                               uintptr_t heap_max)
 {
     uint32_t new_cr3 = paging_new_address_space();
 
@@ -541,8 +461,7 @@ process_t *process_create_user(uint32_t user_eip,
                                         user_stack_size,
                                         heap_base,
                                         heap_end,
-                                        heap_max,
-                                        inherit_tty);
+                                        heap_max);
 }
 
 // Create an additional user thread in the current process

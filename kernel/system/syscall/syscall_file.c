@@ -11,7 +11,6 @@
 #include "system/process.h"
 #include "system/path.h"
 #include "diff.h"
-#include "system/tty.h"
 
 #ifndef O_RDONLY
 #define O_RDONLY 0x0000
@@ -165,27 +164,6 @@ long system_file_read(int file, void *buf, unsigned long count)
     // stdin
     if (file == 0)
     {
-        process_t *p = process_current();
-        if (p && p->tty_in)
-        {
-            size_t bounce_sz = (count < FILE_READ_CHUNK_BYTES) ? (size_t)count : (size_t)FILE_READ_CHUNK_BYTES;
-            if (bounce_sz == 0)
-                bounce_sz = 1;
-
-            uint8_t *kbuf = (uint8_t*)kmalloc(bounce_sz);
-            if (!kbuf)
-                return -1;
-
-            int rd = tty_read(p->tty_in, kbuf, bounce_sz);
-            if (rd > 0 && copy_to_user(buf, kbuf, (size_t)rd) != 0)
-            {
-                kfree(kbuf);
-                return -1;
-            }
-            kfree(kbuf);
-            return (long)rd;
-        }
-
         uint8_t first = keyboard_getch();
         if (copy_to_user(buf, &first, 1) != 0)
             return -1;
@@ -289,16 +267,34 @@ long system_file_seek(int file, long offset, int whence)
 // Write to file or stdout/stderr.
 long system_file_write(int file, const void *buf, unsigned long count)
 {
-    // stdout/stderr
+    // stdout/stderr - route through TTY for terminal output capture
     if (file == 1 || file == 2)
     {
-        for (unsigned long i = 0; i < count; i++)
+        // Copy to kernel buffer and call tty_write for output capture
+        char kbuf[256];
+        unsigned long written = 0;
+
+        while (written < count)
         {
-            char c;
-            if (copy_from_user(&c, (const uint8_t*)buf + i, 1) != 0)
-                return (long)i;
-            tty_putc(c);
+            unsigned long chunk = count - written;
+            if (chunk > sizeof(kbuf))
+                chunk = sizeof(kbuf);
+
+            if (copy_from_user(kbuf, (const uint8_t*)buf + written, chunk) != 0)
+                return (long)written;
+
+            // Route through TTY - this stores in output buffer AND prints
+            int rc = tty_write(kbuf, (unsigned)chunk);
+            if (rc <= 0)
+            {
+                // TTY not available, fall back to direct console output
+                for (unsigned long i = 0; i < chunk; i++)
+                    putch(kbuf[i]);
+            }
+
+            written += chunk;
         }
+
         return (long)count;
     }
 

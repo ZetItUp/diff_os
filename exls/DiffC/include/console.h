@@ -18,6 +18,7 @@
 #define CONSOLE_COLOR_LIGHT_MAGENTA     0xD
 #define CONSOLE_COLOR_YELLOW            0xE
 #define CONSOLE_COLOR_WHITE             0xF
+#define CONSOLE_COLOR_DEFAULT           0xFF  // Reset to terminal default
 
 int console_set_color(uint8_t fg, uint8_t bg);
 int console_get_color(uint8_t *fg, uint8_t *bg);

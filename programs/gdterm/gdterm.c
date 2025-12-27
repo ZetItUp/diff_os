@@ -21,9 +21,18 @@
 #define TERMINAL_PADDING_LEFT 8
 #define TERMINAL_PADDING_TOP 8
 
+// Default terminal color (light blue)
+static const term_color_t default_color = {203, 219, 252, 0xFF};
+
 // VGA color to RGB mapping
 static term_color_t vga_to_color(uint8_t vga_color)
 {
+    // Handle CONSOLE_COLOR_DEFAULT (0xFF) - return terminal default
+    if (vga_color == 0xFF)
+    {
+        return default_color;
+    }
+
     term_color_t c = {0, 0, 0, 0xFF};
 
     switch (vga_color & 0xF)
@@ -63,7 +72,6 @@ static const char *g_shell_name = "Different Terminal";
 static const unsigned g_ver_major = 1;
 static const unsigned g_ver_minor = 0;
 
-static const term_color_t default_color = {203, 219, 252, 0xFF};
 static int g_last_status = 0;
 static char g_cwd[256] = "/";
 static bool g_logo_enabled = true;
@@ -342,27 +350,25 @@ static int run_builtin(int argc, char **argv)
 static bool drain_tty_output(void)
 {
     char buf[256];
-    uint8_t attrs[256];
-    bool seen = false;
-    term_color_t saved_color = g_terminal.current_color;
+    bool had_output = false;
 
-    while (1)
+    for (;;)
     {
-        int n = system_tty_read(buf, sizeof(buf), TTY_READ_MODE_OUTPUT, attrs);
+        int n = system_tty_read_output(buf, sizeof(buf) - 1);
         if (n <= 0)
             break;
 
-        seen = true;
+        buf[n] = '\0';
+
         for (int i = 0; i < n; i++)
         {
-            term_color_t c = (attrs[i] == 0x07) ? default_color : vga_attr_to_color(attrs[i]);
-            terminal_set_color(&g_terminal, c);
             terminal_putchar(&g_terminal, buf[i]);
         }
+
+        had_output = true;
     }
 
-    terminal_set_color(&g_terminal, saved_color);
-    return seen;
+    return had_output;
 }
 
 static void remember_child(int pid)
@@ -488,7 +494,7 @@ int main(void)
 
     // Initialize terminal component
     terminal_component_init(&g_terminal, 0, 0, WIN_W, WIN_H, font);
-    terminal_set_color(&g_terminal, default_color);
+    terminal_set_default_color(&g_terminal, default_color);
 
     // Add terminal to window
     window_add_component(win, &g_terminal.base);

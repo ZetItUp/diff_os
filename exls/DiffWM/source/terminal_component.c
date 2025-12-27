@@ -103,11 +103,13 @@ void terminal_component_init(terminal_component_t *term, int x, int y, int width
     term->cursor_y = 0;
     term->font = font;
 
-    // Default colors (white on black)
-    term->current_color.r = 255;
-    term->current_color.g = 255;
-    term->current_color.b = 255;
-    term->current_color.a = 255;
+    // Default colors (light blue on black - matching gdterm)
+    term->default_color.r = 203;
+    term->default_color.g = 219;
+    term->default_color.b = 252;
+    term->default_color.a = 255;
+
+    term->current_color = term->default_color;
 
     term->bg_color.r = 0;
     term->bg_color.g = 0;
@@ -118,6 +120,10 @@ void terminal_component_init(terminal_component_t *term, int x, int y, int width
 
     term->view_offset = 0;
 
+    // Initialize ANSI escape sequence state
+    term->esc_state = 0;
+    term->esc_len = 0;
+
     // Initialize selection
     text_selection_init(&term->selection);
 
@@ -126,10 +132,177 @@ void terminal_component_init(terminal_component_t *term, int x, int y, int width
     term->base.draw = terminal_component_paint;
 }
 
+// ANSI color code to RGB conversion
+// Standard colors (30-37, 40-47) and bright colors (90-97, 100-107)
+static term_color_t ansi_to_rgb(int code, term_color_t default_color)
+{
+    // Standard ANSI color palette
+    static const term_color_t colors[16] = {
+        {0, 0, 0, 255},         // 0: Black
+        {170, 0, 0, 255},       // 1: Red
+        {0, 170, 0, 255},       // 2: Green
+        {170, 85, 0, 255},      // 3: Yellow/Brown
+        {0, 0, 170, 255},       // 4: Blue
+        {170, 0, 170, 255},     // 5: Magenta
+        {0, 170, 170, 255},     // 6: Cyan
+        {170, 170, 170, 255},   // 7: White/Light Gray
+        {85, 85, 85, 255},      // 8: Bright Black/Dark Gray
+        {255, 85, 85, 255},     // 9: Bright Red
+        {85, 255, 85, 255},     // 10: Bright Green
+        {255, 255, 85, 255},    // 11: Bright Yellow
+        {85, 85, 255, 255},     // 12: Bright Blue
+        {255, 85, 255, 255},    // 13: Bright Magenta
+        {85, 255, 255, 255},    // 14: Bright Cyan
+        {255, 255, 255, 255},   // 15: Bright White
+    };
+
+    int index = -1;
+
+    // Foreground colors
+    if (code >= 30 && code <= 37)
+        index = code - 30;
+    else if (code >= 90 && code <= 97)
+        index = code - 90 + 8;
+    // Background colors
+    else if (code >= 40 && code <= 47)
+        index = code - 40;
+    else if (code >= 100 && code <= 107)
+        index = code - 100 + 8;
+
+    if (index >= 0 && index < 16)
+        return colors[index];
+
+    // Default to the terminal's default color
+    return default_color;
+}
+
+// Parse and apply ANSI escape sequence
+static void terminal_apply_ansi(terminal_component_t *term)
+{
+    term->esc_buf[term->esc_len] = '\0';
+
+    // Empty sequence (ESC[m) means reset
+    if (term->esc_len == 0)
+    {
+        term->current_color = term->default_color;
+        return;
+    }
+
+    // Parse CSI parameters (e.g., "32;40" for green fg, black bg)
+    int params[8] = {0};
+    int param_count = 0;
+    char *p = term->esc_buf;
+
+    while (*p && param_count < 8)
+    {
+        if (*p >= '0' && *p <= '9')
+        {
+            params[param_count] = 0;
+            while (*p >= '0' && *p <= '9')
+            {
+                params[param_count] = params[param_count] * 10 + (*p - '0');
+                p++;
+            }
+            param_count++;
+        }
+        if (*p == ';')
+            p++;
+        else
+            break;
+    }
+
+    // No params also means reset
+    if (param_count == 0)
+    {
+        term->current_color = term->default_color;
+        return;
+    }
+
+    // Apply color codes
+    for (int i = 0; i < param_count; i++)
+    {
+        int code = params[i];
+
+        if (code == 0)
+        {
+            // Reset to default color
+            term->current_color = term->default_color;
+            term->bg_color = (term_color_t){0, 0, 0, 255};
+        }
+        else if (code == 39)
+        {
+            // Default foreground color
+            term->current_color = term->default_color;
+        }
+        else if (code == 49)
+        {
+            // Default background color
+            term->bg_color = (term_color_t){0, 0, 0, 255};
+        }
+        else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97))
+        {
+            // Foreground color
+            term->current_color = ansi_to_rgb(code, term->default_color);
+        }
+        else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107))
+        {
+            // Background color (stored but not currently used per-char)
+            term->bg_color = ansi_to_rgb(code, term->default_color);
+        }
+    }
+}
+
 void terminal_putchar(terminal_component_t *term, char c)
 {
     if (!term)
         return;
+
+    // ANSI escape sequence state machine
+    if (term->esc_state == 1)
+    {
+        // After ESC, expect '['
+        if (c == '[')
+        {
+            term->esc_state = 2;
+            term->esc_len = 0;
+            return;
+        }
+        // Not a CSI sequence, output ESC and continue
+        term->esc_state = 0;
+    }
+    else if (term->esc_state == 2)
+    {
+        // Inside CSI sequence, collect until we hit a letter
+        if (c >= 0x40 && c <= 0x7E)
+        {
+            // End of sequence
+            if (c == 'm')
+            {
+                // SGR (Select Graphic Rendition) - colors
+                terminal_apply_ansi(term);
+            }
+            // Other commands (cursor movement, etc.) can be added here
+            term->esc_state = 0;
+            return;
+        }
+        else if (term->esc_len < 15)
+        {
+            term->esc_buf[term->esc_len++] = c;
+            return;
+        }
+        else
+        {
+            // Buffer overflow, abort sequence
+            term->esc_state = 0;
+        }
+    }
+
+    // Check for ESC character
+    if (c == '\033')
+    {
+        term->esc_state = 1;
+        return;
+    }
 
     if (c == '\n')
     {
@@ -184,6 +357,15 @@ void terminal_set_color(terminal_component_t *term, term_color_t color)
     if (!term)
         return;
 
+    term->current_color = color;
+}
+
+void terminal_set_default_color(terminal_component_t *term, term_color_t color)
+{
+    if (!term)
+        return;
+
+    term->default_color = color;
     term->current_color = color;
 }
 

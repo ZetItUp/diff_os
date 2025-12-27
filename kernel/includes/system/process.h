@@ -7,8 +7,6 @@
 #include "system/signal.h"
 #include "system/signal.h"
 
-struct tty;
-
 typedef enum process_state
 {
     PROCESS_CREATED = 0,
@@ -64,10 +62,6 @@ typedef struct process
 
     signal_state_t signal;
 
-    // Per-process tty endpoints (stdout/stderr and stdin)
-    struct tty *tty_out;
-    struct tty *tty_in;
-    uint8_t   tty_attr;
     uint8_t   resources_cleaned;
 
     // Embedded resources (from DEX header)
@@ -95,8 +89,7 @@ process_t *process_create_user(uint32_t user_eip,
                                size_t user_stack_size,
                                uintptr_t heap_base,
                                uintptr_t heap_end,
-                               uintptr_t heap_max,
-                               int inherit_tty);
+                               uintptr_t heap_max);
 void __attribute__((noreturn)) process_exit_current(int exit_code);
 process_t *process_current(void);
 int process_pid(const process_t *p);
@@ -111,8 +104,7 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
                                         size_t user_stack_size,
                                         uintptr_t heap_base,
                                         uintptr_t heap_end,
-                                        uintptr_t heap_max,
-                                        int inherit_tty);
+                                        uintptr_t heap_max);
 process_t *process_find_by_pid(int pid);
 int system_wait_pid(int pid, int *u_status);
 int system_wait_pid_nohang(int pid, int *u_status);

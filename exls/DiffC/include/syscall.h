@@ -87,6 +87,7 @@ enum
     SYSTEM_SIGNAL_RETURN = 73,
     SYSTEM_SIGNAL_SETMASK = 74,
     SYSTEM_SIGNAL_GETMASK = 75,
+    SYSTEM_TTY_READ_OUTPUT = 76,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -504,17 +505,19 @@ static inline int system_shared_memory_release(int handle)
     return do_sys(SYSTEM_SHARED_MEMORY_RELEASE, handle, 0, 0, 0);
 }
 
-#define TTY_READ_MODE_INPUT  0
-#define TTY_READ_MODE_OUTPUT 1
-
-static inline int system_tty_read(void *buf, uint32_t len, int mode, void *color_buf)
+static inline int system_tty_read(char *buf, uint32_t count)
 {
-    return do_sys(SYSTEM_TTY_READ, (int)(uintptr_t)buf, (int)len, mode, (int)(uintptr_t)color_buf);
+    return do_sys(SYSTEM_TTY_READ, (int)(uintptr_t)buf, (int)count, 0, 0);
 }
 
-static inline int system_tty_write(const void *buf, uint32_t len)
+static inline int system_tty_write(const char *buf, uint32_t count)
 {
-    return do_sys(SYSTEM_TTY_WRITE, (int)(uintptr_t)buf, (int)len, 0, 0);
+    return do_sys(SYSTEM_TTY_WRITE, (int)(uintptr_t)buf, (int)count, 0, 0);
+}
+
+static inline int system_tty_read_output(char *buf, uint32_t count)
+{
+    return do_sys(SYSTEM_TTY_READ_OUTPUT, (int)(uintptr_t)buf, (int)count, 0, 0);
 }
 
 // Mouse button flags

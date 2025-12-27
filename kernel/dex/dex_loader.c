@@ -52,40 +52,6 @@ static inline int in_range(uint32_t off, uint32_t sz, uint32_t max)
     return 1;
 }
 
-static int dex_path_has_suffix(const char *path, const char *suffix)
-{
-    size_t path_len = path ? strlen(path) : 0;
-    size_t suffix_len = suffix ? strlen(suffix) : 0;
-    if (path_len < suffix_len)
-    {
-        return 0;
-    }
-
-    return (strcmp(path + path_len - suffix_len, suffix) == 0);
-}
-
-static int dex_path_is_terminal(const char *path)
-{
-    return dex_path_has_suffix(path, "/gdterm.dex") ||
-           dex_path_has_suffix(path, "/dterm.dex");
-}
-
-static int dex_should_inherit_tty(const process_t *parent, const char *path)
-{
-    if (!parent || !path)
-    {
-        return 1;
-    }
-
-    if (strcmp(process_exec_root(parent), "/programs/diffwm") == 0 &&
-        !dex_path_is_terminal(path))
-    {
-        return 0;
-    }
-
-    return 1;
-}
-
 // Check if pointer lies inside an image buffer
 static int ptr_in_image(const void *p, const uint8_t *base, uint32_t size)
 {
@@ -1191,7 +1157,6 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
     // Clear single-step debug state before spawning new process
     debug_clear_single_step();
 
-    int inherit_tty = dex_should_inherit_tty(process_current(), path);
     p = process_create_user_with_cr3((uint32_t)stub,
                                      user_sp,
                                      cr3_child,
@@ -1200,8 +1165,7 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
                                      (size_t)user_stack_size,
                                      base,
                                      initial_end,
-                                     max,
-                                     inherit_tty);
+                                     max);
     if (!p)
     {
         paging_switch_address_space(cr3_child);

@@ -287,7 +287,7 @@ void ktimer_tick_isr(void)
 
 
     // Drain keyboard scan codes from driver and process them
-    // This triggers keyboard_process_scancode → push_key_event → writes to TTY
+    // This triggers keyboard_process_scancode → push_key_event → input queue
     keyboard_drain();
 
     uint64_t now_ms = g_ms;  // Reading current ms for timer expirations

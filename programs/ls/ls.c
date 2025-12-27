@@ -170,21 +170,17 @@ int main(int argc, char *argv[])
 
     for (size_t i = 0; i < nd; i++)
     {
-        uint8_t c;
-        console_get_fgcolor(&c);
         console_set_fgcolor(CONSOLE_COLOR_YELLOW);
         printf(" %-12s ", "DIRECTORY");
-        console_set_fgcolor(c);
+        console_set_fgcolor(CONSOLE_COLOR_DEFAULT);
         printf(" %10u  %s/\n", (unsigned)dirs[i].d_size, dirs[i].d_name);
     }
 
     for (size_t i = 0; i < nf; i++)
     {
-        uint8_t c;
-        console_get_fgcolor(&c);
         console_set_fgcolor(CONSOLE_COLOR_CYAN);
         printf(" %-12s ", "FILE");
-        console_set_fgcolor(c);
+        console_set_fgcolor(CONSOLE_COLOR_DEFAULT);
         printf(" %10u  %s\n", (unsigned)files[i].d_size, files[i].d_name);
     }
 

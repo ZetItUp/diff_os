@@ -40,10 +40,16 @@ typedef struct terminal_component_t
     font_t *font;
 
     term_color_t current_color;
+    term_color_t default_color;  // Color used on ANSI reset
     term_color_t bg_color;
     uint32_t selection_color;
 
     int view_offset;   // 0 = bottom, >0 scrolls up by that many lines
+
+    // ANSI escape sequence parsing state
+    int esc_state;      // 0=normal, 1=saw ESC, 2=saw ESC[
+    char esc_buf[16];   // buffer for escape parameters
+    int esc_len;        // length of escape buffer
 } terminal_component_t;
 
 // Initialize terminal component
@@ -53,6 +59,7 @@ void terminal_component_init(terminal_component_t *term, int x, int y, int width
 void terminal_putchar(terminal_component_t *term, char c);
 void terminal_puts(terminal_component_t *term, const char *s);
 void terminal_set_color(terminal_component_t *term, term_color_t color);
+void terminal_set_default_color(terminal_component_t *term, term_color_t color);
 void terminal_clear(terminal_component_t *term);
 void terminal_backspace(terminal_component_t *term);
 void terminal_scroll(terminal_component_t *term, int delta_lines);

@@ -3,7 +3,6 @@
 #include "interfaces.h"
 #include "console.h"
 #include "system/process.h"
-#include "system/tty.h"
 
 #define CH_FIFO_SIZE 256
 
@@ -574,4 +573,3 @@ int keyboard_trygetch(uint8_t *out)
         return 1;
     }
 }
-

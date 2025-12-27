@@ -87,7 +87,6 @@ KERNEL_SRC = \
 	kernel/system/spinlock.c \
 	kernel/system/messaging.c \
 	kernel/system/shared_mem.c \
-	kernel/system/tty.c \
 	kernel/system/signal.c \
 	kernel/system/pci.c \
 	kernel/dex/dex_loader.c \
@@ -108,7 +107,8 @@ KERNEL_SRC += \
 	kernel/interfaces/intf_memory.c \
 	kernel/interfaces/intf_vbe.c \
 	kernel/interfaces/intf_pci.c \
-	kernel/interfaces/intf_console.c
+	kernel/interfaces/intf_console.c \
+	kernel/interfaces/intf_tty.c
 
 PROGRAMS_LIST = dterm \
 				hello \

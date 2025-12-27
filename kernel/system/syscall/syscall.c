@@ -17,7 +17,6 @@
 #include "debug.h"
 #include "timer.h"
 #include "system/shared_mem.h"
-#include "system/tty.h"
 #include "system/signal.h"
 
 struct dirent;
@@ -85,10 +84,59 @@ int resolve_exec_path(char *out, size_t out_sz, const char *name)
     return -1;
 }
 
+// Map DiffOS color (0-15) to ANSI color code
+static int diffos_to_ansi_fg(uint8_t color)
+{
+    static const int map[16] = {
+        30, 34, 32, 36, 31, 35, 33, 37,  // 0-7: dark colors
+        90, 94, 92, 96, 91, 95, 93, 97   // 8-15: bright colors
+    };
+    return map[color & 0x0F];
+}
+
+static int diffos_to_ansi_bg(uint8_t color)
+{
+    static const int map[16] = {
+        40, 44, 42, 46, 41, 45, 43, 47,  // 0-7: dark colors
+        100, 104, 102, 106, 101, 105, 103, 107  // 8-15: bright colors
+    };
+    return map[color & 0x0F];
+}
+
+// Special value for resetting to terminal default
+#define CONSOLE_COLOR_DEFAULT 0xFF
+
 // Set console colors from user values
 static int system_console_set_color(uint32_t fg, uint32_t bg)
 {
-    return console_set_colors_kernel((uint8_t)fg, (uint8_t)bg);
+    // Inject ANSI escape codes into TTY output buffer for terminal emulators
+    char ansi_buf[24];
+    int len;
+
+    if (fg == CONSOLE_COLOR_DEFAULT || bg == CONSOLE_COLOR_DEFAULT)
+    {
+        // Reset to terminal default
+        len = snprintf(ansi_buf, sizeof(ansi_buf), "\033[0m");
+    }
+    else
+    {
+        len = snprintf(ansi_buf, sizeof(ansi_buf), "\033[%d;%dm",
+                       diffos_to_ansi_fg((uint8_t)fg),
+                       diffos_to_ansi_bg((uint8_t)bg));
+    }
+
+    if (len > 0)
+    {
+        tty_write(ansi_buf, (unsigned)len);
+    }
+
+    // Don't change kernel console color for DEFAULT
+    if (fg != CONSOLE_COLOR_DEFAULT && bg != CONSOLE_COLOR_DEFAULT)
+    {
+        return console_set_colors_kernel((uint8_t)fg, (uint8_t)bg);
+    }
+
+    return 0;
 }
 
 // Read current console colors
@@ -113,10 +161,10 @@ static int system_console_get_color(uint32_t *out)
     return 0;
 }
 
-// Print one character to the console/tty
+// Print one character to the console
 static int system_putchar(int ch)
 {
-    tty_putc(ch);
+    putch(ch);
 
     return 0;
 }
@@ -834,14 +882,62 @@ int system_call_dispatch(struct syscall_frame *f)
         }
         case SYSTEM_TTY_READ:
         {
-            ret = system_tty_read_user((void*)arg0, (uint32_t)arg1, (int)arg2, (void*)arg3);
+            char *ubuf = (char *)(uintptr_t)arg0;
+            unsigned count = (unsigned)arg1;
 
+            if (!ubuf || count == 0)
+            {
+                ret = -1;
+                break;
+            }
+
+            if (paging_check_user_range((uint32_t)ubuf, count) != 0)
+            {
+                ret = -1;
+                break;
+            }
+
+            ret = tty_read(ubuf, count);
             break;
         }
         case SYSTEM_TTY_WRITE:
         {
-            ret = system_tty_write_user((const void*)arg0, (uint32_t)arg1);
+            const char *ubuf = (const char *)(uintptr_t)arg0;
+            unsigned count = (unsigned)arg1;
 
+            if (!ubuf || count == 0)
+            {
+                ret = 0;
+                break;
+            }
+
+            if (paging_check_user_range((uint32_t)ubuf, count) != 0)
+            {
+                ret = -1;
+                break;
+            }
+
+            ret = tty_write(ubuf, count);
+            break;
+        }
+        case SYSTEM_TTY_READ_OUTPUT:
+        {
+            char *ubuf = (char *)(uintptr_t)arg0;
+            unsigned count = (unsigned)arg1;
+
+            if (!ubuf || count == 0)
+            {
+                ret = 0;
+                break;
+            }
+
+            if (paging_check_user_range((uint32_t)ubuf, count) != 0)
+            {
+                ret = -1;
+                break;
+            }
+
+            ret = tty_read_output(ubuf, count);
             break;
         }
         case SYSTEM_CONSOLE_DISABLE:

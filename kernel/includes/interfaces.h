@@ -39,6 +39,13 @@ typedef struct kernel_exports
     void (*pci_enable_device)(const pci_device_t *dev);
     int (*pci_get_bar)(const pci_device_t *dev, uint8_t bar_index, uint32_t *out_base, uint32_t *out_size, int *is_mmio);
     void (*mouse_register)(int (*read_fn)(mouse_packet_t*), int (*read_block_fn)(mouse_packet_t*)); // Plug mouse backend
+    void (*tty_register)(int (*read_fn)(char*, unsigned),
+                         int (*write_fn)(const char*, unsigned),
+                         void (*input_fn)(char),
+                         void (*set_canonical_fn)(int),
+                         void (*set_echo_fn)(int),
+                         int (*available_fn)(void),
+                         int (*read_output_fn)(char*, unsigned)); // Plug TTY backend
 } __attribute__((packed)) kernel_exports_t;
 
 // Keyboard-facing exports
@@ -89,6 +96,36 @@ void mouse_init(void);
 void mouse_drain(void);
 int mouse_try_get_packet(mouse_packet_t *packet);
 int mouse_get_packet(mouse_packet_t *packet);
+
+// TTY-facing exports
+typedef struct tty_exports
+{
+    int (*tty_read)(char *buf, unsigned count);
+    int (*tty_write)(const char *buf, unsigned count);
+    void (*tty_input_char)(char c);
+    void (*tty_set_canonical)(int enabled);
+    void (*tty_set_echo)(int enabled);
+    int (*tty_input_available)(void);
+    int (*tty_read_output)(char *buf, unsigned count);
+} __attribute__((packed)) tty_exports_t;
+
+extern tty_exports_t g_tty;
+void tty_register(
+    int (*read_fn)(char*, unsigned),
+    int (*write_fn)(const char*, unsigned),
+    void (*input_fn)(char),
+    void (*set_canonical_fn)(int),
+    void (*set_echo_fn)(int),
+    int (*available_fn)(void),
+    int (*read_output_fn)(char*, unsigned)
+);
+int tty_read(char *buf, unsigned count);
+int tty_write(const char *buf, unsigned count);
+void tty_input_char(char c);
+void tty_set_canonical(int enabled);
+void tty_set_echo(int enabled);
+int tty_input_available(void);
+int tty_read_output(char *buf, unsigned count);
 
 // Mouse state tracking
 void mouse_update_state(void);
