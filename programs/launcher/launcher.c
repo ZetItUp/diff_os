@@ -12,6 +12,7 @@
 #include <diffgfx/draw.h>
 #include <runtime/exec.h>
 #include <system/process.h>
+#include <syscall.h>
 
 #define WIN_W 320
 #define WIN_H 110
@@ -26,6 +27,47 @@ static label_t lbl_info;
 static label_t lbl_error;
 static textbox_t txt_program;
 static char txt_program_buf[128];
+
+static bool path_ends_with(const char *path, const char *suffix)
+{
+    if (!path || !suffix)
+    {
+        return false;
+    }
+
+    size_t path_len = strlen(path);
+    size_t suffix_len = strlen(suffix);
+    if (suffix_len > path_len)
+    {
+        return false;
+    }
+
+    return strcmp(path + path_len - suffix_len, suffix) == 0;
+}
+
+static bool is_terminal_program(const char *program, const char *resolved_path)
+{
+    if (program)
+    {
+        if (strcmp(program, "gdterm") == 0 || strcmp(program, "dterm") == 0)
+        {
+            return true;
+        }
+    }
+
+    if (resolved_path)
+    {
+        if (path_ends_with(resolved_path, "/gdterm.dex") ||
+            path_ends_with(resolved_path, "/gdterm") ||
+            path_ends_with(resolved_path, "/dterm.dex") ||
+            path_ends_with(resolved_path, "/dterm"))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 static int try_launch_program(void)
 {
@@ -60,7 +102,18 @@ static int try_launch_program(void)
     }
 
     /* Launch the program as a child process */
+    bool detach_tty = !is_terminal_program(program, resolved_path);
+    if (detach_tty)
+    {
+        system_tty_set_output_enabled(0);
+    }
+
     int pid = rt_exec(resolved_path, 0, NULL, 0);
+
+    if (detach_tty)
+    {
+        system_tty_set_output_enabled(1);
+    }
 
     if (pid < 0)
     {

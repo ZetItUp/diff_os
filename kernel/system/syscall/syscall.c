@@ -940,6 +940,19 @@ int system_call_dispatch(struct syscall_frame *f)
             ret = tty_read_output(ubuf, count);
             break;
         }
+        case SYSTEM_TTY_SET_OUTPUT:
+        {
+            process_t *p = process_current();
+            if (!p)
+            {
+                ret = -1;
+                break;
+            }
+
+            p->tty_output_enabled = (arg0 != 0) ? 1 : 0;
+            ret = 0;
+            break;
+        }
         case SYSTEM_CONSOLE_DISABLE:
         {
             console_disable();

@@ -311,6 +311,7 @@ void process_init(void)
     k->heap_max = 0;
     k->heap_alloc_next = 0;
     k->reservation_count = 0;
+    k->tty_output_enabled = 1;
     process_assign_default_cwd(k);
     process_set_exec_root(k, "/");
 
@@ -348,6 +349,7 @@ process_t *process_create_kernel(void (*entry)(void *),
     p->live_threads = 0;
     p->main_thread = NULL;
     p->waiter = NULL;
+    p->tty_output_enabled = parent ? parent->tty_output_enabled : 1;
     process_inherit_cwd_from_parent(p, p->parent);
     process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 
@@ -394,6 +396,7 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
     p->live_threads = 0;
     p->main_thread = NULL;
     p->waiter = NULL;
+    p->tty_output_enabled = parent ? parent->tty_output_enabled : 1;
     process_inherit_cwd_from_parent(p, p->parent);
     process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 

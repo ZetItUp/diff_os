@@ -71,6 +71,8 @@ typedef struct process
     uint32_t  resources_kernel_size;
 
     signal_state_t sig;
+
+    uint8_t tty_output_enabled;
 } process_t;
 
 typedef struct user_boot_args

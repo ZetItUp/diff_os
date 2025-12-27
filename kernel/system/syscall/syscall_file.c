@@ -270,6 +270,13 @@ long system_file_write(int file, const void *buf, unsigned long count)
     // stdout/stderr - route through TTY for terminal output capture
     if (file == 1 || file == 2)
     {
+        process_t *proc = process_current();
+        int tty_enabled = 1;
+        if (proc && !proc->tty_output_enabled)
+        {
+            tty_enabled = 0;
+        }
+
         // Copy to kernel buffer and call tty_write for output capture
         char kbuf[256];
         unsigned long written = 0;
@@ -283,13 +290,16 @@ long system_file_write(int file, const void *buf, unsigned long count)
             if (copy_from_user(kbuf, (const uint8_t*)buf + written, chunk) != 0)
                 return (long)written;
 
-            // Route through TTY - this stores in output buffer AND prints
-            int rc = tty_write(kbuf, (unsigned)chunk);
-            if (rc <= 0)
+            if (tty_enabled)
             {
-                // TTY not available, fall back to direct console output
-                for (unsigned long i = 0; i < chunk; i++)
-                    putch(kbuf[i]);
+                // Route through TTY - this stores in output buffer AND prints
+                int rc = tty_write(kbuf, (unsigned)chunk);
+                if (rc <= 0)
+                {
+                    // TTY not available, fall back to direct console output
+                    for (unsigned long i = 0; i < chunk; i++)
+                        putch(kbuf[i]);
+                }
             }
 
             written += chunk;

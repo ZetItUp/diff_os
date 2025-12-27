@@ -86,6 +86,7 @@ enum
     SYSTEM_SIGNAL_SETMASK = 74,
     SYSTEM_SIGNAL_GETMASK = 75,
     SYSTEM_TTY_READ_OUTPUT = 76,
+    SYSTEM_TTY_SET_OUTPUT = 77,
 };
 
 struct syscall_frame 

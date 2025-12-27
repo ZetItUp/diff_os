@@ -88,6 +88,7 @@ enum
     SYSTEM_SIGNAL_SETMASK = 74,
     SYSTEM_SIGNAL_GETMASK = 75,
     SYSTEM_TTY_READ_OUTPUT = 76,
+    SYSTEM_TTY_SET_OUTPUT = 77,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -131,6 +132,11 @@ static inline __attribute__((always_inline)) int do_sys(int n, int a0, int a1, i
     );
 
     return r_eax;
+}
+
+static inline int system_tty_set_output_enabled(int enabled)
+{
+    return do_sys(SYSTEM_TTY_SET_OUTPUT, enabled, 0, 0, 0);
 }
 
 
