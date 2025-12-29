@@ -19,7 +19,7 @@
 #define TIMER_DEFAULT_HZ 100u
 #endif
 
-extern thread_t* current_thread(void);
+extern thread_t *current_thread(void);
 volatile uint32_t timer_ticks = 0;
 volatile bool timer_tick_updated = false;
 
@@ -27,177 +27,178 @@ static inline uint32_t irq_save(void)
 {
     uint32_t flags;
 
-    __asm__ __volatile__("pushf; pop %0; cli" : "=r"(flags) :: "memory");  // Save EFLAGS and disabling interrupts
+    __asm__ __volatile__("pushf; pop %0; cli" : "=r"(flags) :: "memory");
 
     return flags;
 }
 
 static inline void irq_restore(uint32_t flags)
 {
-    __asm__ __volatile__("push %0; popf" :: "r"(flags) : "memory");  // Restore previous EFLAGS
+    __asm__ __volatile__("push %0; popf" :: "r"(flags) : "memory");
 }
 
-static volatile uint64_t g_ticks = 0;
-static volatile uint32_t g_hz = TIMER_DEFAULT_HZ;
-static volatile uint64_t g_ms = 0;
-static volatile uint32_t g_ms_inc = 0;
-static volatile uint32_t g_ms_rem = 0;
-static volatile uint32_t g_ms_frac_accum = 0;
+static volatile uint64_t g_tick_count = 0;
+static volatile uint32_t g_timer_hertz = TIMER_DEFAULT_HZ;
+static volatile uint64_t g_milliseconds = 0;
+static volatile uint32_t g_millisecond_increment = 0;
+static volatile uint32_t g_millisecond_remainder = 0;
+static volatile uint32_t g_millisecond_fraction_accum = 0;
 
 uint32_t timer_hz(void)
 {
-    return g_hz;
+    return g_timer_hertz;
 }
 
 uint64_t timer_now_ticks(void)
 {
-    uint32_t f = irq_save();
-    uint64_t t = g_ticks;
+    uint32_t irq_flags = irq_save();
+    uint64_t tick_count = g_tick_count;
 
-    irq_restore(f);
+    irq_restore(irq_flags);
 
-    return t;
+    return tick_count;
 }
 
 uint64_t timer_now_ms(void)
 {
-    uint32_t f = irq_save();
-    uint64_t ms = g_ms;
+    uint32_t irq_flags = irq_save();
+    uint64_t milliseconds = g_milliseconds;
 
-    irq_restore(f);
+    irq_restore(irq_flags);
 
-    return ms;
+    return milliseconds;
 }
 
 static struct ktimer *g_timer_head = NULL;
 
-static void timerq_insert(struct ktimer *t)
+static void timerq_insert(struct ktimer *timer)
 {
-    t->active = true;
+    timer->active = true;
 
-    if (g_timer_head == NULL || t->expires_ms < g_timer_head->expires_ms)
+    if (g_timer_head == NULL || timer->expires_ms < g_timer_head->expires_ms)
     {
-        t->next = g_timer_head;
-        g_timer_head = t;
+        timer->next = g_timer_head;
+        g_timer_head = timer;
 
         return;
     }
 
-    struct ktimer *cur = g_timer_head;
+    struct ktimer *current_timer = g_timer_head;
 
-    while (cur->next && cur->next->expires_ms <= t->expires_ms)
+    while (current_timer->next &&
+           current_timer->next->expires_ms <= timer->expires_ms)
     {
-        cur = cur->next;
+        current_timer = current_timer->next;
     }
 
-    t->next = cur->next;
-    cur->next = t;
+    timer->next = current_timer->next;
+    current_timer->next = timer;
 }
 
-static void timerq_remove(struct ktimer *t)
+static void timerq_remove(struct ktimer *timer)
 {
-    if (!t->active)
+    if (!timer->active)
     {
         return;
     }
 
-    struct ktimer **pp = &g_timer_head;
+    struct ktimer **timer_ptr = &g_timer_head;
 
-    while (*pp)
+    while (*timer_ptr)
     {
-        if (*pp == t)
+        if (*timer_ptr == timer)
         {
-            *pp = t->next;
-            t->next = NULL;
-            t->active = false;
+            *timer_ptr = timer->next;
+            timer->next = NULL;
+            timer->active = false;
 
             return;
         }
 
-        pp = &((*pp)->next);
+        timer_ptr = &((*timer_ptr)->next);
     }
 
-    t->next = NULL;
-    t->active = false;
+    timer->next = NULL;
+    timer->active = false;
 }
 
 void ktimer_add_once(
-    struct ktimer *t,
+    struct ktimer *timer,
     uint32_t delay_ms,
-    ktimer_callback_t cb,
-    void *arg,
+    ktimer_callback_t callback,
+    void *callback_arg,
     void *owner)
 {
-    if (!t || !cb)
+    if (!timer || !callback)
     {
         return;
     }
 
-    uint32_t f = irq_save();
+    uint32_t irq_flags = irq_save();
 
-    t->cb = cb;
-    t->callback_arg = arg;
-    t->owner = owner;
-    t->period_ms = 0;
-    t->expires_ms = timer_now_ms() + (uint64_t)delay_ms;
-    t->next = NULL;
-    t->active = false;
+    timer->cb = callback;
+    timer->callback_arg = callback_arg;
+    timer->owner = owner;
+    timer->period_ms = 0;
+    timer->expires_ms = timer_now_ms() + (uint64_t)delay_ms;
+    timer->next = NULL;
+    timer->active = false;
 
-    timerq_insert(t);
+    timerq_insert(timer);
 
-    irq_restore(f);
+    irq_restore(irq_flags);
 }
 
 void ktimer_add_periodic(
-    struct ktimer *t,
+    struct ktimer *timer,
     uint32_t period_ms,
-    ktimer_callback_t cb,
-    void *arg,
+    ktimer_callback_t callback,
+    void *callback_arg,
     void *owner)
 {
-    if (!t || !cb || period_ms == 0)
+    if (!timer || !callback || period_ms == 0)
     {
         return;
     }
 
-    uint32_t f = irq_save();
+    uint32_t irq_flags = irq_save();
 
-    t->cb = cb;
-    t->callback_arg = arg;
-    t->owner = owner;
-    t->period_ms = period_ms;
-    t->expires_ms = timer_now_ms() + (uint64_t)period_ms;
-    t->next = NULL;
-    t->active = false;
+    timer->cb = callback;
+    timer->callback_arg = callback_arg;
+    timer->owner = owner;
+    timer->period_ms = period_ms;
+    timer->expires_ms = timer_now_ms() + (uint64_t)period_ms;
+    timer->next = NULL;
+    timer->active = false;
 
-    timerq_insert(t);
+    timerq_insert(timer);
 
-    irq_restore(f);
+    irq_restore(irq_flags);
 }
 
-void ktimer_cancel(struct ktimer *t)
+void ktimer_cancel(struct ktimer *timer)
 {
-    if (!t)
+    if (!timer)
     {
         return;
     }
 
-    uint32_t f = irq_save();
+    uint32_t irq_flags = irq_save();
 
-    timerq_remove(t);
+    timerq_remove(timer);
 
-    irq_restore(f);
+    irq_restore(irq_flags);
 }
 
-__attribute__((weak)) void scheduler_block_current_until_wakeup(void) 
-{ 
+__attribute__((weak)) void scheduler_block_current_until_wakeup(void)
+{
 
-} 
+}
 
-__attribute__((weak)) void schededuler_wake_owner(void *owner) 
-{ 
-    (void)owner; 
-} 
+__attribute__((weak)) void schededuler_wake_owner(void *owner)
+{
+    (void)owner;
+}
 
 typedef struct sleep_helper
 {
@@ -206,28 +207,28 @@ typedef struct sleep_helper
     void *owner;
 } sleep_helper_t;
 
-static void sleep_cb(void *arg)
+static void sleep_cb(void *argument)
 {
-    sleep_helper_t *h = (sleep_helper_t *)arg;
-    h->woke = true;
+    sleep_helper_t *helper = (sleep_helper_t *)argument;
+    helper->woke = true;
 
-    if (h->owner)
+    if (helper->owner)
     {
-        scheduler_wake_owner(h->owner);  
+        scheduler_wake_owner(helper->owner);
     }
 }
 
-void sleep_ms(uint32_t ms)
+void sleep_ms(uint32_t milliseconds)
 {
-    void *owner = current_thread(); 
+    void *owner = current_thread();
 
     sleep_helper_t helper;
     helper.woke = false;
     helper.owner = owner;
 
-    ktimer_add_once(&helper.timer, ms, sleep_cb, &helper, owner);
+    ktimer_add_once(&helper.timer, milliseconds, sleep_cb, &helper, owner);
 
-    scheduler_block_current_until_wakeup();  
+    scheduler_block_current_until_wakeup();
 
     while (!helper.woke)
     {
@@ -235,87 +236,87 @@ void sleep_ms(uint32_t ms)
     }
 }
 
-static void pit_program(uint32_t hz)
+static void pit_program(uint32_t frequency_hertz)
 {
-    if (hz < 19)
+    if (frequency_hertz < 19)
     {
-        hz = 19;  // This needs to be >= ~19 Hz to avoid divisor underflow
+        frequency_hertz = 19;
     }
 
-    uint32_t divisor = PIT_INPUT_HZ / hz;
+    uint32_t divisor = PIT_INPUT_HZ / frequency_hertz;
 
     if (divisor == 0)
     {
-        divisor = 1;  // This needs to be >=1 for PIT programming
+        divisor = 1;
     }
 
-    outb(PIT_CMD_PORT, 0x36);  // Programming PIT ch0, lobyte/hibyte, mode 3 (square wave)
+    outb(PIT_CMD_PORT, 0x36);
 
     outb(PIT_CH0_PORT, (uint8_t)(divisor & 0xFF));
     outb(PIT_CH0_PORT, (uint8_t)((divisor >> 8) & 0xFF));
 
-    uint32_t f = irq_save();
+    uint32_t irq_flags = irq_save();
 
-    g_hz = hz;
-    g_ms_inc = 1000u / hz; 
-    g_ms_rem = 1000u % hz;
-    g_ms_frac_accum = 0; 
+    g_timer_hertz = frequency_hertz;
+    g_millisecond_increment = 1000u / frequency_hertz;
+    g_millisecond_remainder = 1000u % frequency_hertz;
+    g_millisecond_fraction_accum = 0;
 
-    irq_restore(f);
+    irq_restore(irq_flags);
 }
 
 void ktimer_tick_isr(void)
 {
     extern void keyboard_drain(void);
 
-    g_ticks++;
+    g_tick_count++;
     timer_ticks++;
     timer_tick_updated = true;
 
-    uint32_t hz = g_hz;
-    g_ms += g_ms_inc;  // Advancing monotonic ms by integer part
+    uint32_t current_hertz = g_timer_hertz;
+    g_milliseconds += g_millisecond_increment;
 
-    uint32_t acc = g_ms_frac_accum + g_ms_rem;  // Accumulating fractional ms for correction
+    uint32_t fraction_accum =
+        g_millisecond_fraction_accum + g_millisecond_remainder;
 
-    if (acc >= hz)
+    if (fraction_accum >= current_hertz)
     {
-        g_ms += 1;     // Calculating the time correction by carrying 1 ms
-        acc -= hz;     // Attempting to preserve leftover fractional part
+        g_milliseconds += 1;
+        fraction_accum -= current_hertz;
     }
 
-    g_ms_frac_accum = acc;
+    g_millisecond_fraction_accum = fraction_accum;
 
 
-    // Drain keyboard scan codes from driver and process them
-    // This triggers keyboard_process_scancode → push_key_event → input queue
+    // Drain keyboard scan codes and process them
     keyboard_drain();
 
-    uint64_t now_ms = g_ms;  // Reading current ms for timer expirations
+    uint64_t now_milliseconds = g_milliseconds;
 
-    while (g_timer_head && g_timer_head->expires_ms <= now_ms)
+    while (g_timer_head && g_timer_head->expires_ms <= now_milliseconds)
     {
-        struct ktimer *t = g_timer_head;
-        g_timer_head = t->next;
-        t->next = NULL;
-        t->active = false;
+        struct ktimer *timer = g_timer_head;
+        g_timer_head = timer->next;
+        timer->next = NULL;
+        timer->active = false;
 
-        if (t->period_ms != 0)
+        if (timer->period_ms != 0)
         {
-            t->expires_ms = now_ms + (uint64_t)t->period_ms;  // Attempting to re-arm periodic timer to reduce drift
-            timerq_insert(t);
+            timer->expires_ms = now_milliseconds + (uint64_t)timer->period_ms;
+            timerq_insert(timer);
         }
 
-        if (t->cb)
+        if (timer->cb)
         {
-            t->cb(t->callback_arg);  // This needs to be fast (IRQ context)
+            timer->cb(timer->callback_arg);
         }
     }
 }
 
-static void timer_irq_handler(unsigned irq, void *ctx)
+static void timer_irq_handler(unsigned irq_number, void *context)
 {
-    (void)irq;
-    (void)ctx;
+    (void)irq_number;
+    (void)context;
 
     ktimer_tick_isr();
     scheduler_tick_from_timer();
@@ -323,31 +324,27 @@ static void timer_irq_handler(unsigned irq, void *ctx)
 
 void timer_init(uint32_t frequency)
 {
-    pit_program(frequency);  // Attempting to program PIT to requested frequency
+    pit_program(frequency);
 }
 
 void timer_install(void)
 {
-    pit_program(TIMER_DEFAULT_HZ);  // Start with default frequency
+    pit_program(TIMER_DEFAULT_HZ);
 
-    irq_install_handler(PIT_IRQ_LINE, timer_irq_handler);  // This needs to be bound to IRQ0
-    pic_clear_mask(PIT_IRQ_LINE);  // This needs to unmask IRQ0 on PIC
+    irq_install_handler(PIT_IRQ_LINE, timer_irq_handler);
+    pic_clear_mask(PIT_IRQ_LINE);
 }
 
 void timer_install_apic(void)
 {
-    // Install timer handler for APIC timer (uses vector 32, same as PIT IRQ0)
-    // Note: APIC timer is local to the CPU, doesn't go through I/O APIC
+    // Install timer handler for APIC timer
     irq_install_handler(PIT_IRQ_LINE, timer_irq_handler);
 
-    // Set up the timer frequency tracking variables for APIC timer
-    uint32_t f = irq_save();
-    g_hz = TIMER_DEFAULT_HZ;
-    g_ms_inc = 1000u / g_hz;
-    g_ms_rem = 1000u % g_hz;
-    g_ms_frac_accum = 0;
-    irq_restore(f);
-
-    // No need to unmask in I/O APIC - APIC timer is already enabled
-    // The APIC timer interrupt is controlled by the APIC_REG_TIMER register
+    // Set up the timer frequency tracking values for APIC timer
+    uint32_t irq_flags = irq_save();
+    g_timer_hertz = TIMER_DEFAULT_HZ;
+    g_millisecond_increment = 1000u / g_timer_hertz;
+    g_millisecond_remainder = 1000u % g_timer_hertz;
+    g_millisecond_fraction_accum = 0;
+    irq_restore(irq_flags);
 }

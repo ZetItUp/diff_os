@@ -16,6 +16,8 @@ if condition
 
 - All variables should be full name, for example, no, int w; but int width;, however 'char c' is fine to use, also i, j, k, l, n, m, is fine to use for nested loops, unless it is needed to be specific about what the index really is, then it should use a proper name.
 
+- When using registers, use the proper register names for variables, like eax, not eax_value or something else.
+
 - Do not try to align variables with tabs, like char<tab>var_name;, just do char var_name; no tabs or extensive spacing.
 
 - All code must have room between the blocks, like this:

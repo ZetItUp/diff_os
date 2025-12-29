@@ -14,19 +14,18 @@ static int g_use_apic = 0;
 
 volatile int g_in_irq = 0;
 
-void irq_handler_c(unsigned irq_ptr, void *context)
+void irq_handler_c(unsigned irq_number, void *context)
 {
     g_in_irq = 1;
-//    uint32_t *stack = (uint32_t*)irq_ptr;
-    uint32_t irq = irq_ptr; 
+    uint32_t irq = irq_number;
 
     uint32_t real_irq = irq - 32;
 
-    if(irq >= 32 && real_irq < NUM_IRQS && irq_handlers[real_irq])
+    if (irq >= 32 && real_irq < NUM_IRQS && irq_handlers[real_irq])
     {
         irq_handlers[real_irq](real_irq, context);
     }
-    else if(irq < NUM_IRQS && irq_handlers[irq])
+    else if (irq < NUM_IRQS && irq_handlers[irq])
     {
         irq_handlers[irq](irq, context);
     }
@@ -36,15 +35,14 @@ void irq_handler_c(unsigned irq_ptr, void *context)
     }
 
     signal_maybe_deliver_frame(process_current(), (struct stack_frame *)context);
-    
-    // Send EOI to either APIC or PIC
+
     if (g_use_apic)
     {
         apic_send_eoi();
     }
     else
     {
-        if(irq >= 32)
+        if (irq >= 32)
         {
             pic_send_eoi((unsigned char)irq - 32);
         }
@@ -59,7 +57,7 @@ void irq_handler_c(unsigned irq_ptr, void *context)
 
 void irq_install_handler(uint8_t irq, irq_handler_t handler)
 {
-    if(irq < NUM_IRQS)
+    if (irq < NUM_IRQS)
     {
         irq_handlers[irq] = handler;
     }
@@ -67,13 +65,14 @@ void irq_install_handler(uint8_t irq, irq_handler_t handler)
 
 void irq_uninstall_handler(uint8_t irq)
 {
-    if(irq < NUM_IRQS)
+    if (irq < NUM_IRQS)
     {
         irq_handlers[irq] = 0;
     }
 }
 
-void irq_init(void) {
+void irq_init(void)
+{
     idt_set_entry(32, (unsigned)irq0, 0x08, 0x8E);
     idt_set_entry(33, (unsigned)irq1, 0x08, 0x8E);
     idt_set_entry(34, (unsigned)irq2, 0x08, 0x8E);

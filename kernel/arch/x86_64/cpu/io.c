@@ -2,11 +2,11 @@
 
 unsigned char inb(unsigned short port)
 {
-    unsigned char ret;
+    unsigned char value;
 
-    __asm__ volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
+    __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
 
-    return ret;
+    return value;
 }
 
 void outb(unsigned short port, unsigned char data)
@@ -16,11 +16,11 @@ void outb(unsigned short port, unsigned char data)
 
 unsigned short inw(unsigned short port)
 {
-    unsigned short ret;
+    unsigned short value;
 
-    __asm__ volatile("inw %1, %0" : "=a"(ret) : "Nd"(port));
+    __asm__ volatile("inw %1, %0" : "=a"(value) : "Nd"(port));
 
-    return ret;
+    return value;
 }
 
 void outw(unsigned short port, unsigned short data)
@@ -30,18 +30,14 @@ void outw(unsigned short port, unsigned short data)
 
 void outl(uint16_t port, uint32_t value)
 {
-    __asm__ __volatile__("outl %0, %1"
-                         :
-                         : "a"(value), "dN"(port));
+    __asm__ __volatile__("outl %0, %1" : : "a"(value), "dN"(port));
 }
 
 uint32_t inl(uint16_t port)
 {
     uint32_t value;
 
-    __asm__ __volatile__("inl %1, %0"
-                         : "=a"(value)
-                         : "dN"(port));
+    __asm__ __volatile__("inl %1, %0" : "=a"(value) : "dN"(port));
 
     return value;
 }

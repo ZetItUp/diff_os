@@ -4,9 +4,7 @@ extern  system_call_dispatch
 
 section .text
 
-; =========================
-; Helpers / Macros
-; =========================
+; Helpers and macros
 %macro ISR_NOERR 1
 global isr%1
 isr%1:
@@ -18,22 +16,19 @@ isr%1:
 %macro ISR_ERR 1
 global isr%1
 isr%1:
-    push dword %1           ; exception number (CPU pushar error code före denna)
+    push dword %1           ; exception number CPU pushes error code before this
     jmp  isr_common_stub
 %endmacro
 
 %macro MAKE_IRQ 2
 global irq%1
 irq%1:
-    push dword 0            ; fake error code (håll stacklayouten konsekvent)
-    push dword %2           ; IRQ vector (0x20..0x2F)
+    push dword 0            ; fake error code keep stack layout consistent
+    push dword %2           ; IRQ vector 0x20-0x2F
     jmp  irq_common_stub
 %endmacro
 
-
-; =========================
-; ISRs 0..31 + 127
-; =========================
+; ISRs 0-31 + 127
 ISR_NOERR 0
 ISR_NOERR 1
 ISR_NOERR 2
@@ -68,10 +63,7 @@ ISR_NOERR 30
 ISR_NOERR 31
 ISR_NOERR 127
 
-
-; =========================
 ; Common ISR stub
-; =========================
 extern  fault_handler
 isr_common_stub:
     pusha
@@ -80,17 +72,17 @@ isr_common_stub:
     push fs
     push gs
 
-    ; växla till kernel-data i ring0
+    ; Switch to kernel data in ring0
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
 
-    ; contextpekare = ESP efter våra save-pushes
+    ; Context pointer is ESP after saves
     mov eax, esp
-    push eax                 ; arg: context
-    call fault_handler       ; cdecl
+    push eax                 ; arg context
+    call fault_handler
     add  esp, 4
 
     pop gs
@@ -98,13 +90,11 @@ isr_common_stub:
     pop es
     pop ds
     popa
-    add  esp, 8              ; kasta (error_code, int_no)
+    add  esp, 8              ; drop error_code int_no
     iret
 
 
-; =========================
-; IRQ stubs (PIC 0..15)
-; =========================
+; IRQ stubs PIC 0-15
 MAKE_IRQ 0, 32
 MAKE_IRQ 1, 33
 MAKE_IRQ 2, 34
@@ -136,19 +126,19 @@ irq_common_stub:
     mov fs, ax
     mov gs, ax
 
-    ; Stacklayout här (översta till nedersta):
+    ; Stack layout top to bottom
     ;   [esp+00] gs
     ;   [esp+04] fs
     ;   [esp+08] es
     ;   [esp+0C] ds
-    ;   [esp+10..2C] pusha (edi..eax) = 32 bytes
-    ;   [esp+30] int_no (från MAKE_IRQ)
-    ;   [esp+34] error_code (0)
-    ; => IRQ-numret ligger på [esp+48] (0x30)
-    mov edx, [esp + 48]      ; EDX = IRQ NUMMER (VÄRDET)
-    mov eax, esp             ; EAX = context
+    ;   [esp+10-2C] pusha edi-eax 32 bytes
+    ;   [esp+30] int_no from MAKE_IRQ
+    ;   [esp+34] error_code 0
+   
+    ; IRQ number is at [esp+48] 0x30
+    mov edx, [esp + 48]      ; edx is irq number
+    mov eax, esp             ; eax is context
 
-    ; cdecl: pusha höger→vänster => push ctx; push irq
     push eax                 ; ctx
     push edx                 ; irq
     call irq_handler_c
@@ -159,14 +149,12 @@ irq_common_stub:
     pop es
     pop ds
     popa
-    add  esp, 8              ; kasta (error_code, int_no)
+    add  esp, 8              ; drop error_code int_no
     iret
 
 
-; =========================
-; Syscall stub (t.ex. int 0x66/0x80)
-; DPL för denna gate ska vara 3 i IDT. Övriga gates DPL=0.
-; =========================
+; Syscall stub for int 0x66 or 0x80
+; DPL for this gate is 3 in IDT other gates DPL 0
 system_call_stub:
     cld
     push ds
@@ -198,4 +186,3 @@ system_call_stub:
 
 section .bss
     resb 8192
-
