@@ -29,47 +29,51 @@ extern void paging_destroy_address_space(uint32_t cr3);
 #endif
 
 // Check if address is in user range
-static inline int is_user_va(uint32_t a)
+static inline int is_user_va(uint32_t address)
 {
-    return (a >= USER_MIN) && (a < USER_MAX);
+    return (address >= USER_MIN) && (address < USER_MAX);
 }
 
 // Safe range check for file sections
-static inline int in_range(uint32_t off, uint32_t sz, uint32_t max)
+static inline int in_range(uint32_t offset, uint32_t size, uint32_t maximum)
 {
-    if (sz == 0)
+    if (size == 0)
     {
         return 1;
     }
-    if (off > max)
+
+    if (offset > maximum)
     {
         return 0;
     }
-    if (max - off < sz)
+
+    if (maximum - offset < size)
     {
         return 0;
     }
+
     return 1;
 }
 
 // Check if pointer lies inside an image buffer
-static int ptr_in_image(const void *p, const uint8_t *base, uint32_t size)
+static int ptr_in_image(const void *pointer, const uint8_t *base, uint32_t size)
 {
-    uint32_t v = (uint32_t)p;
-    uint32_t b = (uint32_t)base;
+    uint32_t pointer_value = (uint32_t)pointer;
+    uint32_t base_value = (uint32_t)base;
 
-    return (v >= b) && (v < b + size);
+    return (pointer_value >= base_value) && (pointer_value < base_value + size);
 }
 
 // Exit stub and user stack
-static uint8_t *build_user_exit_stub(uint32_t entry_va)
+static uint8_t *build_user_exit_stub(uint32_t entry_address)
 {
-    // Build a deterministic user stub:
-    // 1) Set DS/ES/FS/GS = 0x23 (user data)
-    // 2) Call entry_va
-    // 3) Syscall exit(0) via int 0x66
-    // 4) Infinite loop if syscall returns (should not)
+    // Build a deterministic user stub
+    // - Set DS ES FS GS to 0x23
+    // - Call entry_address
+    // - Syscall exit 0 with int 0x66
+    // - Loop if syscall returns
     uint8_t *stub = (uint8_t *)umalloc(64);
+
     if (!stub)
     {
         DEX_DBG("[DEX] Stub alloc failed\n");
@@ -77,82 +81,84 @@ static uint8_t *build_user_exit_stub(uint32_t entry_va)
         return NULL;
     }
 
-    // Make sure the stub bytes are mapped as present|user|rw
+    // Make sure the stub bytes are mapped as present user rw
     paging_update_flags((uint32_t)stub, 64, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
 
-    uint8_t *p = stub;
+    uint8_t *write_pointer = stub;
 
     // mov ax, 0x23
-    *p++ = 0x66; *p++ = 0xB8; *p++ = 0x23; *p++ = 0x00;
+    *write_pointer++ = 0x66; *write_pointer++ = 0xB8; *write_pointer++ = 0x23; *write_pointer++ = 0x00;
 
     // mov ds, ax
-    *p++ = 0x8E; *p++ = 0xD8;
+    *write_pointer++ = 0x8E; *write_pointer++ = 0xD8;
 
     // mov es, ax
-    *p++ = 0x8E; *p++ = 0xC0;
+    *write_pointer++ = 0x8E; *write_pointer++ = 0xC0;
 
     // mov fs, ax
-    *p++ = 0x8E; *p++ = 0xE0;
+    *write_pointer++ = 0x8E; *write_pointer++ = 0xE0;
 
     // mov gs, ax
-    *p++ = 0x8E; *p++ = 0xE8;
+    *write_pointer++ = 0x8E; *write_pointer++ = 0xE8;
 
-    // call entry_va (rel32)
-    *p++ = 0xE8;
-    int32_t rel = (int32_t)entry_va - (int32_t)((uint32_t)p + 4);
-    memcpy(p, &rel, 4);
-    p += 4;
+    // call entry_address (rel32)
+    *write_pointer++ = 0xE8;
+    int32_t relative_offset = (int32_t)entry_address - (int32_t)((uint32_t)write_pointer + 4);
+    memcpy(write_pointer, &relative_offset, 4);
+    write_pointer += 4;
 
     // mov eax, 1  ; SYSTEM_EXIT
-    *p++ = 0xB8;
-    uint32_t sys_exit = SYSTEM_EXIT;
-    memcpy(p, &sys_exit, 4);
-    p += 4;
+    *write_pointer++ = 0xB8;
+    uint32_t system_exit_number = SYSTEM_EXIT;
+    memcpy(write_pointer, &system_exit_number, 4);
+    write_pointer += 4;
 
     // xor ebx, ebx ; exit code = 0
-    *p++ = 0x31; *p++ = 0xDB;
+    *write_pointer++ = 0x31; *write_pointer++ = 0xDB;
 
     // int 0x66     ; SYSCALL_VECTOR
-    *p++ = 0xCD; *p++ = 0x66;
+    *write_pointer++ = 0xCD; *write_pointer++ = 0x66;
 
     // ud2 (should never return)
-    *p++ = 0x0F; *p++ = 0x0B;
+    *write_pointer++ = 0x0F; *write_pointer++ = 0x0B;
     // jmp $        ; safety if syscall returns
-    *p++ = 0xEB; *p++ = 0xFE;
+    *write_pointer++ = 0xEB; *write_pointer++ = 0xFE;
 
-    // Mark the actual written range as user (covers shorter-than-64 writes)
-    paging_set_user((uint32_t)stub, (uint32_t)(p - stub));
+    // Mark the actual written range as user
+    paging_set_user((uint32_t)stub, (uint32_t)(write_pointer - stub));
 
-    DEX_DBG("[DEX] stub@%p -> call %08x rel=%d\n", stub, entry_va, rel);
+    DEX_DBG("[DEX] stub@%p -> call %08x rel=%d\n", stub, entry_address, relative_offset);
 
     return stub;
 }
 
-
 static uint32_t build_user_stack(
-    const char *prog_path,
-    int argc_in,
-    char *const argv_in[],
-    uint32_t *out_base,
-    uint32_t *out_size
+    const char *program_path,
+    int argument_count_in,
+    char *const argument_values_in[],
+    uint32_t *out_base_address,
+    uint32_t *out_stack_size
 )
 {
-    // Place the user stack high in the user address space to avoid collisions
-    // with the user heap that grows up from USER_MIN. Use a fixed 512 KB stack
-    // mapped explicitly near USER_MAX with a 4 KB guard page above it.
-    const uint32_t STK_SZ = 512 * 1024;
-    const uint32_t GUARD  = PAGE_SIZE_4KB;
-    const uint32_t stack_limit = USER_MAX - GUARD; // leave guard page unmapped
-    uint32_t stack_top  = stack_limit;
-    uint32_t stack_base = stack_top - STK_SZ;
+    // Place the user stack high to avoid collisions
+    // The user heap grows up from USER_MIN
+    // Use a fixed 512 KB stack with a 4 KB guard page
+    const uint32_t STACK_SIZE = 512 * 1024;
+    const uint32_t GUARD_SIZE = PAGE_SIZE_4KB;
+    const uint32_t stack_limit = USER_MAX - GUARD_SIZE; // leave guard page unmapped
+    uint32_t stack_top = stack_limit;
+    uint32_t stack_base = stack_top - STACK_SIZE;
 
-    if (stack_base < USER_MIN + (1u << 20)) // sanity: keep clear of image/heap
+    // Keep clear of image and heap
+    if (stack_base < USER_MIN + (1u << 20))
     {
         stack_base = USER_MIN + (1u << 20);
-        stack_top  = stack_base + STK_SZ;
+        stack_top = stack_base + STACK_SIZE;
+
         if (stack_top > stack_limit)
         {
             stack_top = stack_limit;
+
             if (stack_top < stack_base)
             {
                 stack_top = stack_base;
@@ -160,381 +166,396 @@ static uint32_t build_user_stack(
         }
     }
 
-    if (out_base)
+    if (out_base_address)
     {
-        *out_base = stack_base;
-    }
-    if (out_size)
-    {
-        *out_size = STK_SZ;
+        *out_base_address = stack_base;
     }
 
-    // Reserve the entire stack range so demand faults can grow it.
-    paging_reserve_range(stack_base, STK_SZ);
-
-    // Eagerly map the top 32 KB to cover initial frames/argv and avoid faults
-    // near the very top of the stack.
-    const uint32_t PREFAULT = 32 * 1024;
-    uint32_t prefault_base = (stack_top > PREFAULT) ? (stack_top - PREFAULT) : stack_base;
-    if (paging_map_user_range(prefault_base, stack_top - prefault_base, 1) != 0)
+    if (out_stack_size)
     {
-        DEX_DBG("[DEX] Stack map failed base=%08x sz=%u\n", prefault_base, (unsigned)(stack_top - prefault_base));
+        *out_stack_size = STACK_SIZE;
+    }
+
+    // Reserve the entire stack range so demand faults can grow it
+    paging_reserve_range(stack_base, STACK_SIZE);
+
+    // Map the top 32 KB to cover initial args
+    const uint32_t PREFAULT_SIZE = 32 * 1024;
+    uint32_t prefault_base_address = (stack_top > PREFAULT_SIZE) ? (stack_top - PREFAULT_SIZE) : stack_base;
+
+    if (paging_map_user_range(prefault_base_address, stack_top - prefault_base_address, 1) != 0)
+    {
+        DEX_DBG("[DEX] Stack map failed base=%08x sz=%u\n", prefault_base_address, (unsigned)(stack_top - prefault_base_address));
+
         return 0;
     }
-    memset((void *)prefault_base, 0, stack_top - prefault_base);
 
-    int argc = (argc_in > 0 && argv_in) ? argc_in : 1;
+    memset((void *)prefault_base_address, 0, stack_top - prefault_base_address);
 
-    uint32_t *argv_ptrs = (uint32_t *)kmalloc(
-        sizeof(uint32_t) * (size_t)argc
-    );
-    if (!argv_ptrs)
+    int argument_count = (argument_count_in > 0 && argument_values_in) ? argument_count_in : 1;
+
+    uint32_t *argument_pointers = (uint32_t *)kmalloc(sizeof(uint32_t) * (size_t)argument_count);
+
+    if (!argument_pointers)
     {
         DEX_DBG("[DEX] argv_ptrs alloc failed\n");
+
         return 0;
     }
 
-    uint32_t sp = stack_top;
-    uint32_t base = stack_base;
+    uint32_t stack_pointer = stack_top;
+    uint32_t base_address = stack_base;
 
-    for (int i = argc - 1; i >= 0; --i)
+    for (int argument_index = argument_count - 1; argument_index >= 0; --argument_index)
     {
-        const char *src =
-            (argc_in > 0 && argv_in) ? argv_in[i] : (i == 0 ? prog_path : "");
+        const char *source_string = (argument_count_in > 0 && argument_values_in)
+                ? argument_values_in[argument_index]
+                : (argument_index == 0 ? program_path : "");
 
-        size_t len = strlen(src) + 1;
+        size_t length = strlen(source_string) + 1;
 
-        if (sp < base + (uint32_t)len + 64)
+        if (stack_pointer < base_address + (uint32_t)length + 64)
         {
             DEX_DBG("[DEX] Stack overflow while building argv\n");
-            kfree(argv_ptrs);
+            kfree(argument_pointers);
+
             return 0;
         }
 
-        sp -= (uint32_t)len;
-        memcpy((void *)sp, src, len);
-        argv_ptrs[i] = sp;
+        stack_pointer -= (uint32_t)length;
+        memcpy((void *)stack_pointer, source_string, length);
+        argument_pointers[argument_index] = stack_pointer;
     }
 
-    // Linux ELF convention: stack layout from SP is:
-    // [SP]    = undefined (fake return address, always 0)
-    // [SP+4]  = argc
-    // [SP+8]  = argv[0]
-    // [SP+12] = argv[1]
-    // ...
-    // [SP+4*(argc+2)] = NULL (end of argv)
-    // [SP+4*(argc+3)] = NULL (end of envp, we have no envp)
-    //
-    // The fake return address is needed because GCC's main() prologue
-    // does "lea 0x4(%esp),%ecx" expecting a return address at ESP
-    //
-    // CRITICAL: SP must be 16-byte aligned BEFORE we write anything,
-    // because GCC's "and $0xfffffff0,%esp" expects to not move more than
-    // 12 bytes, and it needs [ECX-4] (where ECX = old ESP + 4) to still
-    // be valid after alignment.
+    // Stack layout from stack_pointer
+    // [SP] is return address
+    // [SP+4] is argc
+    // [SP+8] is argv[0]
+    // [SP+12] is argv[1]
+    // [SP+4*(argc+2)] is NULL for argv end
+    // [SP+4*(argc+3)] is NULL for envp end
+    // The return address is needed by the main prologue
+    // The stack pointer must stay 16 byte aligned
 
-    // We need space for: fake_ret + argc + argv[argc] + NULL + envp_NULL
-    uint32_t needed = 4 + 4 + (uint32_t)((argc + 1) * sizeof(uint32_t)) + 4;
-    if (sp < base + needed)
+    // We need space for ret argc argv[argc] NULL envp_NULL
+    uint32_t needed_bytes = 4 + 4 + (uint32_t)((argument_count + 1) * sizeof(uint32_t)) + 4;
+    if (stack_pointer < base_address + needed_bytes)
     {
-        kfree(argv_ptrs);
+        kfree(argument_pointers);
+
         return 0;
     }
-    sp -= needed;
 
-    // Ensure SP ends up 16-byte aligned (pointing to fake return address)
-    // This way GCC's alignment won't move ESP more than necessary
-    sp &= ~0xFu;
+    stack_pointer -= needed_bytes;
 
-    // Write fake return address (0 = no return)
-    *(uint32_t *)sp = 0;
+    // Ensure SP ends up 16 byte aligned
+    stack_pointer &= ~0xF;
+
+    // Write return address
+    *(uint32_t *)stack_pointer = 0;
 
     // Write argc at SP+4
-    *(uint32_t *)(sp + 4) = (uint32_t)argc;
+    *(uint32_t *)(stack_pointer + 4) = (uint32_t)argument_count;
 
-    // Write argv[] array starting at SP+8
-    for (int i = 0; i < argc; ++i)
+    // Write argv array starting at SP+8
+    for (int argument_index = 0; argument_index < argument_count; ++argument_index)
     {
-        ((uint32_t *)(sp + 8))[i] = argv_ptrs[i];
+        ((uint32_t *)(stack_pointer + 8))[argument_index] = argument_pointers[argument_index];
     }
 
-    // NULL terminator for argv
-    ((uint32_t *)(sp + 8))[argc] = 0;
+    // Null terminator for argv
+    ((uint32_t *)(stack_pointer + 8))[argument_count] = 0;
 
-    // NULL terminator for envp (we have no environment variables)
-    ((uint32_t *)(sp + 8))[argc + 1] = 0;
+    // Null terminator for envp
+    ((uint32_t *)(stack_pointer + 8))[argument_count + 1] = 0;
 
-    kfree(argv_ptrs);
+    kfree(argument_pointers);
 
-    DEX_DBG("[DEX] stack built base=%08x top=%08x size=%u\n", base, sp, STK_SZ);
-    return sp;
+    DEX_DBG("[DEX] stack built base=%08x top=%08x size=%u\n", base_address, stack_pointer, STACK_SIZE);
+
+    return stack_pointer;
 }
 
 // Imports and relocations
 static int resolve_imports_user(
-    const dex_header_t *hdr,
-    const dex_import_t *imp,
-    const char *strtab,
-    void **out_ptrs,
+    const dex_header_t *header,
+    const dex_import_t *imports,
+    const char *string_table,
+    void **output_pointers,
     uint8_t *image,
-    uint32_t image_sz
+    uint32_t image_size
 )
 {
-    uint32_t cnt = hdr->import_table_count;
+    uint32_t import_count = header->import_table_count;
 
-    // Import table was already validated against file_size in dex_load().
-    // Only sanity-limit the count here.
-    if (cnt > 4096)
+    // Import table is already validated in dex_load
+    // Only sanity check the count here
+    if (import_count > 4096)
     {
-        DEX_DBG("[DEX] Too many imports (%u)\n", cnt);
+        DEX_DBG("[DEX] Too many imports (%u)\n", import_count);
+        
         return -1;
     }
 
-    for (uint32_t i = 0; i < cnt; ++i)
+    for (uint32_t index = 0; index < import_count; ++index)
     {
-        const char *exl = strtab + imp[i].exl_name_offset;
-        const char *sym = strtab + imp[i].symbol_name_offset;
+        const char *library_name = string_table + imports[index].exl_name_offset;
+        const char *symbol_name = string_table + imports[index].symbol_name_offset;
 
-        void *addr = resolve_exl_symbol(exl, sym);
+        void *address = resolve_exl_symbol(library_name, symbol_name);
 
-        if (!addr)
+        if (!address)
         {
-            const exl_t *lib = load_exl(file_table, exl);
-            if (!lib)
+            const exl_t *library = load_exl(file_table, library_name);
+
+            if (!library)
             {
-                DEX_DBG("[DEX] Cannot load EXL %s\n", exl);
+                DEX_DBG("[DEX] Cannot load EXL %s\n", library_name);
+                
                 return -2;
             }
-            addr = resolve_exl_symbol(exl, sym);
+
+            address = resolve_exl_symbol(library_name, symbol_name);
         }
 
-        if (!addr)
+        if (!address)
         {
-            DEX_DBG("[DEX] Unresolved import %s:%s\n", exl, sym);
+            DEX_DBG("[DEX] Unresolved import %s:%s\n", library_name, symbol_name);
+            
             return -3;
         }
 
         // Forbid imports that point inside this image
-        if (ptr_in_image(addr, image, image_sz))
+        if (ptr_in_image(address, image, image_size))
         {
-            DEX_DBG("[DEX] Import %s:%s resolves inside image %p\n", exl, sym, addr);
+            DEX_DBG("[DEX] Import %s:%s resolves inside image %p\n", library_name, symbol_name, address);
+            
             return -4;
         }
 
         // Force user VA
-        if (!is_user_va((uint32_t)addr))
+        if (!is_user_va((uint32_t)address))
         {
-            DEX_DBG("[DEX] Import %s:%s -> kernel VA %p\n", exl, sym, addr);
+            DEX_DBG("[DEX] Import %s:%s -> kernel VA %p\n", library_name, symbol_name, address);
+            
             return -5;
         }
 
-        out_ptrs[i] = addr;
-        DEX_DBG("[IMP] %s:%s -> %p\n", exl, sym, addr);
+        output_pointers[index] = address;
+        DEX_DBG("[IMP] %s:%s -> %p\n", library_name, symbol_name, address);
     }
 
     return 0;
 }
 
 static int relocate_image(
-    const dex_header_t *hdr,
-    const dex_import_t *imp,
-    const dex_reloc_t *rel,
-    const char *strtab,
+    const dex_header_t *header,
+    const dex_import_t *imports,
+    const dex_reloc_t *relocations,
+    const char *string_table,
     uint8_t *image,
-    uint32_t image_sz
+    uint32_t image_size
 )
 {
-    void **import_ptrs = NULL;
+    void **import_pointers = NULL;
 
-    DEX_DBG("[DEX-RELOC-DEBUG] imports=%u relocs=%u\n", hdr->import_table_count, hdr->reloc_table_count);
+    DEX_DBG("[DEX-RELOC-DEBUG] imports=%u relocs=%u\n", header->import_table_count, header->reloc_table_count);
 
-    if (hdr->import_table_count > 4096)
+    if (header->import_table_count > 4096)
     {
-        DEX_DBG("[DEX] Too many imports (%u)\n", hdr->import_table_count);
+        DEX_DBG("[DEX] Too many imports (%u)\n", header->import_table_count);
+        
         return -1;
     }
 
-    if (hdr->import_table_count)
+    if (header->import_table_count)
     {
-        size_t bytes = (size_t)hdr->import_table_count * sizeof(void *);
-        import_ptrs = (void **)kmalloc(bytes);
+        size_t bytes = (size_t)header->import_table_count * sizeof(void *);
+        import_pointers = (void **)kmalloc(bytes);
 
-        if (!import_ptrs)
+        if (!import_pointers)
         {
             DEX_DBG("[DEX] kmalloc import_ptrs=%u failed\n", (unsigned)bytes);
 
             return -2;
         }
 
-        memset(import_ptrs, 0, bytes);
+        memset(import_pointers, 0, bytes);
     }
 
     // Resolve imports against EXLs
-    if (resolve_imports_user(hdr, imp, strtab, import_ptrs, image, image_sz) != 0)
+    if (resolve_imports_user(header, imports, string_table, import_pointers, image, image_size) != 0)
     {
-        if (import_ptrs)
+        if (import_pointers)
         {
-            kfree(import_ptrs);
+            kfree(import_pointers);
         }
 
         return -3;
     }
 
-    DEX_DBG("[RELOC] Applying %u relocations\n", hdr->reloc_table_count);
+    DEX_DBG("[RELOC] Applying %u relocations\n", header->reloc_table_count);
 
     // Apply relocations
-    DEX_DBG("[DEX] Processing %u relocations from reloc table\n", hdr->reloc_table_count);
+    DEX_DBG("[DEX] Processing %u relocations from reloc table\n", header->reloc_table_count);
 
-    for (uint32_t i = 0; i < hdr->reloc_table_count; ++i)
+    for (uint32_t index = 0; index < header->reloc_table_count; ++index)
     {
-        uint32_t off = rel[i].reloc_offset;
-        uint32_t idx = rel[i].symbol_index;
-        uint32_t typ = rel[i].type;
+        uint32_t offset = relocations[index].reloc_offset;
+        uint32_t symbol_index = relocations[index].symbol_index;
+        uint32_t reloc_type = relocations[index].type;
 
-        if (off > image_sz || image_sz - off < 4)
+        if (offset > image_size || image_size - offset < 4)
         {
-            DEX_DBG("[DEX] Reloc out of range off=0x%08x image=%u\n", off, image_sz);
+            DEX_DBG("[DEX] Reloc out of range off=0x%08x image=%u\n", offset, image_size);
 
-            if (import_ptrs)
+            if (import_pointers)
             {
-                kfree(import_ptrs);
+                kfree(import_pointers);
             }
 
             return -4;
         }
 
-        uint8_t *target = image + off;
-        uint32_t old = *(uint32_t *)target;
+        uint8_t *target = image + offset;
+        uint32_t old_value = *(uint32_t *)target;
 
-        switch (typ)
+        switch (reloc_type)
         {
             case DEX_ABS32:
             {
-                if (idx >= hdr->import_table_count)
+                if (symbol_index >= header->import_table_count)
                 {
-                    if (import_ptrs)
+                    if (import_pointers)
                     {
-                        kfree(import_ptrs);
+                        kfree(import_pointers);
                     }
 
                     return -5;
                 }
-                *(uint32_t *)target = (uint32_t)import_ptrs[idx];
+
+                *(uint32_t *)target = (uint32_t)import_pointers[symbol_index];
 
                 DEX_DBG("[REL] ABS32 @%08x %08x -> %08x S=%08x\n",
-                     (uint32_t)(uintptr_t)target, old, *(uint32_t *)target, (uint32_t)import_ptrs[idx]);
+                     (uint32_t)(uintptr_t)target, old_value, *(uint32_t *)target,
+                     (uint32_t)import_pointers[symbol_index]);
+        
                 break;
             }
 
             case DEX_PC32:
             {
-                if (idx >= hdr->import_table_count)
+                if (symbol_index >= header->import_table_count)
                 {
                     DEX_DBG("[DEX][ERROR] PC32 reloc idx=%u >= import_count=%u at off=0x%08x\n",
-                           idx, hdr->import_table_count, off);
-                    if (import_ptrs)
+                           symbol_index, header->import_table_count, offset);
+
+                    if (import_pointers)
                     {
-                        kfree(import_ptrs);
+                        kfree(import_pointers);
                     }
 
                     return -6;
                 }
 
-                uint32_t S = (uint32_t)import_ptrs[idx];
-                int32_t disp = (int32_t)S - (int32_t)((uint32_t)(uintptr_t)target + 4);
-                *(int32_t *)target = disp;
+                uint32_t symbol_address = (uint32_t)import_pointers[symbol_index];
+                int32_t displacement = (int32_t)symbol_address - (int32_t)((uint32_t)(uintptr_t)target + 4);
+                *(int32_t *)target = displacement;
 
-                // Temporarily log ALL PC32 relocations
+                // Temporarily log all PC32 relocations
                 static int pc32_count = 0;
                 pc32_count++;
 
-                const char *sym_name = (idx < hdr->import_table_count)
-                                           ? (strtab + imp[idx].symbol_name_offset)
-                                           : "<bad-idx>";
-                const char *lib_name = (idx < hdr->import_table_count)
-                                           ? (strtab + imp[idx].exl_name_offset)
-                                           : "<bad-idx>";
+                const char *symbol_name = (symbol_index < header->import_table_count) ? 
+                    (string_table + imports[symbol_index].symbol_name_offset) : "<bad-idx>";
+                const char *library_name = (symbol_index < header->import_table_count) ? 
+                    (string_table + imports[symbol_index].exl_name_offset) : "<bad-idx>";
 
-                // Log putchar/printf or first 100
-                int is_putchar = (strcmp(sym_name, "putchar") == 0);
-                int is_printf = (strcmp(sym_name, "printf") == 0);
-                if (pc32_count <= 100 || is_putchar || is_printf || (off >= hdr->entry_offset && off < hdr->entry_offset + 0x200))
+                // Log putchar printf or first 100
+                int is_putchar = (strcmp(symbol_name, "putchar") == 0);
+                int is_printf = (strcmp(symbol_name, "printf") == 0);
+
+                if (pc32_count <= 100 || is_putchar || is_printf ||
+                    (offset >= header->entry_offset && offset < header->entry_offset + 0x200))
                 {
                     DEX_DBG("[DEX][PC32 #%d] off=0x%08x S=%08x P=%08x disp=%08x old=%08x new=%08x sym=%s:%s\n",
-                           pc32_count, off, S, (uint32_t)(uintptr_t)target + 4,
-                           (uint32_t)disp, old, *(uint32_t *)target, lib_name, sym_name);
+                           pc32_count, offset, symbol_address, (uint32_t)(uintptr_t)target + 4,
+                           (uint32_t)displacement, old_value, *(uint32_t *)target,
+                           library_name, symbol_name);
                 }
 
                 DEX_DBG("[REL] PC32  @%08x P=%08x S=%08x disp=%d old=%08x new=%08x\n",
                      (uint32_t)(uintptr_t)target,
                      (uint32_t)(uintptr_t)target + 4,
-                     S, disp, old, *(uint32_t *)target);
+                     symbol_address, displacement, old_value, *(uint32_t *)target);
 
                 break;
             }
 
             case DEX_RELATIVE:
             {
-                uint32_t val = old + (uint32_t)image;
-                // DEBUG: Track specific relocations
-                if (off == 0x2AEA)
+                uint32_t value = old_value + (uint32_t)image;
+
+                // Debug track specific relocations
+                if (offset == 0x2AEA)
                 {
                     DEX_DBG("[DEX][DEBUG-0x2AEA] D_QuitNetGame reloc: off=0x%08x old=0x%08x base=0x%08x -> val=0x%08x\n",
-                           off, old, (uint32_t)image, val);
-                    DEX_DBG("[DEX][DEBUG-0x2AEA] target=%p *target_before=0x%08x\n",
-                           target, *(uint32_t *)target);
+                           offset, old_value, (uint32_t)image, value);
+                    DEX_DBG("[DEX][DEBUG-0x2AEA] target=%p *target_before=0x%08x\n", target, *(uint32_t *)target);
                 }
-                if (off == 0x4044)
+
+                if (offset == 0x4044)
                 {
-                    DEX_DBG("[DEX][DEBUG-0x4044] G_CheckDemoStatus reloc: off=0x%08x old=0x%08x base=0x%08x -> val=0x%08x\n",
-                           off, old, (uint32_t)image, val);
-                    DEX_DBG("[DEX][DEBUG-0x4044] target=%p *target_before=0x%08x\n",
-                           target, *(uint32_t *)target);
+                    DEX_DBG("[DEX][DEBUG-0x4044] G_CheckDemoStatus reloc: off=0x%08x old=0x%08x base=0x%08x -> val=0x%08x\n", offset, old_value, (uint32_t)image, value);
+                    DEX_DBG("[DEX][DEBUG-0x4044] target=%p *target_before=0x%08x\n", target, *(uint32_t *)target);
                 }
-                // Warn if old value is suspiciously large (> 100MB)
-                if (old > 100 * 1024 * 1024)
+
+                // Warn if old value seems too large
+                if (old_value > 100 * 1024 * 1024)
                 {
-                    DEX_DBG("[DEX][WARN] Large RELATIVE old value: off=0x%08x old=0x%08x base=0x%08x -> val=0x%08x\n",
-                           off, old, (uint32_t)image, val);
+                    DEX_DBG("[DEX][WARN] Large RELATIVE old value: off=0x%08x old=0x%08x base=0x%08x -> val=0x%08x\n", offset, old_value, (uint32_t)image, value);
                 }
-                // Check if the RESULT looks like x86 code (common function prologues)
-                uint8_t byte0 = val & 0xFF;
-                uint8_t byte1 = (val >> 8) & 0xFF;
-                // 0x55 = push ebp, 0x53 = push ebx, 0x56 = push esi, 0x57 = push edi, 0x83 = sub, 0x8b = mov
-                if ((byte0 == 0x55 || byte0 == 0x53 || byte0 == 0x56 || byte0 == 0x57) &&
-                    (byte1 == 0x89 || byte1 == 0x8B || byte1 == 0x83 || byte1 == 0x56 || byte1 == 0x53))
+
+                // Check if the result looks like x86 code
+                uint8_t first_byte = value & 0xFF;
+                uint8_t second_byte = (value >> 8) & 0xFF;
+
+                if ((first_byte == 0x55 || first_byte == 0x53 || first_byte == 0x56 || first_byte == 0x57) &&
+                    (second_byte == 0x89 || second_byte == 0x8B || second_byte == 0x83 ||
+                     second_byte == 0x56 || second_byte == 0x53))
                 {
-                    DEX_DBG("[DEX][WARN] SUSPICIOUS RELOC: off=0x%08x old=0x%08x base=0x%08x -> val=0x%08x (looks like x86 code!)\n",
-                           off, old, (uint32_t)image, val);
+                    DEX_DBG("[DEX][WARN] SUSPICIOUS RELOC: off=0x%08x old=0x%08x base=0x%08x -> val=0x%08x (looks like x86 code!)\n", offset, old_value, (uint32_t)image, value);
                 }
-                if (off >= hdr->entry_offset && off < hdr->entry_offset + 0x200)
+
+                if (offset >= header->entry_offset && offset < header->entry_offset + 0x200)
                 {
-                    DEX_DBG("[DEX][REL] off=0x%08x old=0x%08x base=0x%08x -> 0x%08x\n",
-                           off, old, (uint32_t)image, val);
+                    DEX_DBG("[DEX][REL] off=0x%08x old=0x%08x base=0x%08x -> 0x%08x\n", offset, old_value, (uint32_t)image, value);
                 }
-                *(uint32_t *)target = val;
-                if (off == 0x2AEA)
+
+                *(uint32_t *)target = value;
+
+                if (offset == 0x2AEA)
                 {
                     DEX_DBG("[DEX][DEBUG-0x2AEA] *target_after=0x%08x\n", *(uint32_t *)target);
                 }
-                if (off == 0x4044)
+
+                if (offset == 0x4044)
                 {
                     DEX_DBG("[DEX][DEBUG-0x4044] *target_after=0x%08x\n", *(uint32_t *)target);
                 }
 
-                DEX_DBG("[REL] REL   @%08x %08x -> %08x base=%08x\n",
-                     (uint32_t)(uintptr_t)target, old, val, (uint32_t)image);
+                DEX_DBG("[REL] REL   @%08x %08x -> %08x base=%08x\n", (uint32_t)(uintptr_t)target, old_value, value, (uint32_t)image);
 
                 break;
             }
 
             default:
             {
-                DEX_DBG("[DEX] Unknown reloc type=%u off=0x%08x old=%08x\n", typ, off, old);
+                DEX_DBG("[DEX] Unknown reloc type=%u off=0x%08x old=%08x\n", reloc_type, offset, old_value);
 
-                if (import_ptrs)
+                if (import_pointers)
                 {
-                    kfree(import_ptrs);
+                    kfree(import_pointers);
                 }
 
                 return -11;
@@ -544,26 +565,26 @@ static int relocate_image(
         DEX_DBG("new=0x%08x\n", *(uint32_t *)target);
     }
 
-    DEX_DBG("[DEX] Applied %u relocations successfully\n", hdr->reloc_table_count);
+    DEX_DBG("[DEX] Applied %u relocations successfully\n", header->reloc_table_count);
 
-    if (import_ptrs)
+    if (import_pointers)
     {
-        kfree(import_ptrs);
+        kfree(import_pointers);
     }
 
     // Post check for kernel addresses in ABS32 slots
-    for (uint32_t i = 0; i < hdr->reloc_table_count; ++i)
+    for (uint32_t index = 0; index < header->reloc_table_count; ++index)
     {
-        uint32_t off = rel[i].reloc_offset;
-        uint32_t typ = rel[i].type;
+        uint32_t offset = relocations[index].reloc_offset;
+        uint32_t reloc_type = relocations[index].type;
 
-        if (typ == DEX_ABS32)
+        if (reloc_type == DEX_ABS32)
         {
-            uint32_t val = *(uint32_t *)(image + off);
+            uint32_t value = *(uint32_t *)(image + offset);
 
-            if (!is_user_va(val))
+            if (!is_user_va(value))
             {
-                DEX_DBG("[DEX] Post check ABS32 off=0x%08x -> kernel VA %08x\n", off, val);
+                DEX_DBG("[DEX] Post check ABS32 off=0x%08x -> kernel VA %08x\n", offset, value);
 
                 return -12;
             }
@@ -574,300 +595,310 @@ static int relocate_image(
 }
 
 // Loader API
-int dex_load(const void *file_data, size_t file_size, dex_executable_t *out)
+int dex_load(const void *file_data, size_t file_size, dex_executable_t *out_executable)
 {
-    const dex_header_t *hdr;
-    uint32_t text_sz;
-    uint32_t ro_sz;
-    uint32_t data_sz;
-    uint32_t bss_sz;
-    uint32_t entry_off;
-    uint32_t max_end;
-    uint32_t tmp;
-    uint32_t total_sz;
-    uint32_t resources_sz;
-    uint32_t resources_off;
+    const dex_header_t *header;
+    uint32_t text_size;
+    uint32_t rodata_size;
+    uint32_t data_size;
+    uint32_t bss_size;
+    uint32_t entry_offset;
+    uint32_t max_end_offset;
+    uint32_t temp_end_offset;
+    uint32_t total_size;
+    uint32_t resources_size;
+    uint32_t resources_offset;
     uint8_t *image;
-    const dex_import_t *imp;
-    const dex_reloc_t *rel;
-    const char *stab;
+    const dex_import_t *imports;
+    const dex_reloc_t *relocations;
+    const char *string_table;
 
-    if (!file_data || file_size < sizeof(dex_header_t) || !out)
+    if (!file_data || file_size < sizeof(dex_header_t) || !out_executable)
     {
         return -1;
     }
 
-    hdr = (const dex_header_t *)file_data;
+    header = (const dex_header_t *)file_data;
 
     // Validate magic
-    if (hdr->magic != DEX_MAGIC)
+    if (header->magic != DEX_MAGIC)
     {
         DEX_DBG("[DEX] Invalid DEX file\n");
 
         return -2;
     }
-    if (hdr->version_major != DEX_VERSION_MAJOR || hdr->version_minor != DEX_VERSION_MINOR)
+
+    if (header->version_major != DEX_VERSION_MAJOR || header->version_minor != DEX_VERSION_MINOR)
     {
         DEX_DBG("[DEX] Unsupported DEX version %u.%u (want %u.%u)\n",
-                hdr->version_major, hdr->version_minor,
+                header->version_major, header->version_minor,
                 DEX_VERSION_MAJOR, DEX_VERSION_MINOR);
 
         return -2;
     }
 
-    /* Only mark the source buffer user-accessible if it actually lives in the user window. */
     if (is_user_va((uint32_t)file_data))
     {
-        paging_update_flags((uint32_t)file_data,
-                        PAGE_ALIGN_UP(file_size),
-                        PAGE_PRESENT | PAGE_USER | PAGE_RW,
-                        0);
+        paging_update_flags((uint32_t)file_data, PAGE_ALIGN_UP(file_size), PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
     }
 
     // Validate section ranges inside file
-    if (!in_range(hdr->text_offset,   hdr->text_size,   (uint32_t)file_size) ||
-        !in_range(hdr->rodata_offset, hdr->rodata_size, (uint32_t)file_size) ||
-        !in_range(hdr->data_offset,   hdr->data_size,   (uint32_t)file_size) ||
-        !in_range(hdr->strtab_offset, hdr->strtab_size, (uint32_t)file_size) ||
-        (hdr->resources_size &&
-         !in_range(hdr->resources_offset, hdr->resources_size, (uint32_t)file_size)))
+    if (!in_range(header->text_offset, header->text_size, (uint32_t)file_size) ||
+        !in_range(header->rodata_offset, header->rodata_size, (uint32_t)file_size) ||
+        !in_range(header->data_offset, header->data_size, (uint32_t)file_size) ||
+        !in_range(header->strtab_offset, header->strtab_size, (uint32_t)file_size) ||
+        (header->resources_size && 
+         !in_range(header->resources_offset, header->resources_size, (uint32_t)file_size)))
     {
         DEX_DBG("[DEX] Section offsets or sizes out of file\n");
 
         return -3;
     }
 
-    // Validate entry inside .text
-    if (!in_range(hdr->entry_offset, 1, (uint32_t)file_size) ||
-        hdr->entry_offset < hdr->text_offset ||
-        hdr->entry_offset >= hdr->text_offset + hdr->text_size)
+    // Validate entry inside text
+    if (!in_range(header->entry_offset, 1, (uint32_t)file_size) ||
+        header->entry_offset < header->text_offset ||
+        header->entry_offset >= header->text_offset + header->text_size)
     {
-        DEX_DBG("[DEX] Entry offset out of range off=0x%x\n", (unsigned)hdr->entry_offset);
+        DEX_DBG("[DEX] Entry offset out of range off=0x%x\n", (unsigned)header->entry_offset);
 
         return -3;
     }
 
     // Cache sizes and compute total image span
-    text_sz      = hdr->text_size;
-    ro_sz        = hdr->rodata_size;
-    data_sz      = hdr->data_size;
-    bss_sz       = hdr->bss_size;
-    entry_off    = hdr->entry_offset;
-    resources_sz = hdr->resources_size;
-    resources_off = hdr->resources_offset;
+    text_size = header->text_size;
+    rodata_size = header->rodata_size;
+    data_size = header->data_size;
+    bss_size = header->bss_size;
+    entry_offset = header->entry_offset;
+    resources_size = header->resources_size;
+    resources_offset = header->resources_offset;
 
-    max_end = hdr->data_offset + data_sz + bss_sz;
-    tmp = hdr->rodata_offset + ro_sz; if (tmp > max_end) max_end = tmp;
-    tmp = hdr->text_offset   + text_sz; if (tmp > max_end) max_end = tmp;
-    tmp = resources_off + resources_sz; if (tmp > max_end) max_end = tmp;
-    tmp = entry_off + 16u; if (tmp > max_end) max_end = tmp;
+    max_end_offset = header->data_offset + data_size + bss_size;
+    temp_end_offset = header->rodata_offset + rodata_size;
 
-    total_sz = PAGE_ALIGN_UP(max_end);
+    if (temp_end_offset > max_end_offset)
+    {
+        max_end_offset = temp_end_offset;
+    }
+
+    temp_end_offset = header->text_offset + text_size;
+
+    if (temp_end_offset > max_end_offset)
+    {
+        max_end_offset = temp_end_offset;
+    }
+
+    temp_end_offset = resources_offset + resources_size;
+
+    if (temp_end_offset > max_end_offset)
+    {
+        max_end_offset = temp_end_offset;
+    }
+
+    temp_end_offset = entry_offset + 16u;
+
+    if (temp_end_offset > max_end_offset)
+    {
+        max_end_offset = temp_end_offset;
+    }
+
+    total_size = PAGE_ALIGN_UP(max_end_offset);
 
     // Allocate user image
-    image = (uint8_t *)umalloc(total_sz);
+    image = (uint8_t *)umalloc(total_size);
+
     if (!image)
     {
-        DEX_DBG("[DEX] Unable to allocate %u bytes for program\n", total_sz);
+        DEX_DBG("[DEX] Unable to allocate %u bytes for program\n", total_size);
 
         return -4;
     }
 
-    paging_reserve_range((uintptr_t)image, total_sz);
+    paging_reserve_range((uintptr_t)image, total_size);
+    
     // Map as user and ensure fresh view
-    paging_set_user((uint32_t)image, total_sz);
-    paging_update_flags(
-        (uint32_t)image,
-        total_sz,
-        PAGE_PRESENT | PAGE_USER | PAGE_RW,
-        0
-    );
+    paging_set_user((uint32_t)image, total_size);
+    paging_update_flags((uint32_t)image, total_size, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
     paging_flush_tlb();
-    /* Zero-fill full image so padding matches the zeroed layout emitted by the tooling. */
-    memset(image, 0, total_sz);
+
+    // Zero fill full image so padding matches the tool output
+    memset(image, 0, total_size);
 
     // Copy sections and clear bss into user image
-    if (text_sz)
+    if (text_size)
     {
-        if (copy_to_user(image + hdr->text_offset,
-                         (const uint8_t *)file_data + hdr->text_offset,
-                         text_sz) != 0)
+        if (copy_to_user(image + header->text_offset, (const uint8_t *)file_data + header->text_offset, text_size) != 0)
         {
             DEX_DBG("[DEX] Failed to copy .text to user image\n");
-            ufree(image, total_sz);
+            ufree(image, total_size);
+
             return -20;
         }
     }
 
-    if (ro_sz)
+    if (rodata_size)
     {
-        if (copy_to_user(image + hdr->rodata_offset,
-                         (const uint8_t *)file_data + hdr->rodata_offset,
-                         ro_sz) != 0)
+        if (copy_to_user(image + header->rodata_offset,
+                         (const uint8_t *)file_data + header->rodata_offset,
+                         rodata_size) != 0)
         {
             DEX_DBG("[DEX] Failed to copy .rodata to user image\n");
-            ufree(image, total_sz);
+            ufree(image, total_size);
+            
             return -21;
         }
     }
 
-    if (data_sz)
+    if (data_size)
     {
-        if (copy_to_user(image + hdr->data_offset,
-                         (const uint8_t *)file_data + hdr->data_offset,
-                         data_sz) != 0)
+        if (copy_to_user(image + header->data_offset,
+                         (const uint8_t *)file_data + header->data_offset,
+                         data_size) != 0)
         {
             DEX_DBG("[DEX] Failed to copy .data to user image\n");
-            ufree(image, total_sz);
+            ufree(image, total_size);
+            
             return -22;
         }
     }
 
-    if (bss_sz)
+    if (bss_size)
     {
-        // zero-init bss in userland
-        memset(image + hdr->data_offset + data_sz, 0, bss_sz);
+        // Zero fill bss in userland
+        memset(image + header->data_offset + data_size, 0, bss_size);
     }
 
     // Copy resources blob if present
-    if (resources_sz)
+    if (resources_size)
     {
-        if (copy_to_user(image + resources_off,
-                         (const uint8_t *)file_data + resources_off,
-                         resources_sz) != 0)
+        if (copy_to_user(image + resources_offset,
+                         (const uint8_t *)file_data + resources_offset,
+                         resources_size) != 0)
         {
             DEX_DBG("[DEX] Failed to copy resources blob to user image\n");
-            ufree(image, total_sz);
+            ufree(image, total_size);
+            
             return -23;
         }
     }
 
     // Validate table windows
-    if ((hdr->import_table_count &&
-         !in_range(hdr->import_table_offset,
-                   hdr->import_table_count * sizeof(dex_import_t),
-                   (uint32_t)file_size)) ||
-        (hdr->reloc_table_count  &&
-         !in_range(hdr->reloc_table_offset,
-                   hdr->reloc_table_count * sizeof(dex_reloc_t),
-                   (uint32_t)file_size)) ||
-        (hdr->strtab_size &&
-         !in_range(hdr->strtab_offset,
-                   hdr->strtab_size,
-                   (uint32_t)file_size)))
+    if ((header->import_table_count &&
+         !in_range(header->import_table_offset, header->import_table_count * sizeof(dex_import_t), (uint32_t)file_size)) ||
+        (header->reloc_table_count  &&
+         !in_range(header->reloc_table_offset, header->reloc_table_count * sizeof(dex_reloc_t), (uint32_t)file_size)) ||
+        (header->strtab_size &&
+         !in_range(header->strtab_offset, header->strtab_size, (uint32_t)file_size)))
     {
         DEX_DBG("[DEX] Table offsets or sizes out of file\n");
-        ufree(image, total_sz);
+        ufree(image, total_size);
 
         return -5;
     }
 
     // Table pointers
-    imp  = (const dex_import_t *)((const uint8_t *)file_data + hdr->import_table_offset);
-    rel  = (const dex_reloc_t  *)((const uint8_t *)file_data + hdr->reloc_table_offset);
-    stab = (const char         *)((const uint8_t *)file_data + hdr->strtab_offset);
+    imports = (const dex_import_t *)((const uint8_t *)file_data + header->import_table_offset);
+    relocations = (const dex_reloc_t *)((const uint8_t *)file_data + header->reloc_table_offset);
+    string_table = (const char *)((const uint8_t *)file_data + header->strtab_offset);
 
     DEX_DBG("=== DEX HEADER DEBUG ===\n");
-    DEX_DBG("magic=0x%08x ver=%u.%u\n", hdr->magic, hdr->version_major, hdr->version_minor);
-    DEX_DBG("entry_off=0x%08x\n", hdr->entry_offset);
-    DEX_DBG(".text off=0x%08x sz=%u\n", hdr->text_offset, hdr->text_size);
-    DEX_DBG(".ro   off=0x%08x sz=%u\n", hdr->rodata_offset, hdr->rodata_size);
-    DEX_DBG(".data off=0x%08x sz=%u\n", hdr->data_offset, hdr->data_size);
-    DEX_DBG(".bss  sz=%u\n", hdr->bss_size);
-    DEX_DBG("import off=0x%08x cnt=%u\n", hdr->import_table_offset, hdr->import_table_count);
-    DEX_DBG("reloc  off=0x%08x cnt=%u\n", hdr->reloc_table_offset,  hdr->reloc_table_count);
-    DEX_DBG("rsrc  off=0x%08x sz=%u\n", hdr->resources_offset, hdr->resources_size);
+    DEX_DBG("magic=0x%08x ver=%u.%u\n", header->magic, header->version_major, header->version_minor);
+    DEX_DBG("entry_off=0x%08x\n", header->entry_offset);
+    DEX_DBG(".text off=0x%08x sz=%u\n", header->text_offset, header->text_size);
+    DEX_DBG(".ro   off=0x%08x sz=%u\n", header->rodata_offset, header->rodata_size);
+    DEX_DBG(".data off=0x%08x sz=%u\n", header->data_offset, header->data_size);
+    DEX_DBG(".bss  sz=%u\n", header->bss_size);
+    DEX_DBG("import off=0x%08x cnt=%u\n", header->import_table_offset, header->import_table_count);
+    DEX_DBG("reloc  off=0x%08x cnt=%u\n", header->reloc_table_offset, header->reloc_table_count);
+    DEX_DBG("rsrc  off=0x%08x sz=%u\n", header->resources_offset, header->resources_size);
     DEX_DBG("========================\n");
 
     // Apply relocations and imports
-    if (relocate_image(hdr, imp, rel, stab, image, total_sz) != 0)
+    if (relocate_image(header, imports, relocations, string_table, image, total_size) != 0)
     {
-        ufree(image, total_sz);
+        ufree(image, total_size);
 
         return -6;
     }
 
     if (is_user_va((uint32_t)file_data))
     {
-        paging_update_flags((uint32_t)file_data,
-                        PAGE_ALIGN_UP(file_size),
-                        0,
-                        PAGE_USER);
+        paging_update_flags((uint32_t)file_data, PAGE_ALIGN_UP(file_size), 0, PAGE_USER);
     }
 
-    // Make .text read execute
-    if (text_sz)
+    // Make text read execute
+    if (text_size)
     {
-        paging_update_flags((uint32_t)(image + hdr->text_offset),
-                            PAGE_ALIGN_UP(text_sz),
-                            0,
-                            PAGE_RW);
+        paging_update_flags((uint32_t)(image + header->text_offset), PAGE_ALIGN_UP(text_size), 0,PAGE_RW);
     }
 
-    // Ensure .data and .bss are writable
-    if (data_sz || bss_sz)
+    // Ensure data and bss are writable
+    if (data_size || bss_size)
     {
-        paging_update_flags((uint32_t)(image + hdr->data_offset),
-                            PAGE_ALIGN_UP(data_sz + bss_sz),
-                            PAGE_PRESENT | PAGE_USER | PAGE_RW,
-                            0);
+        paging_update_flags((uint32_t)(image + header->data_offset),
+                            PAGE_ALIGN_UP(data_size + bss_size),
+                            PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
     }
 
     // Reassert user mapping
-    paging_set_user((uint32_t)image, total_sz);
+    paging_set_user((uint32_t)image, total_size);
 
     // Fill output
-    out->image_base     = image;
-    out->header         = (dex_header_t *)file_data;
-    out->dex_entry      = (void (*)(void))((uint32_t)image + entry_off);
-    out->image_size     = total_sz;
-    out->resources_base = resources_sz ? (image + resources_off) : NULL;
-    out->resources_size = resources_sz;
+    out_executable->image_base = image;
+    out_executable->header = (dex_header_t *)file_data;
+    out_executable->dex_entry = (void (*)(void))((uint32_t)image + entry_offset);
+    out_executable->image_size = total_size;
+    out_executable->resources_base = resources_size ? (image + resources_offset) : NULL;
+    out_executable->resources_size = resources_size;
 
     DEX_DBG("[DEX] entry_va=0x%08x text_off=0x%08x text_sz=0x%08x\n",
-           (uint32_t)out->dex_entry,
-           hdr->text_offset,
-           hdr->text_size);
+           (uint32_t)out_executable->dex_entry,
+           header->text_offset,
+           header->text_size);
 
     {
-        const uint8_t *ep = (const uint8_t *)out->dex_entry;
+        const uint8_t *entry_bytes = (const uint8_t *)out_executable->dex_entry;
         DEX_DBG("[DEX] entry_bytes:");
-        for (int i = 0; i < 16; ++i)
+
+        for (int byte_index = 0; byte_index < 16; ++byte_index)
         {
-            DEX_DBG(" %02x", ep[i]);
+            DEX_DBG(" %02x", entry_bytes[byte_index]);
         }
+
         DEX_DBG("\n");
     }
 
     if (g_debug_mask & DEBUG_AREA_EXL)
     {
-        hexdump_bytes((void *)((uint32_t)image + entry_off), 64);
-        DEX_DBG("[DEX] entry VA=%08x off=0x%x\n", (uint32_t)image + entry_off, entry_off);
+        hexdump_bytes((void *)((uint32_t)image + entry_offset), 64);
+        DEX_DBG("[DEX] entry VA=%08x off=0x%x\n", (uint32_t)image + entry_offset, entry_offset);
     }
 
     return 0;
 }
 
 // Run DEX inside current process address space
-int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
+int dex_run(const FileTable *file_table_ref, const char *path, int argument_count, char **argument_values)
 {
     int file_index;
-    const FileEntry *fe;
-    uint8_t *buffer;
-    dex_executable_t dex;
-    int rc;
-    uint32_t user_sp;
-    uint32_t user_stack_base = 0;
+    const FileEntry *file_entry;
+    uint8_t *file_buffer;
+    dex_executable_t loaded_executable;
+    int return_code;
+    uint32_t user_stack_pointer;
+    uint32_t user_stack_base_address = 0;
     uint32_t user_stack_size = 0;
-    uint8_t *stub;
+    uint8_t *exit_stub;
 
-    if (!ft || !path || !path[0])
+    if (!file_table_ref || !path || !path[0])
     {
-
         return -1;
     }
+
     // Locate file
-    file_index = find_entry_by_path(ft, path);
+    file_index = find_entry_by_path(file_table_ref, path);
+
     if (file_index < 0)
     {
         DEX_DBG("[DEX] ERROR: File not found: %s\n", path);
@@ -875,8 +906,9 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
         return -1;
     }
 
-    fe = &ft->entries[file_index];
-    if (!fe_file_size_bytes(fe))
+    file_entry = &file_table_ref->entries[file_index];
+
+    if (!fe_file_size_bytes(file_entry))
     {
         DEX_DBG("[DEX] ERROR: Empty file: %s\n", path);
 
@@ -884,72 +916,67 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     }
 
     // Read whole file into temporary buffer
-    buffer = (uint8_t *)kmalloc(fe_file_size_bytes(fe));
+    file_buffer = (uint8_t *)kmalloc(fe_file_size_bytes(file_entry));
 
-    if (!buffer)
+    if (!file_buffer)
     {
-        DEX_DBG("[DEX] ERROR: Unable to allocate %u bytes\n", fe_file_size_bytes(fe));
+        DEX_DBG("[DEX] ERROR: Unable to allocate %u bytes\n", fe_file_size_bytes(file_entry));
 
         return -3;
     }
 
-    if (read_file(ft, path, buffer) < 0)
+    if (read_file(file_table_ref, path, file_buffer) < 0)
     {
         DEX_DBG("[DEX] ERROR: Failed to read file: %s\n", path);
-        kfree(buffer);
+        kfree(file_buffer);
 
         return -4;
     }
 
     // Load image into user space
-    rc = dex_load(buffer, fe_file_size_bytes(fe), &dex);
-    if (rc != 0)
-    {
-        kfree(buffer);
+    return_code = dex_load(file_buffer, fe_file_size_bytes(file_entry), &loaded_executable);
 
-        return rc;
+    if (return_code != 0)
+    {
+        kfree(file_buffer);
+
+        return return_code;
     }
 
     // Build initial user stack
-    user_sp = build_user_stack(path, argc, argv, &user_stack_base, &user_stack_size);
-    if (!user_sp)
+    user_stack_pointer = build_user_stack(path, argument_count, argument_values, &user_stack_base_address, &user_stack_size);
+
+    if (!user_stack_pointer)
     {
-        kfree(buffer);
+        kfree(file_buffer);
 
         return -5;
     }
 
     // Build small exit stub that calls int 0x66
-    stub = build_user_exit_stub((uint32_t)dex.dex_entry);
-    if (!stub)
+    exit_stub = build_user_exit_stub((uint32_t)loaded_executable.dex_entry);
+
+    if (!exit_stub)
     {
         DEX_DBG("[DEX] ERROR: No stub found\n");
-        kfree(buffer);
+        kfree(file_buffer);
 
         return -6;
     }
 
     // Ensure stub is user present and writable while patching
-    paging_update_flags((uint32_t)stub, 64, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
+    paging_update_flags((uint32_t)exit_stub, 64, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
 
-    // Disable single-stepping for now to avoid debug state corruption
-    // if (dex.header && dex.header->text_size > 0x10000)
-    // {
-    //     debug_request_single_step((uint32_t)stub, 512);
-    // }
+    DEX_DBG("[DEX] run: entry=%08x stub=%08x sp=%08x (no process)\n", (uint32_t)loaded_executable.dex_entry, (uint32_t)exit_stub, user_stack_pointer);
 
-    DEX_DBG("[DEX] run: entry=%08x stub=%08x sp=%08x (no process)\n",
-         (uint32_t)dex.dex_entry, (uint32_t)stub, user_sp);
-
-    
-    uintptr_t image_end = PAGE_ALIGN_UP((uintptr_t)dex.image_base + dex.image_size);
+    uintptr_t image_end = PAGE_ALIGN_UP((uintptr_t)loaded_executable.image_base + loaded_executable.image_size);
     const uintptr_t GUARD_GAP = 4 * 1024 * 1024;
     uintptr_t heap_base = image_end + GUARD_GAP;
-    uintptr_t heap_size  = 64u << 20;  // 64 MB window
+    uintptr_t heap_size = 64u << 20; // 64 MB window
 
     DEX_DBG("[DEX] image_base=%p size=%u -> heap_base=%p window=%u\n",
-           (void *)dex.image_base,
-           (unsigned)dex.image_size,
+           (void *)loaded_executable.image_base,
+           (unsigned)loaded_executable.image_size,
            (void *)heap_base,
            (unsigned)heap_size);
 
@@ -957,263 +984,300 @@ int dex_run(const FileTable *ft, const char *path, int argc, char **argv)
     paging_reserve_range(heap_base, heap_size);
     paging_set_user_heap(heap_base);
 
-    // Commit initial heap pages (8MB)
+    // Commit initial heap pages
     uintptr_t initial_heap = 8u << 20;
-    if (initial_heap > heap_size) initial_heap = heap_size;
+
+    if (initial_heap > heap_size)
+    {
+        initial_heap = heap_size;
+    }
+
     uintptr_t initial_end = PAGE_ALIGN_UP(heap_base + initial_heap);
 
     // Pre-allocate some initial heap pages
-    for (uintptr_t va = heap_base; va < initial_end && va < heap_base + (1u << 20); va += PAGE_SIZE_4KB)
+    for (uintptr_t virtual_address = heap_base;
+         virtual_address < initial_end && virtual_address < heap_base + (1u << 20);
+         virtual_address += PAGE_SIZE_4KB)
     {
-        uint32_t phys = alloc_phys_page();
-        if (phys)
+        uint32_t physical_address = alloc_phys_page();
+
+        if (physical_address)
         {
-            map_4kb_page_flags(va, phys, PAGE_PRESENT | PAGE_RW | PAGE_USER);
+            map_4kb_page_flags(virtual_address, physical_address, PAGE_PRESENT | PAGE_RW | PAGE_USER);
         }
     }
 
     // Initialize heap fields for the current process
-    process_t *p = process_current();
-    if (p)
-    {
-        process_set_user_stack(p, (uintptr_t)user_stack_base, (uintptr_t)user_sp, user_stack_size);
+    process_t *process = process_current();
 
-        uintptr_t base = PAGE_ALIGN_UP(heap_base);
-        uintptr_t max  = base + heap_size;
-        p->heap_base = base;
-        p->heap_end  = initial_end;  // Set to initial committed size
-        p->heap_max  = max;
-        p->heap_alloc_next = base;   // Start allocations from heap base
+    if (process)
+    {
+        process_set_user_stack(process, (uintptr_t)user_stack_base_address,
+                               (uintptr_t)user_stack_pointer, user_stack_size);
+
+        uintptr_t heap_base_aligned = PAGE_ALIGN_UP(heap_base);
+        uintptr_t heap_max_address = heap_base_aligned + heap_size;
+        process->heap_base = heap_base_aligned;
+        process->heap_end = initial_end;
+        process->heap_max = heap_max_address;
+        process->heap_alloc_next = heap_base_aligned;
         DEX_DBG("[DEX] exec: PID=%d heap_base=%p heap_end=%p heap_max=%p\n",
-               p->pid, (void *)p->heap_base, (void *)p->heap_end, (void *)p->heap_max);
+               process->pid, (void *)process->heap_base, (void *)process->heap_end,
+               (void *)process->heap_max);
     }
     
     // Jump to user mode
-    enter_user_mode((uint32_t)stub, user_sp);
+    enter_user_mode((uint32_t)exit_stub, user_stack_pointer);
 
     // Not reached in normal flow
-    kfree(buffer);
+    kfree(file_buffer);
 
     return 0;
 }
 
-int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **argv,
+int dex_spawn_process(const FileTable *file_table_ref, const char *path,
+                      int argument_count, char **argument_values,
                       const char *exec_dir, int set_cwd)
 {
     int file_index;
-    const FileEntry *fe;
-    uint8_t *buffer;
-    uint32_t cr3_parent;
-    uint32_t cr3_child;
-    dex_executable_t dex;
-    int load_rc;
-    uint32_t user_sp;
-    uint32_t user_stack_base = 0;
+    const FileEntry *file_entry;
+    uint8_t *file_buffer;
+    uint32_t parent_cr3;
+    uint32_t child_cr3;
+    dex_executable_t loaded_executable;
+    int load_return_code;
+    uint32_t user_stack_pointer;
+    uint32_t user_stack_base_address = 0;
     uint32_t user_stack_size = 0;
-    uint32_t entry_va;
-    uint8_t *stub;
-    process_t *p;
-    int pid;
+    uint32_t entry_address;
+    uint8_t *exit_stub;
+    process_t *process;
+    int process_id;
+
     if (g_debug_mask & DEBUG_AREA_EXL)
     {
         DEX_DBG("dex_spawn_process heap_dump:\n");
         heap_dump();
     }
 
-    if (!ft || !path || !path[0])
+    if (!file_table_ref || !path || !path[0])
     {
         return -1;
     }
 
-    file_index = find_entry_by_path(ft, path);
+    file_index = find_entry_by_path(file_table_ref, path);
+
     if (file_index < 0)
     {
         DEX_DBG("[DEX] ERROR: File not found: %s\n", path);
+        
         return -2;
     }
 
-    fe = &ft->entries[file_index];
-    if (!fe_file_size_bytes(fe))
+    file_entry = &file_table_ref->entries[file_index];
+
+    if (!fe_file_size_bytes(file_entry))
     {
         DEX_DBG("[DEX] ERROR: Empty file: %s\n", path);
+        
         return -3;
     }
 
-    buffer = (uint8_t *)kmalloc(fe_file_size_bytes(fe));
-    if (!buffer)
+    file_buffer = (uint8_t *)kmalloc(fe_file_size_bytes(file_entry));
+
+    if (!file_buffer)
     {
-        DEX_DBG("[DEX] ERROR: Unable to allocate %u bytes\n", fe_file_size_bytes(fe));
+        DEX_DBG("[DEX] ERROR: Unable to allocate %u bytes\n", fe_file_size_bytes(file_entry));
+        
         return -4;
     }
 
-    DEX_DBG("Trying to read_file(%p, %s, buffer)\n", (void*)ft, path);
-    DEX_DBG("Buffer attempted to allocate: %d bytes\n", fe_file_size_bytes(fe));
+    DEX_DBG("Trying to read_file(%p, %s, buffer)\n", (void*)file_table_ref, path);
+    DEX_DBG("Buffer attempted to allocate: %d bytes\n", fe_file_size_bytes(file_entry));
 
-    // Read into kernel buffer directly (no PAGE_USER hack)
-    if (read_file(ft, path, buffer) < 0)
+    // Read into kernel buffer directly
+    if (read_file(file_table_ref, path, file_buffer) < 0)
     {
         DEX_DBG("[DEX] ERROR: Failed to read file: %s\n", path);
-        kfree(buffer);
+        kfree(file_buffer);
+        
         return -5;
     }
 
-    cr3_parent = read_cr3_local();
-    cr3_child  = paging_new_address_space();
-    if (!cr3_child)
+    parent_cr3 = read_cr3_local();
+    child_cr3 = paging_new_address_space();
+
+    if (!child_cr3)
     {
         DEX_DBG("[DEX] ERROR: paging_new_address_space failed");
-        kfree(buffer);
+        kfree(file_buffer);
+        
         return -6;
     }
 
-    paging_switch_address_space(cr3_child);
-    /* Invalidera EXL-cache för nuvarande CR3 innan vi river alla user-mappningar */
+    paging_switch_address_space(child_cr3);
+    
+    // Clear EXL cache for this CR3 before removing user mappings
     exl_invalidate_for_cr3(read_cr3_local());
+    
     paging_free_all_user();
     paging_user_heap_reset();
 
-    load_rc = dex_load(buffer, fe_file_size_bytes(fe), &dex);
-    if (load_rc != 0)
+    load_return_code = dex_load(file_buffer, fe_file_size_bytes(file_entry), &loaded_executable);
+
+    if (load_return_code != 0)
     {
-        paging_switch_address_space(cr3_parent);
-        paging_destroy_address_space(cr3_child);
-        kfree(buffer);
-        DEX_DBG("[DEX] ERROR: dex_load rc=%d\n", load_rc);
+        paging_switch_address_space(parent_cr3);
+        paging_destroy_address_space(child_cr3);
+        kfree(file_buffer);
+        DEX_DBG("[DEX] ERROR: dex_load rc=%d\n", load_return_code);
+    
         return -7;
     }
 
-    user_sp = build_user_stack(path, argc, argv, &user_stack_base, &user_stack_size);
-    if (!user_sp || !is_user_va(user_sp))
+    user_stack_pointer = build_user_stack(path, argument_count, argument_values, &user_stack_base_address, &user_stack_size);
+
+    if (!user_stack_pointer || !is_user_va(user_stack_pointer))
     {
-        paging_switch_address_space(cr3_parent);
-        paging_destroy_address_space(cr3_child);
-        kfree(buffer);
-        DEX_DBG("[DEX] ERROR: bad user_sp=%08x\n", user_sp);
+        paging_switch_address_space(parent_cr3);
+        paging_destroy_address_space(child_cr3);
+        kfree(file_buffer);
+        DEX_DBG("[DEX] ERROR: bad user_sp=%08x\n", user_stack_pointer);
+        
         return -8;
     }
 
-    entry_va = (uint32_t)dex.dex_entry;
-    if (!is_user_va(entry_va))
+    entry_address = (uint32_t)loaded_executable.dex_entry;
+
+    if (!is_user_va(entry_address))
     {
-        paging_switch_address_space(cr3_parent);
-        paging_destroy_address_space(cr3_child);
-        kfree(buffer);
-        DEX_DBG("[DEX] ERROR: bad entry_va=%08x\n", entry_va);
+        paging_switch_address_space(parent_cr3);
+        paging_destroy_address_space(child_cr3);
+        kfree(file_buffer);
+        DEX_DBG("[DEX] ERROR: bad entry_va=%08x\n", entry_address);
+        
         return -9;
     }
 
-    stub = build_user_exit_stub(entry_va);
-    if (!stub || !is_user_va((uint32_t)stub))
+    exit_stub = build_user_exit_stub(entry_address);
+
+    if (!exit_stub || !is_user_va((uint32_t)exit_stub))
     {
-        paging_switch_address_space(cr3_parent);
-        paging_destroy_address_space(cr3_child);
-        kfree(buffer);
-        DEX_DBG("[DEX] ERROR: stub build failed (%p)\n", stub);
+        paging_switch_address_space(parent_cr3);
+        paging_destroy_address_space(child_cr3);
+        kfree(file_buffer);
+        DEX_DBG("[DEX] ERROR: stub build failed (%p)\n", exit_stub);
+        
         return -10;
     }
 
-    paging_update_flags((uint32_t)stub, 64, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
+    paging_update_flags((uint32_t)exit_stub, 64, PAGE_PRESENT | PAGE_USER | PAGE_RW, 0);
 
-    // Disable single-stepping for now to avoid debug state corruption
-    // if (dex.header && dex.header->text_size > 0x10000)
-    // {
-    //     debug_request_single_step((uint32_t)stub, 512);
-    // }
-
-    uintptr_t image_end = PAGE_ALIGN_UP((uintptr_t)dex.image_base + dex.image_size);
+    uintptr_t image_end = PAGE_ALIGN_UP((uintptr_t)loaded_executable.image_base + loaded_executable.image_size);
     const uintptr_t GUARD_GAP = 4 * 1024 * 1024;
     uintptr_t heap_base = image_end + GUARD_GAP;
     uintptr_t heap_size = 64u << 20;
 
     // Note: heap fields will be set on the process after it's created below
     DEX_DBG("[DEX] image_base=%p size=%u -> heap_base=%p window=%u\n",
-           (void *)dex.image_base,
-           (unsigned)dex.image_size,
+           (void *)loaded_executable.image_base,
+           (unsigned)loaded_executable.image_size,
            (void *)heap_base,
            (unsigned)heap_size);
     paging_reserve_range(heap_base, heap_size);
     paging_set_user_heap(heap_base);
 
-    // Commit initial heap pages (8MB) while in child CR3
+    // Commit initial heap pages while in child CR3
     uintptr_t initial_heap = 8u << 20;
-    if (initial_heap > heap_size) initial_heap = heap_size;
+
+    if (initial_heap > heap_size)
+    {
+        initial_heap = heap_size;
+    }
+
     uintptr_t initial_end = PAGE_ALIGN_UP(heap_base + initial_heap);
-    uintptr_t base = PAGE_ALIGN_UP(heap_base);
-    uintptr_t max  = base + heap_size;
+    uintptr_t heap_base_aligned = PAGE_ALIGN_UP(heap_base);
+    uintptr_t heap_max_address = heap_base_aligned + heap_size;
     paging_reserve_range(heap_base, initial_end - heap_base);
 
     // Pre-allocate some initial heap pages to avoid immediate demand faults
-    for (uintptr_t va = heap_base; va < initial_end && va < heap_base + (1u << 20); va += PAGE_SIZE_4KB)
+    for (uintptr_t virtual_address = heap_base;
+         virtual_address < initial_end && virtual_address < heap_base + (1u << 20);
+         virtual_address += PAGE_SIZE_4KB)
     {
-        uint32_t phys = alloc_phys_page();
-        if (phys)
+        uint32_t physical_address = alloc_phys_page();
+
+        if (physical_address)
         {
-            map_4kb_page_flags(va, phys, PAGE_PRESENT | PAGE_RW | PAGE_USER);
+            map_4kb_page_flags(virtual_address, physical_address, PAGE_PRESENT | PAGE_RW | PAGE_USER);
         }
     }
 
-    paging_switch_address_space(cr3_parent);
+    paging_switch_address_space(parent_cr3);
 
     // Clear single-step debug state before spawning new process
     debug_clear_single_step();
 
-    p = process_create_user_with_cr3((uint32_t)stub,
-                                     user_sp,
-                                     cr3_child,
-                                     65536,
-                                     (uintptr_t)user_stack_base,
-                                     (size_t)user_stack_size,
-                                     base,
-                                     initial_end,
-                                     max);
-    if (!p)
+    process = process_create_user_with_cr3((uint32_t)exit_stub,
+                                           user_stack_pointer,
+                                           child_cr3,
+                                           65536,
+                                           (uintptr_t)user_stack_base_address,
+                                           (size_t)user_stack_size,
+                                           heap_base_aligned,
+                                           initial_end,
+                                           heap_max_address);
+
+    if (!process)
     {
-        paging_switch_address_space(cr3_child);
-        paging_switch_address_space(cr3_parent);
-        paging_destroy_address_space(cr3_child);
-        kfree(buffer);
+        paging_switch_address_space(child_cr3);
+        paging_switch_address_space(parent_cr3);
+        paging_destroy_address_space(child_cr3);
+        kfree(file_buffer);
         DEX_DBG("[DEX] ERROR: process_create_user_with_as failed");
+        
         return -12;
     }
 
-    pid = process_pid(p);
-    DEX_DBG("[DEX] spawn: pid=%d parent_cr3=%08x child_cr3=%08x\n",
-         pid, cr3_parent, cr3_child);
+    process_id = process_pid(process);
+    DEX_DBG("[DEX] spawn: pid=%d parent_cr3=%08x child_cr3=%08x\n", process_id, parent_cr3, child_cr3);
 
-    // Initialize heap fields for the new process with initial 8MB committed
-    p->heap_base = base;
-    p->heap_end  = initial_end;  // Set to initial committed size, not base
-    p->heap_max  = max;
-    p->heap_alloc_next = base;   // Start allocations from heap base
-    paging_adopt_pending_reservations(cr3_child, p);
+    // Initialize heap fields for the new process
+    process->heap_base = heap_base_aligned;
+    process->heap_end = initial_end;
+    process->heap_max = heap_max_address;
+    process->heap_alloc_next = heap_base_aligned;
+    paging_adopt_pending_reservations(child_cr3, process);
 
     DEX_DBG("[DEX] PID=%d heap_base=%p heap_end=%p heap_max=%p\n",
-           pid, (void *)p->heap_base, (void *)p->heap_end, (void *)p->heap_max);
+           process_id, (void *)process->heap_base, (void *)process->heap_end, (void *)process->heap_max);
 
     // Stash embedded resources info on the process for later lookup
-    p->resources_base = (uintptr_t)dex.resources_base;
-    p->resources_size = dex.resources_size;
+    process->resources_base = (uintptr_t)loaded_executable.resources_base;
+    process->resources_size = loaded_executable.resources_size;
 
-    // Also keep a kernel copy of the resources (if present) for cross-process queries
-    if (dex.header && dex.header->resources_size &&
-        dex.header->resources_offset + dex.header->resources_size <= fe_file_size_bytes(fe))
+    // Keep a kernel copy of the resources for cross process queries
+    if (loaded_executable.header && loaded_executable.header->resources_size &&
+        loaded_executable.header->resources_offset + loaded_executable.header->resources_size <=
+        fe_file_size_bytes(file_entry))
     {
-        uint32_t rsz = dex.header->resources_size;
-        uint8_t *kres = (uint8_t *)kmalloc(rsz);
-        if (kres)
+        uint32_t resource_size = loaded_executable.header->resources_size;
+        uint8_t *resource_copy = (uint8_t *)kmalloc(resource_size);
+
+        if (resource_copy)
         {
-            memcpy(kres, buffer + dex.header->resources_offset, rsz);
-            p->resources_kernel = kres;
-            p->resources_kernel_size = rsz;
+            memcpy(resource_copy, file_buffer + loaded_executable.header->resources_offset, resource_size);
+            process->resources_kernel = resource_copy;
+            process->resources_kernel_size = resource_size;
         }
     }
 
-    kfree(buffer);
+    kfree(file_buffer);
 
-    if (p)
+    if (process)
     {
         const char *launch_dir = (exec_dir && exec_dir[0]) ? exec_dir : "/";
-        process_set_exec_root(p, launch_dir);
+        process_set_exec_root(process, launch_dir);
 
         if (set_cwd)
         {
@@ -1225,8 +1289,9 @@ int dex_spawn_process(const FileTable *ft, const char *path, int argc, char **ar
                 launch_dir = "/";
             }
 
-            process_set_cwd(p, dir_id, launch_dir);
+            process_set_cwd(process, dir_id, launch_dir);
         }
     }
-    return pid;
-}// Spawn new process and load DEX into child address space
+
+    return process_id;
+}

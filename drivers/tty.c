@@ -7,29 +7,29 @@
 #define TTY_INPUT_SIZE   1024
 #define TTY_OUTPUT_SIZE  4096
 
-// This driver does not use interrupts
+// This driver does not use interrupts.
 __attribute__((section(".ddf_meta"), used))
 volatile unsigned int ddf_irq_number = 0;
 
-// Kernel exports from loader
+// Kernel exports from loader.
 static volatile kernel_exports_t *kernel = 0;
 
-// Line buffer for canonical input
+// Line buffer for canonical input.
 static char line_buffer[TTY_LINE_SIZE];
-static unsigned line_pos = 0;
+static unsigned line_position = 0;
 static int line_ready = 0;
 
-// Input ring buffer
+// Input ring buffer.
 static volatile char input_fifo[TTY_INPUT_SIZE];
 static volatile unsigned input_head = 0;
 static volatile unsigned input_tail = 0;
 
-// Output ring buffer (for gdterm to read captured output)
+// Output ring buffer for gdterm to read captured output.
 static volatile char output_fifo[TTY_OUTPUT_SIZE];
 static volatile unsigned output_head = 0;
 static volatile unsigned output_tail = 0;
 
-// TTY flags
+// TTY flags.
 static int echo_enabled = 1;
 static int canonical_mode = 1;
 
@@ -43,25 +43,25 @@ static inline int input_full(void)
     return ((input_tail + 1) & (TTY_INPUT_SIZE - 1)) == input_head;
 }
 
-static inline void input_push(char c)
+static inline void input_push(char character)
 {
-    unsigned t = (input_tail + 1) & (TTY_INPUT_SIZE - 1);
+    unsigned next_tail = (input_tail + 1) & (TTY_INPUT_SIZE - 1);
 
-    if (t != input_head)
+    if (next_tail != input_head)
     {
-        input_fifo[input_tail] = c;
-        input_tail = t;
+        input_fifo[input_tail] = character;
+        input_tail = next_tail;
     }
 }
 
-static inline int input_pop(char *out)
+static inline int input_pop(char *out_character)
 {
     if (input_empty())
     {
         return 0;
     }
 
-    *out = input_fifo[input_head];
+    *out_character = input_fifo[input_head];
     input_head = (input_head + 1) & (TTY_INPUT_SIZE - 1);
 
     return 1;
@@ -72,53 +72,53 @@ static inline unsigned input_count(void)
     return (input_tail - input_head) & (TTY_INPUT_SIZE - 1);
 }
 
-// Output buffer helpers
+// Output buffer helpers.
 static inline int output_empty(void)
 {
     return output_head == output_tail;
 }
 
-static inline void output_push(char c)
+static inline void output_push(char character)
 {
-    unsigned t = (output_tail + 1) & (TTY_OUTPUT_SIZE - 1);
+    unsigned next_tail = (output_tail + 1) & (TTY_OUTPUT_SIZE - 1);
 
-    if (t != output_head)
+    if (next_tail != output_head)
     {
-        output_fifo[output_tail] = c;
-        output_tail = t;
+        output_fifo[output_tail] = character;
+        output_tail = next_tail;
     }
 }
 
-static inline int output_pop(char *out)
+static inline int output_pop(char *out_character)
 {
     if (output_empty())
     {
         return 0;
     }
 
-    *out = output_fifo[output_head];
+    *out_character = output_fifo[output_head];
     output_head = (output_head + 1) & (TTY_OUTPUT_SIZE - 1);
 
     return 1;
 }
 
-// Push completed line into input buffer
+// Push completed line into input buffer.
 static void flush_line(void)
 {
-    for (unsigned i = 0; i < line_pos; i++)
+    for (unsigned index = 0; index < line_position; index++)
     {
-        input_push(line_buffer[i]);
+        input_push(line_buffer[index]);
     }
 
     input_push('\n');
-    line_pos = 0;
+    line_position = 0;
     line_ready = 0;
 }
 
-// Process a character in canonical mode
-static void canonical_process(char c)
+// Process a character in canonical mode.
+static void canonical_process(char character)
 {
-    if (c == '\n' || c == '\r')
+    if (character == '\n' || character == '\r')
     {
         if (echo_enabled)
         {
@@ -131,11 +131,11 @@ static void canonical_process(char c)
         return;
     }
 
-    if (c == '\b' || c == 127)
+    if (character == '\b' || character == 127)
     {
-        if (line_pos > 0)
+        if (line_position > 0)
         {
-            line_pos--;
+            line_position--;
 
             if (echo_enabled)
             {
@@ -146,12 +146,12 @@ static void canonical_process(char c)
         return;
     }
 
-    // Ctrl+U clears the line
-    if (c == 21)
+    // Ctrl+U clears the line.
+    if (character == 21)
     {
-        while (line_pos > 0)
+        while (line_position > 0)
         {
-            line_pos--;
+            line_position--;
 
             if (echo_enabled)
             {
@@ -162,61 +162,61 @@ static void canonical_process(char c)
         return;
     }
 
-    // Ctrl+C sends interrupt (just echo for now)
-    if (c == 3)
+    // Ctrl+C sends interrupt, just echo for now.
+    if (character == 3)
     {
         if (echo_enabled)
         {
             kernel->printf("^C\n");
         }
 
-        line_pos = 0;
+        line_position = 0;
 
         return;
     }
 
-    // Add to line buffer if printable and space available
-    if (c >= 32 && c < 127 && line_pos < TTY_LINE_SIZE - 1)
+    // Add to line buffer if printable and space is free.
+    if (character >= 32 && character < 127 && line_position < TTY_LINE_SIZE - 1)
     {
-        line_buffer[line_pos++] = c;
+        line_buffer[line_position++] = character;
 
         if (echo_enabled)
         {
-            char buf[2] = {c, 0};
-            kernel->printf("%s", buf);
+            char buffer[2] = {character, 0};
+            kernel->printf("%s", buffer);
         }
     }
 }
 
-// Process a character in raw mode
-static void raw_process(char c)
+// Process a character in raw mode.
+static void raw_process(char character)
 {
-    input_push(c);
+    input_push(character);
 
     if (echo_enabled)
     {
-        char buf[2] = {c, 0};
-        kernel->printf("%s", buf);
+        char buffer[2] = {character, 0};
+        kernel->printf("%s", buffer);
     }
 }
 
-// Handle incoming character from keyboard
-static void drv_tty_input_char(char c)
+// Handle incoming character from keyboard.
+static void drv_tty_input_char(char character)
 {
     if (canonical_mode)
     {
-        canonical_process(c);
+        canonical_process(character);
     }
     else
     {
-        raw_process(c);
+        raw_process(character);
     }
 }
 
-// Read from the TTY
-static int drv_tty_read(char *buf, unsigned count)
+// Read from the TTY.
+static int drv_tty_read(char *buffer, unsigned count)
 {
-    if (!buf || count == 0)
+    if (!buffer || count == 0)
     {
         return 0;
     }
@@ -229,13 +229,13 @@ static int drv_tty_read(char *buf, unsigned count)
 
         if (!input_empty())
         {
-            char c;
-            input_pop(&c);
+            char character;
+            input_pop(&character);
             asm volatile("sti");
-            buf[read_count++] = c;
+            buffer[read_count++] = character;
 
-            // In canonical mode return on newline
-            if (canonical_mode && c == '\n')
+            // In canonical mode return on newline.
+            if (canonical_mode && character == '\n')
             {
                 break;
             }
@@ -249,7 +249,7 @@ static int drv_tty_read(char *buf, unsigned count)
                 break;
             }
 
-            // Block waiting for input
+            // Block waiting for input.
             asm volatile("hlt");
         }
     }
@@ -257,27 +257,27 @@ static int drv_tty_read(char *buf, unsigned count)
     return (int)read_count;
 }
 
-// Write to the TTY (stores in output buffer for terminal to read)
-// Output is NOT sent to console - terminal programs read and display it
-static int drv_tty_write(const char *buf, unsigned count)
+// Write to the TTY and store it for terminal programs.
+// Output is not sent to the console.
+static int drv_tty_write(const char *buffer, unsigned count)
 {
-    if (!buf)
+    if (!buffer)
     {
         return 0;
     }
 
-    for (unsigned i = 0; i < count; i++)
+    for (unsigned index = 0; index < count; index++)
     {
-        output_push(buf[i]);
+        output_push(buffer[index]);
     }
 
     return (int)count;
 }
 
-// Read from the output buffer (for terminal programs like gdterm)
-static int drv_tty_read_output(char *buf, unsigned count)
+// Read from the output buffer for terminal programs like gdterm.
+static int drv_tty_read_output(char *buffer, unsigned count)
 {
-    if (!buf || count == 0)
+    if (!buffer || count == 0)
     {
         return 0;
     }
@@ -288,9 +288,9 @@ static int drv_tty_read_output(char *buf, unsigned count)
 
     while (read_count < count && !output_empty())
     {
-        char c;
-        output_pop(&c);
-        buf[read_count++] = c;
+        char character;
+        output_pop(&character);
+        buffer[read_count++] = character;
     }
 
     asm volatile("sti");
@@ -298,19 +298,19 @@ static int drv_tty_read_output(char *buf, unsigned count)
     return (int)read_count;
 }
 
-// Set TTY mode
+// Set TTY mode.
 static void drv_tty_set_canonical(int enabled)
 {
     canonical_mode = enabled ? 1 : 0;
 }
 
-// Set echo mode
+// Set echo mode.
 static void drv_tty_set_echo(int enabled)
 {
     echo_enabled = enabled ? 1 : 0;
 }
 
-// Get whether input is available
+// Get whether input is available.
 static int drv_tty_input_available(void)
 {
     if (canonical_mode)
@@ -321,14 +321,14 @@ static int drv_tty_input_available(void)
     return !input_empty();
 }
 
-// Driver init called by loader
+// Driver init called by loader.
 __attribute__((section(".text")))
 void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
 
-    // Reset state
-    line_pos = 0;
+    // Reset state.
+    line_position = 0;
     line_ready = 0;
     input_head = 0;
     input_tail = 0;
@@ -337,7 +337,7 @@ void ddf_driver_init(kernel_exports_t *exports)
     echo_enabled = 1;
     canonical_mode = 1;
 
-    // Register the TTY driver in the kernel
+    // Register the TTY driver in the kernel.
     if (kernel->tty_register)
     {
         kernel->tty_register(drv_tty_read, drv_tty_write, drv_tty_input_char,
@@ -348,17 +348,17 @@ void ddf_driver_init(kernel_exports_t *exports)
     kernel->printf("[DRIVER] TTY Driver Installed\n");
 }
 
-// Driver exit called by loader
+// Driver exit called by loader.
 __attribute__((section(".text")))
 void ddf_driver_exit(void)
 {
     kernel->printf("[DRIVER] TTY Driver Uninstalled\n");
 }
 
-// IRQ handler (not used)
+// IRQ handler, not used.
 __attribute__((section(".text")))
-void ddf_driver_irq(unsigned irq, void *context)
+void ddf_driver_irq(unsigned irq_number, void *context)
 {
-    (void)irq;
+    (void)irq_number;
     (void)context;
 }

@@ -26,7 +26,6 @@ static volatile unsigned mouse_tail = 0;
 
 static uint8_t packet_buf[3];
 static int packet_index = 0;
-// Debug: capture a limited number of packets to verify activity
 
 static inline int fifo_empty(void)
 {
