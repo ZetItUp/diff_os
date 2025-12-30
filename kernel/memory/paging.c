@@ -1045,6 +1045,67 @@ void free_phys_page(uint32_t addr)
     if (index < limit) phys_ref_dec_idx(index);
 }
 
+// Allocate 'count' physically contiguous pages
+// Returns physical address of first page, or 0 on failure
+uint32_t alloc_phys_pages(uint32_t count)
+{
+    if (count == 0) return 0;
+    if (count == 1) return alloc_phys_page();
+
+    int limit = (max_phys_pages > 0 && max_phys_pages <= MAX_PHYS_PAGES)
+                    ? (int)max_phys_pages
+                    : MAX_PHYS_PAGES;
+
+    // Search for 'count' consecutive free pages
+    int run_start = -1;
+    int run_len = 0;
+
+    for (int i = 0; i < limit; i++)
+    {
+        if (!test_phys_page(i))
+        {
+            if (run_start < 0) run_start = i;
+            run_len++;
+
+            if (run_len >= (int)count)
+            {
+                // Found enough consecutive pages - allocate them
+                for (int j = run_start; j < run_start + (int)count; j++)
+                {
+                    set_phys_page(j);
+                    phys_page_refcnt[j] = 1;
+                }
+                return (uint32_t)run_start * PAGE_SIZE_4KB;
+            }
+        }
+        else
+        {
+            // Page in use, reset run
+            run_start = -1;
+            run_len = 0;
+        }
+    }
+
+    return 0;  // Not enough contiguous pages
+}
+
+// Free 'count' contiguous physical pages starting at 'addr'
+void free_phys_pages(uint32_t addr, uint32_t count)
+{
+    if (count == 0) return;
+
+    int start_index = (int)(addr / PAGE_SIZE_4KB);
+    int limit = (max_phys_pages > 0 && max_phys_pages <= MAX_PHYS_PAGES)
+                    ? (int)max_phys_pages
+                    : MAX_PHYS_PAGES;
+
+    for (uint32_t i = 0; i < count; i++)
+    {
+        int index = start_index + (int)i;
+        if (index < limit) phys_ref_dec_idx(index);
+    }
+}
+
 // ====== Flag helpers ======
 
 void paging_set_user(uint32_t addr, uint32_t size)

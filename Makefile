@@ -305,6 +305,8 @@ run: tools drivers $(TARGET)
 		-d guest_errors,trace:ioport_* -D qemu.log \
 		-boot c \
 		-hda $(TARGET) \
+		-netdev user,id=net0 \
+		-device rtl8139,netdev=net0 \
 		$(QEMU_EXTRA) \
 		-chardev file,id=dbg,path=/home/zet/os/debugcon.log \
 		-device isa-debugcon,iobase=0xe9,chardev=dbg
@@ -312,7 +314,7 @@ run: tools drivers $(TARGET)
 # Debug in QEMU with GDB
 debug: tools drivers $(TARGET)
 	@echo "[QEMU] Starting in debug mode"
-	@$(QEMU) -display default,show-cursor=off -monitor stdio -m 64M -vga std -boot c -hda $(TARGET) -s -S &
+	@$(QEMU) -display default,show-cursor=off -monitor stdio -m 64M -vga std -boot c -hda $(TARGET) -netdev user,id=net0 -device rtl8139,netdev=net0 -s -S &
 	@echo "[GDB] Starting debugger"
 	@gdb -x 1kernel.gdb
 
@@ -350,6 +352,8 @@ run-cd: $(CD_ISO)
 		-d guest_errors,trace:ioport_* -D qemu.log \
 		-boot d \
 		-cdrom $(CD_ISO) \
+		-netdev user,id=net0 \
+		-device rtl8139,netdev=net0 \
 		$(QEMU_EXTRA) \
 		-chardev file,id=dbg,path=/home/zet/os/debugcon.log \
 		-device isa-debugcon,iobase=0xe9,chardev=dbg

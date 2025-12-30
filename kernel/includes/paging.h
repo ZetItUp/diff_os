@@ -103,6 +103,8 @@ int free_region(uint32_t virt_start, uint32_t size_mb);
 
 uint32_t alloc_phys_page(void);
 void free_phys_page(uint32_t addr);
+uint32_t alloc_phys_pages(uint32_t count);
+void free_phys_pages(uint32_t addr, uint32_t count);
 
 void *umalloc(size_t size);
 void ufree(void *ptr, size_t size);

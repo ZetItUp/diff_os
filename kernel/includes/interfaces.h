@@ -46,6 +46,12 @@ typedef struct kernel_exports
                          void (*set_echo_fn)(int),
                          int (*available_fn)(void),
                          int (*read_output_fn)(char*, unsigned)); // Plug TTY backend
+
+    // DMA memory allocation (returns physical addresses)
+    uint32_t (*alloc_phys_page)(void);          // Allocate 4KB physical page, returns phys addr
+    void (*free_phys_page)(uint32_t addr);      // Free physical page
+    uint32_t (*alloc_phys_pages)(uint32_t count);  // Allocate N contiguous physical pages
+    void (*free_phys_pages)(uint32_t addr, uint32_t count);  // Free N contiguous pages
 } __attribute__((packed)) kernel_exports_t;
 
 // Keyboard-facing exports

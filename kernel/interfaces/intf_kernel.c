@@ -2,6 +2,7 @@
 #include "io.h"
 #include "stdio.h"
 #include "pic.h"
+#include "paging.h"
 
 kernel_exports_t g_exports = 
 {
@@ -26,4 +27,8 @@ kernel_exports_t g_exports =
     .pci_get_bar = pci_interface_get_bar,
     .mouse_register = mouse_register,
     .tty_register = tty_register,
+    .alloc_phys_page = alloc_phys_page,
+    .free_phys_page = free_phys_page,
+    .alloc_phys_pages = alloc_phys_pages,
+    .free_phys_pages = free_phys_pages,
 };
