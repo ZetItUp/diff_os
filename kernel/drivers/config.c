@@ -8,7 +8,7 @@
 #include "heap.h"
 #include "irq.h"
 
-#define MAX_DRIVERS 32
+#define MAX_DRIVERS 128
 
 typedef struct driver_record
 {

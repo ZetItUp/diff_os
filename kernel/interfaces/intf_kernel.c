@@ -3,6 +3,7 @@
 #include "stdio.h"
 #include "pic.h"
 #include "paging.h"
+#include "string.h"
 
 kernel_exports_t g_exports = 
 {
@@ -31,4 +32,7 @@ kernel_exports_t g_exports =
     .free_phys_page = free_phys_page,
     .alloc_phys_pages = alloc_phys_pages,
     .free_phys_pages = free_phys_pages,
+    .device_register = device_register,
+    .device_unregister = device_unregister,
+    .strlcpy = strlcpy,
 };

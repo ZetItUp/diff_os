@@ -74,6 +74,7 @@ KERNEL_SRC = \
 	kernel/arch/x86_64/cpu/tss.c \
 	kernel/drivers/ata.c \
 	kernel/drivers/config.c \
+	kernel/drivers/device.c \
 	kernel/drivers/module_loader.c \
 	kernel/system/system.c \
 	kernel/system/syscall.c \

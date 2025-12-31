@@ -1,4 +1,5 @@
 #include "drivers/ddf.h"
+#include "drivers/device.h"
 #include "interfaces.h"
 #include "stdint.h"
 #include "stddef.h"
@@ -19,6 +20,9 @@ volatile unsigned int ddf_irq_number = 12;
 typedef mouse_packet_t ps2_mouse_packet_t;
 
 static volatile kernel_exports_t *kernel = 0;
+
+// Device registration
+static device_t *g_mouse_device = 0;
 
 static volatile ps2_mouse_packet_t mouse_fifo[MOUSE_FIFO_SIZE];
 static volatile unsigned mouse_head = 0;
@@ -394,10 +398,46 @@ int ps2_mouse_read_blocking(ps2_mouse_packet_t *out)
             return ok;
         }
 
-        // TODO: Do not halt? 
+        // TODO: Do not halt?
         asm volatile("sti; hlt");
     }
 }
+
+// Device operations
+static input_type_t mouse_dev_get_type(device_t *dev)
+{
+    (void)dev;
+    return INPUT_TYPE_MOUSE;
+}
+
+static int mouse_dev_poll_available(device_t *dev)
+{
+    (void)dev;
+    return fifo_empty() ? 0 : 1;
+}
+
+static int mouse_dev_read_packet(device_t *dev, void *packet_out)
+{
+    (void)dev;
+    return ps2_mouse_read((ps2_mouse_packet_t *)packet_out);
+}
+
+static int mouse_dev_read_packet_blocking(device_t *dev, void *packet_out)
+{
+    (void)dev;
+    return ps2_mouse_read_blocking((ps2_mouse_packet_t *)packet_out);
+}
+
+static input_device_t g_mouse_ops =
+{
+    .get_type = mouse_dev_get_type,
+    .poll_available = mouse_dev_poll_available,
+    .read_scancode = 0,
+    .read_scancode_blocking = 0,
+    .set_leds = 0,
+    .read_packet = mouse_dev_read_packet,
+    .read_packet_blocking = mouse_dev_read_packet_blocking,
+};
 
 __attribute__((section(".text")))
 void ddf_driver_init(kernel_exports_t *exports)
@@ -416,6 +456,15 @@ void ddf_driver_init(kernel_exports_t *exports)
         kernel->mouse_register(ps2_mouse_read, ps2_mouse_read_blocking);
     }
 
+    // Register device
+    g_mouse_device = kernel->device_register(DEVICE_CLASS_INPUT, "ps2_mouse", &g_mouse_ops);
+    if (g_mouse_device)
+    {
+        g_mouse_device->bus_type = BUS_TYPE_PS2;
+        g_mouse_device->irq = 12;
+        kernel->strlcpy(g_mouse_device->description, "PS/2 Mouse", sizeof(g_mouse_device->description));
+    }
+
     mouse_service();
     kernel->pic_clear_mask(12);
     kernel->printf("[DRIVER] PS2 Mouse Installed!\n");
@@ -424,6 +473,12 @@ void ddf_driver_init(kernel_exports_t *exports)
 __attribute__((section(".text")))
 void ddf_driver_exit(void)
 {
+    if (g_mouse_device)
+    {
+        kernel->device_unregister(g_mouse_device);
+        g_mouse_device = 0;
+    }
+
     // Disable reporting
     (void)mouse_send_cmd(0xF5);
 

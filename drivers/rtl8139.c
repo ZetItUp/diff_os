@@ -1,5 +1,6 @@
 #include "drivers/driver.h"
 #include "drivers/ddf.h"
+#include "drivers/device.h"
 #include "io.h"
 #include "stdio.h"
 #include "stddef.h"
@@ -128,6 +129,9 @@ __attribute__((section(".ddf_meta"), used))
 volatile unsigned int ddf_irq_number = 11;
 
 static kernel_exports_t *kernel = NULL;
+
+// Device registration
+static device_t *g_nic_device = 0;
 
 static pci_device_t device;
 static int device_found = 0;
@@ -481,6 +485,45 @@ static void device_reset(void)
     }
 }
 
+// Device operations
+static int nic_dev_get_mac(device_t *dev, uint8_t mac[6])
+{
+    (void)dev;
+    for (int i = 0; i < 6; i++)
+        mac[i] = mac_address[i];
+    return 0;
+}
+
+static int nic_dev_send_packet(device_t *dev, const void *data, uint16_t length)
+{
+    (void)dev;
+    return rtl8139_send((const uint8_t *)data, length);
+}
+
+static int nic_dev_get_link_status(device_t *dev)
+{
+    (void)dev;
+    return device_found ? 1 : 0;
+}
+
+static uint32_t nic_dev_get_speed(device_t *dev)
+{
+    (void)dev;
+    return 100;  // RTL8139 is 100 Mbps
+}
+
+static network_device_t g_nic_ops =
+{
+    .get_mac = nic_dev_get_mac,
+    .send_packet = nic_dev_send_packet,
+    .receive_packet = 0,
+    .packets_available = 0,
+    .get_link_status = nic_dev_get_link_status,
+    .get_speed = nic_dev_get_speed,
+    .set_promiscuous = 0,
+    .set_multicast = 0,
+};
+
 void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
@@ -537,11 +580,29 @@ void ddf_driver_init(kernel_exports_t *exports)
     // Enable interrupts
     enable_interrupts();
 
+    // Register device
+    g_nic_device = kernel->device_register(DEVICE_CLASS_NETWORK, "rtl8139", &g_nic_ops);
+    if (g_nic_device)
+    {
+        g_nic_device->bus_type = BUS_TYPE_PCI;
+        g_nic_device->vendor_id = VENDOR_ID;
+        g_nic_device->device_id = DEVICE_ID;
+        g_nic_device->irq = device_irq;
+        g_nic_device->io_base = io_base;
+        kernel->strlcpy(g_nic_device->description, "Realtek RTL8139 Fast Ethernet", sizeof(g_nic_device->description));
+    }
+
     kernel->printf("[DRIVER] RTL8139 Network Driver Installed!\n");
 }
 
 void ddf_driver_exit(void)
 {
+    if (g_nic_device)
+    {
+        kernel->device_unregister(g_nic_device);
+        g_nic_device = 0;
+    }
+
     // Disable interrupts
     kernel->outw(io_base + REG_IMR, 0);
     kernel->pic_set_mask(device_irq);

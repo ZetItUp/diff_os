@@ -1,4 +1,5 @@
 #include "drivers/ddf.h"
+#include "drivers/device.h"
 #include "interfaces.h"
 #include "stdint.h"
 #include "stddef.h"
@@ -13,6 +14,9 @@ volatile unsigned int ddf_irq_number = 0;
 
 // Kernel exports from loader.
 static volatile kernel_exports_t *kernel = 0;
+
+// Device registration
+static device_t *g_tty_device = 0;
 
 // Line buffer for canonical input.
 static char line_buffer[TTY_LINE_SIZE];
@@ -321,6 +325,74 @@ static int drv_tty_input_available(void)
     return !input_empty();
 }
 
+// Device operations
+static int tty_dev_read(device_t *dev, char *buffer, unsigned count)
+{
+    (void)dev;
+    return drv_tty_read(buffer, count);
+}
+
+static int tty_dev_write(device_t *dev, const char *buffer, unsigned count)
+{
+    (void)dev;
+    return drv_tty_write(buffer, count);
+}
+
+static void tty_dev_input_char(device_t *dev, char c)
+{
+    (void)dev;
+    drv_tty_input_char(c);
+}
+
+static int tty_dev_input_available(device_t *dev)
+{
+    (void)dev;
+    return drv_tty_input_available();
+}
+
+static void tty_dev_set_canonical(device_t *dev, int enabled)
+{
+    (void)dev;
+    drv_tty_set_canonical(enabled);
+}
+
+static void tty_dev_set_echo(device_t *dev, int enabled)
+{
+    (void)dev;
+    drv_tty_set_echo(enabled);
+}
+
+static int tty_dev_get_canonical(device_t *dev)
+{
+    (void)dev;
+    return canonical_mode;
+}
+
+static int tty_dev_get_echo(device_t *dev)
+{
+    (void)dev;
+    return echo_enabled;
+}
+
+static int tty_dev_read_output(device_t *dev, char *buffer, unsigned count)
+{
+    (void)dev;
+    return drv_tty_read_output(buffer, count);
+}
+
+static tty_device_t g_tty_ops =
+{
+    .read = tty_dev_read,
+    .write = tty_dev_write,
+    .input_char = tty_dev_input_char,
+    .input_available = tty_dev_input_available,
+    .set_canonical = tty_dev_set_canonical,
+    .set_echo = tty_dev_set_echo,
+    .get_canonical = tty_dev_get_canonical,
+    .get_echo = tty_dev_get_echo,
+    .read_output = tty_dev_read_output,
+};
+
 // Driver init called by loader.
 __attribute__((section(".text")))
 void ddf_driver_init(kernel_exports_t *exports)
@@ -345,6 +417,14 @@ void ddf_driver_init(kernel_exports_t *exports)
                              drv_tty_input_available, drv_tty_read_output);
     }
 
+    // Register device
+    g_tty_device = kernel->device_register(DEVICE_CLASS_TTY, "tty0", &g_tty_ops);
+    if (g_tty_device)
+    {
+        g_tty_device->bus_type = BUS_TYPE_VIRTUAL;
+        kernel->strlcpy(g_tty_device->description, "Virtual TTY", sizeof(g_tty_device->description));
+    }
+
     kernel->printf("[DRIVER] TTY Driver Installed\n");
 }
 
@@ -352,6 +432,12 @@ void ddf_driver_init(kernel_exports_t *exports)
 __attribute__((section(".text")))
 void ddf_driver_exit(void)
 {
+    if (g_tty_device)
+    {
+        kernel->device_unregister(g_tty_device);
+        g_tty_device = 0;
+    }
+
     kernel->printf("[DRIVER] TTY Driver Uninstalled\n");
 }
 

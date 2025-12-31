@@ -18,6 +18,7 @@
 #include "timer.h"
 #include "system/shared_mem.h"
 #include "system/signal.h"
+#include "drivers/device.h"
 
 struct dirent;
 
@@ -154,6 +155,41 @@ static int system_console_get_color(uint32_t *out)
     uint32_t val = (uint32_t)fg | ((uint32_t)bg << 8);
 
     if(copy_to_user(out, &val, sizeof(val)) != 0)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+// Device syscalls
+int system_device_count(int class_filter)
+{
+    if (class_filter < 0)
+    {
+        return device_get_count();
+    }
+
+    return device_get_count_by_class((device_class_t)class_filter);
+}
+
+int system_device_info(int index, device_info_t *user_info)
+{
+    if (!user_info)
+    {
+        return -1;
+    }
+
+    device_t *dev = device_get_by_index(index);
+    if (!dev)
+    {
+        return -1;
+    }
+
+    device_info_t info;
+    device_to_info(dev, &info);
+
+    if (copy_to_user(user_info, &info, sizeof(info)) != 0)
     {
         return -1;
     }
@@ -1038,6 +1074,16 @@ int system_call_dispatch(struct syscall_frame *f)
         case SYSTEM_MOUSE_GET_BUTTONS_CLICKED:
         {
             ret = mouse_get_buttons_clicked();
+            break;
+        }
+        case SYSTEM_DEVICE_COUNT:
+        {
+            ret = system_device_count(arg0);
+            break;
+        }
+        case SYSTEM_DEVICE_INFO:
+        {
+            ret = system_device_info(arg0, (device_info_t *)(uintptr_t)arg1);
             break;
         }
         default:

@@ -1,5 +1,6 @@
 #include "drivers/driver.h"
 #include "drivers/ddf.h"
+#include "drivers/device.h"
 #include "io.h"
 #include "stdio.h"
 #include "stddef.h"
@@ -37,6 +38,9 @@ typedef enum
 
 // Kernel export table from loader
 static volatile kernel_exports_t *kernel = 0;
+
+// Device registration
+static device_t *g_keyboard_device = 0;
 
 // Command queue storage and tracking
 static kb_cmd_t kb_cmdq[KB_CMD_QUEUE_SIZE] = {0};
@@ -293,6 +297,42 @@ uint8_t keyboard_read_byte_blocking(void)
     }
 }
 
+// Device operations
+static input_type_t kb_dev_get_type(device_t *dev)
+{
+    (void)dev;
+    return INPUT_TYPE_KEYBOARD;
+}
+
+static int kb_dev_poll_available(device_t *dev)
+{
+    (void)dev;
+    return keyboard_fifo_empty() ? 0 : 1;
+}
+
+static int kb_dev_read_scancode(device_t *dev, uint8_t *out)
+{
+    (void)dev;
+    return keyboard_read_byte(out);
+}
+
+static uint8_t kb_dev_read_scancode_blocking(device_t *dev)
+{
+    (void)dev;
+    return keyboard_read_byte_blocking();
+}
+
+static input_device_t g_kb_ops =
+{
+    .get_type = kb_dev_get_type,
+    .poll_available = kb_dev_poll_available,
+    .read_scancode = kb_dev_read_scancode,
+    .read_scancode_blocking = kb_dev_read_scancode_blocking,
+    .set_leds = 0,
+    .read_packet = 0,
+    .read_packet_blocking = 0,
+};
+
 // Stop and start scanning to be safe after init
 static int ps2_keyboard_enable_scanning_sync(void)
 {
@@ -324,6 +364,16 @@ void ddf_driver_init(kernel_exports_t *exports)
     ps2_keyboard_enable_scanning_sync();
     i8042_service(); // Pull any pending bytes into FIFO
     kernel->keyboard_register(keyboard_read_byte, keyboard_read_byte_blocking);
+
+    // Register device
+    g_keyboard_device = kernel->device_register(DEVICE_CLASS_INPUT, "ps2_keyboard", &g_kb_ops);
+    if (g_keyboard_device)
+    {
+        g_keyboard_device->bus_type = BUS_TYPE_PS2;
+        g_keyboard_device->irq = 1;
+        kernel->strlcpy(g_keyboard_device->description, "PS/2 Keyboard", sizeof(g_keyboard_device->description));
+    }
+
     kernel->pic_clear_mask(1); // Unmask IRQ1
     kernel->printf("[DRIVER] PS2 Keyboard Driver Installed\n");
 }
@@ -332,6 +382,12 @@ void ddf_driver_init(kernel_exports_t *exports)
 __attribute__((section(".text")))
 void ddf_driver_exit(void)
 {
+    if (g_keyboard_device)
+    {
+        kernel->device_unregister(g_keyboard_device);
+        g_keyboard_device = 0;
+    }
+
     kernel->pic_set_mask(1); // Mask IRQ1
     kernel->printf("[DRIVER] PS2 Keyboard Driver Uninstalled\n");
 }

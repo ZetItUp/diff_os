@@ -3,6 +3,7 @@
 #include "stdint.h"
 #include "stdarg.h"
 #include "pci.h"
+#include "drivers/device.h"
 
 // Mouse packet (relative movement + buttons)
 typedef struct mouse_packet
@@ -52,6 +53,13 @@ typedef struct kernel_exports
     void (*free_phys_page)(uint32_t addr);      // Free physical page
     uint32_t (*alloc_phys_pages)(uint32_t count);  // Allocate N contiguous physical pages
     void (*free_phys_pages)(uint32_t addr, uint32_t count);  // Free N contiguous pages
+
+    // Device registration
+    device_t *(*device_register)(device_class_t class, const char *name, void *operations);
+    void (*device_unregister)(device_t *dev);
+
+    // String utilities
+    size_t (*strlcpy)(char *dst, const char *src, size_t siz);
 } __attribute__((packed)) kernel_exports_t;
 
 // Keyboard-facing exports

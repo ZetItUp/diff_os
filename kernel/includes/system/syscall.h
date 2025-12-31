@@ -1,6 +1,7 @@
 #pragma once
 
 #include "system.h"
+#include "drivers/device.h"
 
 #define KERNEL_CS   0x08
 #define KERNEL_DS   0x10
@@ -87,6 +88,8 @@ enum
     SYSTEM_SIGNAL_GETMASK = 75,
     SYSTEM_TTY_READ_OUTPUT = 76,
     SYSTEM_TTY_SET_OUTPUT = 77,
+    SYSTEM_DEVICE_COUNT = 78,
+    SYSTEM_DEVICE_INFO = 79,
 };
 
 struct syscall_frame 
@@ -163,3 +166,7 @@ int system_getcwd(char *out, size_t out_sz);
 int system_getexecroot(char *out, size_t out_sz);
 
 int system_video_mode_get(video_mode_info_t *video_out);
+
+// Device syscalls
+int system_device_count(int class_filter);
+int system_device_info(int index, device_info_t *user_info);

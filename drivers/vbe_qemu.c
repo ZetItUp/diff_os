@@ -1,4 +1,5 @@
 #include "drivers/ddf.h"
+#include "drivers/device.h"
 #include "interfaces.h"
 #include "stdint.h"
 #include "stddef.h"
@@ -40,6 +41,9 @@ static uint32_t g_req_bpp    = 32;
 static kernel_exports_t *kernel = 0;
 static pci_device_t g_vga_device;
 static int g_vga_found = 0;
+
+// Device registration
+static device_t *g_display_device = 0;
 
 // This driver does not use interrupts, set IRQ to 0
 __attribute__((section(".ddf_meta"), used))
@@ -230,6 +234,38 @@ static vbe_mode_info_t *vbe_get_info(void)
     return &g_mode;
 }
 
+// Device operations
+static int display_dev_get_current_mode(device_t *dev, display_mode_t *mode)
+{
+    (void)dev;
+    if (!mode) return -1;
+    mode->width = g_mode.width;
+    mode->height = g_mode.height;
+    mode->bpp = g_mode.bpp;
+    mode->pitch = g_mode.pitch_bytes;
+    mode->phys_base = g_mode.phys_base;
+    return 0;
+}
+
+static int display_dev_set_mode(device_t *dev, uint32_t width, uint32_t height, uint32_t bpp)
+{
+    (void)dev;
+    return vbe_set_mode(width, height, bpp);
+}
+
+static display_device_t g_display_ops =
+{
+    .get_current_mode = display_dev_get_current_mode,
+    .set_mode = display_dev_set_mode,
+    .get_mode_count = 0,
+    .get_mode_info = 0,
+    .get_framebuffer = 0,
+    .get_framebuffer_size = 0,
+    .clear = 0,
+    .put_pixel = 0,
+    .fill_rect = 0,
+};
+
 // Driver init entry point called by the module loader
 void ddf_driver_init(kernel_exports_t *exports)
 {
@@ -304,6 +340,17 @@ void ddf_driver_init(kernel_exports_t *exports)
                               g_mode.pitch_bytes);
     }
 
+    // Register device
+    g_display_device = exports->device_register(DEVICE_CLASS_DISPLAY, "vbe_qemu", &g_display_ops);
+    if (g_display_device)
+    {
+        g_display_device->bus_type = BUS_TYPE_PCI;
+        g_display_device->vendor_id = g_vga_device.vendor_id;
+        g_display_device->device_id = g_vga_device.device_id;
+        g_display_device->mmio_base = g_mode.phys_base;
+        exports->strlcpy(g_display_device->description, "QEMU/Bochs VBE Display", sizeof(g_display_device->description));
+    }
+
     exports->printf("[DRIVER] VBE Graphics Driver Installed\n");
 }
 
@@ -316,6 +363,12 @@ void ddf_driver_irq(unsigned irq, void *context)
 
 void ddf_driver_exit(void)
 {
+    if (g_display_device)
+    {
+        kernel->device_unregister(g_display_device);
+        g_display_device = 0;
+    }
+
     vbe_write_reg(VBE_DISPI_INDEX_ENABLE, 0);
     kernel->printf("[DRIVER] VBE Graphics Driver Uninstalled\n");
 }

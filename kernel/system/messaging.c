@@ -6,6 +6,7 @@
 #include "system/scheduler.h"
 #include "system/spinlock.h"
 #include "system/threads.h"
+#include "timer.h"
 
 static msg_channel_t g_channels[MESSAGES_MAX_CHANNELS];
 
