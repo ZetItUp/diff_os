@@ -53,7 +53,7 @@ void menubar_init(menubar_t *menubar, int x, int y, int width)
 
     menubar->base.update = menubar_update;
     menubar->base.draw = menubar_paint;
-    menubar->base.on_mouse_leave = menubar_on_mouse_leave;
+    window_component_set_mouse_callbacks(&menubar->base, NULL, menubar_on_mouse_leave);
 }
 
 int menubar_add_menu(menubar_t *menubar, const char *title)

@@ -18,16 +18,9 @@ struct window_component_t
     bool visible;
     bool enabled;
 
-    // Mouse tracking
-    bool mouse_inside;
-
     // Window Component Functions
     void (*update)(window_component_t *self);
     void (*draw)(window_component_t *self);
-
-    // Mouse enter/leave callbacks (optional)
-    void (*on_mouse_enter)(window_component_t *self);
-    void (*on_mouse_leave)(window_component_t *self);
 };
 
 void window_component_init(window_component_t *window_comp, int x, int y, int width, int height);
@@ -36,6 +29,11 @@ void window_component_draw(window_component_t *self);
 
 // Check if point is inside component bounds
 bool window_component_contains(window_component_t *self, int x, int y);
+
+// Register mouse enter/leave callbacks for a component
+void window_component_set_mouse_callbacks(window_component_t *self,
+                                          void (*on_mouse_enter)(window_component_t *self),
+                                          void (*on_mouse_leave)(window_component_t *self));
 
 // Update mouse tracking and fire enter/leave events
 // Returns true if mouse state changed (entered or left)
