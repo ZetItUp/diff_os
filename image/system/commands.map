@@ -7,6 +7,7 @@ gdterm=/programs/gdterm/gdterm.dex
 launcher=/programs/launcher/launcher.dex
 
 # Test Programs
+helloc=programs/helloc++/helloc++.dex
 ptest=/programs/ptest/ptest.dex
 ttest=/programs/ttest/ttest.dex
 brktest=/programs/brktest/brktest.dex
@@ -22,6 +23,7 @@ threadtest=/programs/threadtest/threadtest.dex
 fpstest=/programs/fpstest/fpstest.dex
 mousetest=/programs/mousetest/mousetest.dex
 sigtest=/programs/sigtest/sigtest.dex
+menutest=/programs/menutest/menutest.dex
 
 # Games
 doom=/games/doom/doom.dex

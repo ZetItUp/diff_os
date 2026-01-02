@@ -15,14 +15,17 @@ OUT_ROOT  := ../image/programs
 # Excluded directories (templates, etc.)
 EXCLUDED_DIRS := window_template
 
-# All program directories where <dir>/<dir>.c exists
-ALL_PROGRAMS := $(filter-out $(EXCLUDED_DIRS),$(foreach d,$(patsubst %/,%,$(wildcard */)),$(if $(wildcard $d/$d.c),$d)))
+# All program directories
+ALL_DIRS := $(filter-out $(EXCLUDED_DIRS),$(patsubst %/,%,$(wildcard */)))
 
-# Programs with their own Makefile (multi-file builds)
-CUSTOM_PROGRAMS := $(foreach d,$(ALL_PROGRAMS),$(if $(wildcard $d/Makefile),$d))
+# Programs with their own Makefile (custom builds)
+CUSTOM_PROGRAMS := $(foreach d,$(ALL_DIRS),$(if $(wildcard $d/Makefile),$d))
 
 # Programs without Makefile (single-file builds)
-SIMPLE_PROGRAMS := $(filter-out $(CUSTOM_PROGRAMS),$(ALL_PROGRAMS))
+SIMPLE_PROGRAMS := $(filter-out $(CUSTOM_PROGRAMS),$(foreach d,$(ALL_DIRS),$(if $(wildcard $d/$d.c),$d)))
+
+# All programs
+ALL_PROGRAMS := $(CUSTOM_PROGRAMS) $(SIMPLE_PROGRAMS)
 
 LIBMAP   := libmap.json
 DEFAULT_EXL := diffc.exl

@@ -1,5 +1,6 @@
 #include <diffwm/terminal_component.h>
 #include <diffwm/window_component.h>
+#include <diffwm/window.h>
 #include <string.h>
 
 #include <stdbool.h>
@@ -424,9 +425,20 @@ void terminal_component_update(window_component_t *self)
 
 void terminal_component_paint(window_component_t *self)
 {
-    // Placeholder for polymorphic interface
-    // Direct rendering is done via terminal_component_render()
-    (void)self;
+    if (!self)
+    {
+        return;
+    }
+
+    terminal_component_t *term = (terminal_component_t *)self;
+    window_t *parent = self->parent;
+
+    if (!parent || !parent->backbuffer)
+    {
+        return;
+    }
+
+    terminal_component_render(term, parent->backbuffer, parent->base.width);
 }
 
 // Fast 32-bit memset for terminal
@@ -452,6 +464,8 @@ void terminal_component_render(terminal_component_t *term, uint32_t *pixels, int
 
     int width = term->base.width;
     int height = term->base.height;
+    int origin_x = term->base.x;
+    int origin_y = term->base.y;
     int fh = font_height(term->font);
     int fw = font_width(term->font);
     int max_visible_lines = terminal_max_visible_lines(term, fh, height);
@@ -465,8 +479,11 @@ void terminal_component_render(terminal_component_t *term, uint32_t *pixels, int
     uint32_t bg = (term->bg_color.a << 24) | (term->bg_color.r << 16) |
                   (term->bg_color.g << 8) | term->bg_color.b;
 
-    size_t total = (size_t)width * height;
-    term_memset32(pixels, bg, total);
+    for (int y = 0; y < height; y++)
+    {
+        uint32_t *row = pixels + (size_t)(origin_y + y) * pitch_pixels + origin_x;
+        term_memset32(row, bg, (size_t)width);
+    }
 
     // Render selection highlight (if any)
     // text_render_selection(pixels, pitch_pixels, width, height,
@@ -480,10 +497,10 @@ void terminal_component_render(terminal_component_t *term, uint32_t *pixels, int
         if (start_line < 0) start_line = 0;
     }
 
-    int y_pos = 8;
+    int y_pos = origin_y + 8;
     for (int i = start_line; i < term->line_count && i < TERM_MAX_LINES; i++)
     {
-        int x_pos = 8;
+        int x_pos = origin_x + 8;
         for (int j = 0; j < term->lines[i].len && j < TERM_MAX_COLS; j++)
         {
             term_color_t fg = term->lines[i].colors[j];
@@ -493,23 +510,23 @@ void terminal_component_render(terminal_component_t *term, uint32_t *pixels, int
             x_pos += fw;
         }
         y_pos += fh;
-        if (y_pos >= height - fh)
+        if (y_pos >= origin_y + height - fh)
             break;
     }
 
     // Draw cursor as underscore
     if (term->cursor_y >= start_line && term->cursor_y < term->line_count)
     {
-        int cursor_screen_y = 8 + (term->cursor_y - start_line) * fh;
-        int cursor_screen_x = 8 + term->cursor_x * fw;
+        int cursor_screen_y = origin_y + 8 + (term->cursor_y - start_line) * fh;
+        int cursor_screen_x = origin_x + 8 + term->cursor_x * fw;
 
-        if (cursor_screen_y < height - fh)
+        if (cursor_screen_y < origin_y + height - fh)
         {
             for (int x = 0; x < fw - 1; x++)
             {
                 int px = cursor_screen_x + x;
                 int py = cursor_screen_y + fh - 5;
-                if (px < width && py < height)
+                if (px < origin_x + width && py < origin_y + height)
                 {
                     uint32_t cursor_color = (term->current_color.a << 24) |
                                            (term->current_color.r << 16) |

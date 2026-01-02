@@ -16,6 +16,7 @@
  *     - label_init()            Initialize label component
  *     - textbox_init()          Initialize textbox component
  *     - button_init()           Initialize button component
+ *     - menubar_init()          Initialize menu bar component
  *     - terminal_component_init() Initialize terminal component
  *
  *   Text utilities (text_utils.h):
@@ -29,6 +30,7 @@
 #include <diffwm/label.h>
 #include <diffwm/textbox.h>
 #include <diffwm/button.h>
+#include <diffwm/menu.h>
 #include <diffwm/terminal_component.h>
 #include <diffwm/text_utils.h>
 #include <diffwm/diff_ipc.h>

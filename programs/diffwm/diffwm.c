@@ -664,6 +664,7 @@ static int g_desktop_icon_count = 0;
 static char g_desktop_root[256] = {0};
 static tga_image_t *g_desktop_default_icon = NULL;
 static tga_image_t *g_desktop_text_icon = NULL;
+static tga_image_t *g_desktop_dir_icon = NULL;
 
 static void wm_desktop_layout_icons(void)
 {
@@ -768,6 +769,11 @@ static void wm_desktop_load_icons(void)
                 strncpy(icon->launch_path, target, sizeof(icon->launch_path) - 1);
                 icon->launch_path[sizeof(icon->launch_path) - 1] = '\0';
             }
+        }
+
+        if (icon->type == DT_DIR)
+        {
+            icon->icon_img = g_desktop_dir_icon;
         }
 
         if (wm_path_has_suffix(icon->launch_path, ".dex"))
@@ -1814,6 +1820,7 @@ int main(void)
     titlebar_init();
     g_desktop_default_icon = tga_load("/system/graphics/icons/empty_file.tga");
     g_desktop_text_icon = tga_load("/system/graphics/icons/text_file.tga");
+    g_desktop_dir_icon = tga_load("/system/graphics/icons/directory.tga");
 
     // Set mouse bounds and center cursor
     system_mouse_set_bounds((int)g_mode.width, (int)g_mode.height);
