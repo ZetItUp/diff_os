@@ -15,47 +15,52 @@
 #define MOUSE_FIFO_SIZE     64
 
 __attribute__((section(".ddf_meta"), used))
-volatile unsigned int ddf_irq_number = 12;
+volatile unsigned int ddf_irq_number = 0;
 
 typedef mouse_packet_t ps2_mouse_packet_t;
 
 static volatile kernel_exports_t *kernel = 0;
 
-// Device registration
-static device_t *g_mouse_device = 0;
-
-static volatile ps2_mouse_packet_t mouse_fifo[MOUSE_FIFO_SIZE];
-static volatile unsigned mouse_head = 0;
-static volatile unsigned mouse_tail = 0;
-
-static uint8_t packet_buf[3];
-static int packet_index = 0;
-
-static inline int fifo_empty(void)
+typedef struct ps2_mouse_device
 {
-    return mouse_head == mouse_tail;
+    device_t *dev;
+    uint8_t irq;
+    volatile ps2_mouse_packet_t fifo[MOUSE_FIFO_SIZE];
+    volatile unsigned head;
+    volatile unsigned tail;
+    uint8_t packet_buf[3];
+    int packet_index;
+} ps2_mouse_device_t;
+
+// Device registration
+static ps2_mouse_device_t g_mouse_devices[1];
+static ps2_mouse_device_t *g_mouse_primary = 0;
+
+static inline int fifo_empty(ps2_mouse_device_t *mouse)
+{
+    return mouse->head == mouse->tail;
 }
 
-static inline void fifo_push(ps2_mouse_packet_t packet)
+static inline void fifo_push(ps2_mouse_device_t *mouse, ps2_mouse_packet_t packet)
 {
-    unsigned next = (mouse_tail + 1) & (MOUSE_FIFO_SIZE - 1);
+    unsigned next = (mouse->tail + 1) & (MOUSE_FIFO_SIZE - 1);
 
-    if(next != mouse_head)
+    if(next != mouse->head)
     {
-        mouse_fifo[mouse_tail] = packet;
-        mouse_tail = next;
+        mouse->fifo[mouse->tail] = packet;
+        mouse->tail = next;
     }
 }
 
-static inline int fifo_pop(ps2_mouse_packet_t *out)
+static inline int fifo_pop(ps2_mouse_device_t *mouse, ps2_mouse_packet_t *out)
 {
-    if(fifo_empty())
+    if(fifo_empty(mouse))
     {
         return 0;
     }
 
-    *out = mouse_fifo[mouse_head];
-    mouse_head = (mouse_head + 1) & (MOUSE_FIFO_SIZE - 1);
+    *out = mouse->fifo[mouse->head];
+    mouse->head = (mouse->head + 1) & (MOUSE_FIFO_SIZE - 1);
 
     return 1;
 }
@@ -108,6 +113,7 @@ static int ps2_read_output(uint8_t *out, int require_aux)
         if(!(status & PS2_STATUS_OUT))
         {
             kernel->io_wait();
+
             continue;
         }
 
@@ -116,6 +122,7 @@ static int ps2_read_output(uint8_t *out, int require_aux)
             // Skip keyboard/controller bytes when expecting mouse data
             (void)kernel->inb(PS2_DATA_PORT);
             kernel->io_wait();
+
             continue;
         }
 
@@ -125,6 +132,7 @@ static int ps2_read_output(uint8_t *out, int require_aux)
         {
             *out = data;
         }
+
 
         return 0;
     }
@@ -148,6 +156,7 @@ static int mouse_write_device(uint8_t val)
 
     kernel->outb(PS2_DATA_PORT, val);
     
+
     return 0;
 }
 
@@ -314,41 +323,53 @@ static int mouse_hw_init(void)
         goto fail;
     }
 
-    packet_index = 0;
+    if (g_mouse_primary)
+    {
+        g_mouse_primary->packet_index = 0;
+    }
+
     flush_output_buffer();
 
-    if (ints_were_enabled) asm volatile("sti");
+    if (ints_were_enabled)
+    {
+        asm volatile("sti");
+    }
+
     return 0;
 
 fail:
-    if (ints_were_enabled) asm volatile("sti");
+    if (ints_were_enabled)
+    {
+        asm volatile("sti");
+    }
+
     return -1;
 }
 
-static void handle_packet_byte(uint8_t byte)
+static void handle_packet_byte(ps2_mouse_device_t *mouse, uint8_t byte)
 {
-    if(packet_index == 0 && !(byte & 0x08))
+    if(mouse->packet_index == 0 && !(byte & 0x08))
     {
         // First byte must have Always-1 bit set
         return;
     }
 
-    packet_buf[packet_index++] = byte;
+    mouse->packet_buf[mouse->packet_index++] = byte;
 
-    if(packet_index == 3)
+    if(mouse->packet_index == 3)
     {
-        packet_index = 0;
+        mouse->packet_index = 0;
 
         ps2_mouse_packet_t packet;
-        packet.buttons = (uint8_t)(packet_buf[0] & 0x07);
-        packet.dx = (int8_t)packet_buf[1];
-        packet.dy = (int8_t)packet_buf[2];
+        packet.buttons = (uint8_t)(mouse->packet_buf[0] & 0x07);
+        packet.dx = (int8_t)mouse->packet_buf[1];
+        packet.dy = (int8_t)mouse->packet_buf[2];
 
-        fifo_push(packet);
+        fifo_push(mouse, packet);
     }
 }
 
-static void mouse_service(void)
+static void mouse_service(ps2_mouse_device_t *mouse)
 {
     for(;;)
     {
@@ -363,20 +384,20 @@ static void mouse_service(void)
 
         if(status & PS2_STATUS_AUX)
         {
-            handle_packet_byte(data);
+            handle_packet_byte(mouse, data);
         }
     }
 }
 
-int ps2_mouse_read(ps2_mouse_packet_t *out)
+static int ps2_mouse_read_device(ps2_mouse_device_t *mouse, ps2_mouse_packet_t *out)
 {
     int result = 0;
 
     asm volatile("cli");
 
-    if(!fifo_empty())
+    if(!fifo_empty(mouse))
     {
-        result = fifo_pop(out); 
+        result = fifo_pop(mouse, out); 
     }
 
     asm volatile("sti");
@@ -384,15 +405,15 @@ int ps2_mouse_read(ps2_mouse_packet_t *out)
     return result;
 }
 
-int ps2_mouse_read_blocking(ps2_mouse_packet_t *out)
+static int ps2_mouse_read_blocking_device(ps2_mouse_device_t *mouse, ps2_mouse_packet_t *out)
 {
     for(;;)
     {
         asm volatile("cli");
 
-        if(!fifo_empty())
+        if(!fifo_empty(mouse))
         {
-            int ok = fifo_pop(out);
+            int ok = fifo_pop(mouse, out);
             asm volatile ("sti");
 
             return ok;
@@ -403,29 +424,58 @@ int ps2_mouse_read_blocking(ps2_mouse_packet_t *out)
     }
 }
 
+int ps2_mouse_read(ps2_mouse_packet_t *out)
+{
+    if (!g_mouse_primary)
+    {
+        return 0;
+    }
+
+    return ps2_mouse_read_device(g_mouse_primary, out);
+}
+
+int ps2_mouse_read_blocking(ps2_mouse_packet_t *out)
+{
+    if (!g_mouse_primary)
+    {
+        return 0;
+    }
+
+    return ps2_mouse_read_blocking_device(g_mouse_primary, out);
+}
+
 // Device operations
 static input_type_t mouse_dev_get_type(device_t *dev)
 {
     (void)dev;
+
     return INPUT_TYPE_MOUSE;
 }
 
 static int mouse_dev_poll_available(device_t *dev)
 {
-    (void)dev;
-    return fifo_empty() ? 0 : 1;
+    ps2_mouse_device_t *mouse = (ps2_mouse_device_t *)dev->private_data;
+
+    if (!mouse)
+    {
+        return 0;
+    }
+
+    return fifo_empty(mouse) ? 0 : 1;
 }
 
 static int mouse_dev_read_packet(device_t *dev, void *packet_out)
 {
-    (void)dev;
-    return ps2_mouse_read((ps2_mouse_packet_t *)packet_out);
+    ps2_mouse_device_t *mouse = (ps2_mouse_device_t *)dev->private_data;
+
+    return ps2_mouse_read_device(mouse, (ps2_mouse_packet_t *)packet_out);
 }
 
 static int mouse_dev_read_packet_blocking(device_t *dev, void *packet_out)
 {
-    (void)dev;
-    return ps2_mouse_read_blocking((ps2_mouse_packet_t *)packet_out);
+    ps2_mouse_device_t *mouse = (ps2_mouse_device_t *)dev->private_data;
+
+    return ps2_mouse_read_blocking_device(mouse, (ps2_mouse_packet_t *)packet_out);
 }
 
 static input_device_t g_mouse_ops =
@@ -439,10 +489,55 @@ static input_device_t g_mouse_ops =
     .read_packet_blocking = mouse_dev_read_packet_blocking,
 };
 
+static void ps2_mouse_irq_handler(unsigned irq, void *context);
+
+static int ps2_mouse_stop(device_t *dev)
+{
+    (void)dev;
+    // Disable reporting
+    (void)mouse_send_cmd(0xF5);
+    kernel->pic_set_mask(12);
+
+    return 0;
+}
+
+static void ps2_mouse_cleanup(device_t *dev)
+{
+    ps2_mouse_device_t *mouse = (ps2_mouse_device_t *)dev->private_data;
+
+    if (!mouse)
+    {
+        return;
+    }
+
+    kernel->irq_unregister_handler(mouse->irq, ps2_mouse_irq_handler, mouse);
+}
+
+static void ps2_mouse_irq_handler(unsigned irq, void *context)
+{
+    (void)irq;
+
+    ps2_mouse_device_t *mouse = (ps2_mouse_device_t *)context;
+
+    if (!mouse)
+    {
+        return;
+    }
+
+    mouse_service(mouse);
+}
+
 __attribute__((section(".text")))
 void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
+
+    g_mouse_primary = &g_mouse_devices[0];
+    g_mouse_primary->dev = 0;
+    g_mouse_primary->irq = 12;
+    g_mouse_primary->head = 0;
+    g_mouse_primary->tail = 0;
+    g_mouse_primary->packet_index = 0;
 
     if(mouse_hw_init() != 0)
     {
@@ -457,15 +552,19 @@ void ddf_driver_init(kernel_exports_t *exports)
     }
 
     // Register device
-    g_mouse_device = kernel->device_register(DEVICE_CLASS_INPUT, "ps2_mouse", &g_mouse_ops);
-    if (g_mouse_device)
+    g_mouse_primary->dev = kernel->device_register(DEVICE_CLASS_INPUT, "ps2_mouse", &g_mouse_ops);
+    if (g_mouse_primary->dev)
     {
-        g_mouse_device->bus_type = BUS_TYPE_PS2;
-        g_mouse_device->irq = 12;
-        kernel->strlcpy(g_mouse_device->description, "PS/2 Mouse", sizeof(g_mouse_device->description));
+        g_mouse_primary->dev->bus_type = BUS_TYPE_PS2;
+        g_mouse_primary->dev->irq = 12;
+        g_mouse_primary->dev->private_data = g_mouse_primary;
+        g_mouse_primary->dev->stop = ps2_mouse_stop;
+        g_mouse_primary->dev->cleanup = ps2_mouse_cleanup;
+        kernel->strlcpy(g_mouse_primary->dev->description, "PS/2 Mouse", sizeof(g_mouse_primary->dev->description));
     }
 
-    mouse_service();
+    kernel->irq_register_handler(12, ps2_mouse_irq_handler, g_mouse_primary);
+    mouse_service(g_mouse_primary);
     kernel->pic_clear_mask(12);
     kernel->printf("[DRIVER] PS2 Mouse Installed!\n");
 }
@@ -473,16 +572,12 @@ void ddf_driver_init(kernel_exports_t *exports)
 __attribute__((section(".text")))
 void ddf_driver_exit(void)
 {
-    if (g_mouse_device)
+    if (g_mouse_primary && g_mouse_primary->dev)
     {
-        kernel->device_unregister(g_mouse_device);
-        g_mouse_device = 0;
+        kernel->device_unregister(g_mouse_primary->dev);
+        g_mouse_primary->dev = 0;
     }
-
-    // Disable reporting
-    (void)mouse_send_cmd(0xF5);
-
-    kernel->pic_set_mask(12);
+    g_mouse_primary = 0;
     kernel->printf("[DRIVER] PS2 Mouse Uninstalled!\n");
 }
 
@@ -491,6 +586,4 @@ void ddf_driver_irq(unsigned irq, void *context)
 {
     (void)irq;
     (void)context;
-
-    mouse_service();
 }

@@ -8,11 +8,53 @@
 #include "drivers/driver.h"
 #include "system/scheduler.h"
 #include "system/signal.h"
+#include "system/spinlock.h"
+#include "heap.h"
 
 irq_handler_t irq_handlers[NUM_IRQS];
 static int g_use_apic = 0;
 
 volatile int g_in_irq = 0;
+
+typedef struct irq_hook
+{
+    irq_handler_t handler;
+    void *context;
+    struct irq_hook *next;
+} irq_hook_t;
+
+static irq_hook_t *g_irq_hooks[NUM_IRQS];
+static spinlock_t g_irq_locks[NUM_IRQS];
+static int g_irq_locks_inited = 0;
+
+static void irq_locks_init(void)
+{
+    if (g_irq_locks_inited)
+    {
+        return;
+    }
+
+    for (int i = 0; i < NUM_IRQS; i++)
+    {
+        spinlock_init(&g_irq_locks[i]);
+    }
+
+    g_irq_locks_inited = 1;
+}
+
+static void irq_clear_hooks(uint8_t irq)
+{
+    irq_hook_t *node = g_irq_hooks[irq];
+
+    while (node)
+    {
+        irq_hook_t *next = node->next;
+        kfree(node);
+        node = next;
+    }
+
+    g_irq_hooks[irq] = NULL;
+}
 
 void irq_handler_c(unsigned irq_number, void *context)
 {
@@ -20,16 +62,31 @@ void irq_handler_c(unsigned irq_number, void *context)
     uint32_t irq = irq_number;
 
     uint32_t real_irq = irq - 32;
+    uint32_t idx = (irq >= 32) ? real_irq : irq;
 
-    if (irq >= 32 && real_irq < NUM_IRQS && irq_handlers[real_irq])
+    int have_hooks = 0;
+
+    if (idx < NUM_IRQS)
     {
-        irq_handlers[real_irq](real_irq, context);
+        irq_locks_init();
+
+        uint32_t flags = 0;
+        spin_lock_irqsave(&g_irq_locks[idx], &flags);
+
+        for (irq_hook_t *node = g_irq_hooks[idx]; node; node = node->next)
+        {
+            have_hooks = 1;
+            node->handler(idx, node->context);
+        }
+
+        spin_unlock_irqrestore(&g_irq_locks[idx], flags);
     }
-    else if (irq < NUM_IRQS && irq_handlers[irq])
+
+    if (idx < NUM_IRQS && !have_hooks && irq_handlers[idx])
     {
-        irq_handlers[irq](irq, context);
+        irq_handlers[idx](idx, context);
     }
-    else
+    else if (idx >= NUM_IRQS || (!have_hooks && idx < NUM_IRQS && !irq_handlers[idx]))
     {
         printf("[IRQ] Unhandled vector %u (real=%u)\n", irq, real_irq);
     }
@@ -59,7 +116,15 @@ void irq_install_handler(uint8_t irq, irq_handler_t handler)
 {
     if (irq < NUM_IRQS)
     {
+        irq_locks_init();
+
+        uint32_t flags = 0;
+        spin_lock_irqsave(&g_irq_locks[irq], &flags);
+
+        irq_clear_hooks(irq);
         irq_handlers[irq] = handler;
+
+        spin_unlock_irqrestore(&g_irq_locks[irq], flags);
     }
 }
 
@@ -67,8 +132,81 @@ void irq_uninstall_handler(uint8_t irq)
 {
     if (irq < NUM_IRQS)
     {
+        irq_locks_init();
+
+        uint32_t flags = 0;
+        spin_lock_irqsave(&g_irq_locks[irq], &flags);
+
+        irq_clear_hooks(irq);
         irq_handlers[irq] = 0;
+
+        spin_unlock_irqrestore(&g_irq_locks[irq], flags);
     }
+}
+
+int irq_register_handler(uint8_t irq, irq_handler_t handler, void *context)
+{
+    if (irq >= NUM_IRQS || !handler)
+    {
+        return -1;
+    }
+
+    irq_locks_init();
+
+    irq_hook_t *node = (irq_hook_t*)kmalloc(sizeof(irq_hook_t));
+
+    if (!node)
+    {
+        return -1;
+    }
+
+    node->handler = handler;
+    node->context = context;
+
+    uint32_t flags = 0;
+    spin_lock_irqsave(&g_irq_locks[irq], &flags);
+
+    node->next = g_irq_hooks[irq];
+    g_irq_hooks[irq] = node;
+    irq_handlers[irq] = 0;
+
+    spin_unlock_irqrestore(&g_irq_locks[irq], flags);
+
+    return 0;
+}
+
+int irq_unregister_handler(uint8_t irq, irq_handler_t handler, void *context)
+{
+    if (irq >= NUM_IRQS || !handler)
+    {
+        return -1;
+    }
+
+    irq_locks_init();
+
+    uint32_t flags = 0;
+    spin_lock_irqsave(&g_irq_locks[irq], &flags);
+
+    irq_hook_t **node_p = &g_irq_hooks[irq];
+
+    while (*node_p)
+    {
+        if ((*node_p)->handler == handler && (*node_p)->context == context)
+        {
+            irq_hook_t *node = *node_p;
+            *node_p = node->next;
+            spin_unlock_irqrestore(&g_irq_locks[irq], flags);
+            kfree(node);
+
+            return 0;
+        }
+
+        node_p = &(*node_p)->next;
+    }
+
+    spin_unlock_irqrestore(&g_irq_locks[irq], flags);
+
+    return -1;
 }
 
 void irq_init(void)

@@ -124,9 +124,9 @@ static void unload_at_index(unsigned idx)
 
     if (mod)
     {
-        if (mod->irq_number != IRQ_INVALID && mod->irq_number < 16u && mod->driver_irq)
+        if (mod->irq_number != IRQ_INVALID && mod->irq_number < 16u && mod->irq_number != 0 && mod->driver_irq)
         {
-            irq_uninstall_handler((uint8_t)mod->irq_number);
+            irq_unregister_handler((uint8_t)mod->irq_number, mod->driver_irq, mod);
         }
 
         if (mod->driver_exit)
@@ -413,9 +413,9 @@ void load_drivers(const FileTable* table, const char* cfg_path)
             }
 
             // Install IRQ handler if the driver requests one
-            if (module->irq_number != IRQ_INVALID && module->irq_number < 16u && module->driver_irq)
+            if (module->irq_number != IRQ_INVALID && module->irq_number < 16u && module->irq_number != 0 && module->driver_irq)
             {
-                irq_install_handler((uint8_t)module->irq_number, module->driver_irq);
+                irq_register_handler((uint8_t)module->irq_number, module->driver_irq, module);
             }
 
             slot = &g_drivers[g_driver_count++];
@@ -448,4 +448,3 @@ void load_drivers(const FileTable* table, const char* cfg_path)
 
     kfree(syscfg_data);
 }
-

@@ -6,6 +6,10 @@
 #include <console.h>
 #include <unistd.h>
 
+#ifndef DT_LNK
+#define DT_LNK 10
+#endif
+
 enum
 {
     TYPE_W = 12,
@@ -26,15 +30,37 @@ static void hr(char ch)
 static int is_dir(const struct dirent *e)
 {
 #ifdef DT_DIR
-    if (e->d_type == DT_DIR) return 1;
+    if (e->d_type == DT_DIR)
+    {
+        return 1;
+    }
 #endif
-    if (e->d_name[0] == '.' && (e->d_name[1] == '\0' || (e->d_name[1] == '.' && e->d_name[2] == '\0'))) return 1;
+
+    if (e->d_name[0] == '.' && (e->d_name[1] == '\0' || (e->d_name[1] == '.' && e->d_name[2] == '\0')))
+    {
+        return 1;
+    }
+
     return e->d_size == 0;
+}
+
+static int is_symlink(const struct dirent *e)
+{
+    if (e->d_type == DT_LNK)
+    {
+        return 1;
+    }
+
+    return 0;
 }
 
 static unsigned char to_lower_char(unsigned char c)
 {
-    if (c >= 'A' && c <= 'Z') return c - 'A' + 'a';
+    if (c >= 'A' && c <= 'Z')
+    {
+        return c - 'A' + 'a';
+    }
+
     return c;
 }
 
@@ -44,12 +70,22 @@ static int icmp(const char *a, const char *b)
     {
         unsigned char ca = to_lower_char((unsigned char)*a);
         unsigned char cb = to_lower_char((unsigned char)*b);
-        if (ca != cb) return (ca < cb) ? -1 : 1;
+        if (ca != cb)
+        {
+            return (ca < cb) ? -1 : 1;
+        }
         a++;
         b++;
     }
-    if (*a) return 1;
-    if (*b) return -1;
+    if (*a)
+    {
+        return 1;
+    }
+    if (*b)
+    {
+        return -1;
+    }
+
     return 0;
 }
 
@@ -118,23 +154,51 @@ int main(int argc, char *argv[])
 
     struct dirent *dirs = malloc(n * sizeof(*dirs));
     struct dirent *files = malloc(n * sizeof(*files));
-    if (!dirs || !files)
+    struct dirent *symlinks = malloc(n * sizeof(*symlinks));
+
+    if (!dirs || !files || !symlinks)
     {
         free(entries);
         free(dirs);
         free(files);
+
+        if (symlinks)
+        {
+            free(symlinks);
+        }
+
         return 1;
     }
 
-    size_t nd = 0, nf = 0;
+    size_t nd = 0, nf = 0, nl = 0;
     for (size_t i = 0; i < n; i++)
     {
-        if (is_dir(&entries[i])) dirs[nd++] = entries[i];
-        else files[nf++] = entries[i];
+        if (is_symlink(&entries[i]))
+        {
+            symlinks[nl++] = entries[i];
+        }
+        else if (is_dir(&entries[i]))
+        {
+            dirs[nd++] = entries[i];
+        }
+        else
+        {
+            files[nf++] = entries[i];
+        }
     }
 
-    if (nd > 1) sort_by_name(dirs, nd);
-    if (nf > 1) sort_by_name(files, nf);
+    if (nd > 1)
+    {
+        sort_by_name(dirs, nd);
+    }
+    if (nl > 1)
+    {
+        sort_by_name(symlinks, nl);
+    }
+    if (nf > 1)
+    {
+        sort_by_name(files, nf);
+    }
 
     char display_path[256];
 
@@ -176,6 +240,14 @@ int main(int argc, char *argv[])
         printf(" %10u  %s/\n", (unsigned)dirs[i].d_size, dirs[i].d_name);
     }
 
+    for (size_t i = 0; i < nl; i++)
+    {
+        console_set_fgcolor(CONSOLE_COLOR_LIGHT_RED);
+        printf(" %-12s ", "LINK");
+        console_set_fgcolor(CONSOLE_COLOR_DEFAULT);
+        printf(" %10u  %s\n", (unsigned)symlinks[i].d_size, symlinks[i].d_name);
+    }
+
     for (size_t i = 0; i < nf; i++)
     {
         console_set_fgcolor(CONSOLE_COLOR_CYAN);
@@ -189,5 +261,7 @@ int main(int argc, char *argv[])
     free(entries);
     free(dirs);
     free(files);
+    free(symlinks);
+
     return 0;
 }

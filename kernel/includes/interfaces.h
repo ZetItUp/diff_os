@@ -3,6 +3,7 @@
 #include "stdint.h"
 #include "stdarg.h"
 #include "pci.h"
+#include "irq.h"
 #include "drivers/device.h"
 
 // Mouse packet (relative movement + buttons)
@@ -47,6 +48,8 @@ typedef struct kernel_exports
                          void (*set_echo_fn)(int),
                          int (*available_fn)(void),
                          int (*read_output_fn)(char*, unsigned)); // Plug TTY backend
+    int (*irq_register_handler)(uint8_t irq, irq_handler_t handler, void *context);
+    int (*irq_unregister_handler)(uint8_t irq, irq_handler_t handler, void *context);
 
     // DMA memory allocation (returns physical addresses)
     uint32_t (*alloc_phys_page)(void);          // Allocate 4KB physical page, returns phys addr

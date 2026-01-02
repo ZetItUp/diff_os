@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <dirent.h>
 
 /* Internal PATH storage */
 static char g_path_dirs[RT_MAX_PATHS][RT_MAX_PATH];
@@ -118,6 +119,14 @@ bool rt_file_exists(const char *path)
         return false;
     }
 
+    DIR *dir = opendir(path);
+    if (dir)
+    {
+        closedir(dir);
+
+        return false;
+    }
+
     int fd = system_open(path, O_RDONLY, 0);
     if (fd < 0)
     {
@@ -125,6 +134,7 @@ bool rt_file_exists(const char *path)
     }
 
     system_close(fd);
+
     return true;
 }
 

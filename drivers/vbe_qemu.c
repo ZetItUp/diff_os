@@ -39,11 +39,6 @@ static uint32_t g_req_height = 768;
 static uint32_t g_req_bpp    = 32;
 
 static kernel_exports_t *kernel = 0;
-static pci_device_t g_vga_device;
-static int g_vga_found = 0;
-
-// Device registration
-static device_t *g_display_device = 0;
 
 // This driver does not use interrupts, set IRQ to 0
 __attribute__((section(".ddf_meta"), used))
@@ -59,16 +54,17 @@ typedef struct vbe_mode_info
     uint32_t pitch_pixels;  // How many pixels wide one scanline is (virtual width)
 } vbe_mode_info_t;
 
-// Global mode info instance
-static vbe_mode_info_t g_mode =
+typedef struct vbe_device
 {
-    .phys_base = 0,
-    .width = 0,
-    .height = 0,
-    .bpp = 0,
-    .pitch_bytes = 0,
-    .pitch_pixels = 0
-};
+    device_t *dev;
+    pci_device_t pci;
+    int found;
+    vbe_mode_info_t mode;
+} vbe_device_t;
+
+// Device registration
+static vbe_device_t g_vbe_devices[1];
+static vbe_device_t *g_vbe_primary = 0;
 
 // Write into a VBE register.
 static inline void vbe_write_reg(uint16_t index, uint16_t value)
@@ -81,6 +77,7 @@ static inline void vbe_write_reg(uint16_t index, uint16_t value)
 static inline uint16_t vbe_read_reg(uint16_t index)
 {
     kernel->outw(VBE_DISPI_IOPORT_INDEX, index);
+
     return kernel->inw(VBE_DISPI_IOPORT_DATA);
 }
 
@@ -88,39 +85,45 @@ static void vbe_pci_enum_cb(const pci_device_t *dev, void *context)
 {
     (void)context;
 
-    if (g_vga_found)
+    if (g_vbe_primary && g_vbe_primary->found)
     {
         return;
     }
 
     if (dev->class_code == 0x03 && dev->subclass == 0x00)
     {
-        g_vga_device = *dev;
-        g_vga_found = 1;
+        if (g_vbe_primary)
+        {
+            g_vbe_primary->pci = *dev;
+            g_vbe_primary->found = 1;
+        }
     }
 }
 
 // Read PCI BAR0 of VGA device, which should point to the linear framebuffer physical base
 static uint32_t vga_get_bar0_phys_base(void)
 {
-    if (!g_vga_found)
+    if (g_vbe_primary && !g_vbe_primary->found)
     {
         kernel->pci_enum_devices(vbe_pci_enum_cb, NULL);
     }
 
-    if (!g_vga_found)
+    if (!g_vbe_primary || !g_vbe_primary->found)
     {
         kernel->printf("[VBE] VGA device was not found on PCI\n");
+
         return 0;
     }
 
-    kernel->pci_enable_device(&g_vga_device);
+    kernel->pci_enable_device(&g_vbe_primary->pci);
 
     uint32_t base = 0;
     int is_mmio = 0;
-    if (kernel->pci_get_bar(&g_vga_device, 0, &base, NULL, &is_mmio) != 0 || !is_mmio)
+
+    if (kernel->pci_get_bar(&g_vbe_primary->pci, 0, &base, NULL, &is_mmio) != 0 || !is_mmio)
     {
         kernel->printf("[VBE] BAR0 is not a MMIO region\n");
+
         return 0;
     }
 
@@ -231,25 +234,42 @@ static int vbe_set_mode(uint32_t w, uint32_t h, uint32_t bpp)
 // Provide a pointer to current mode info
 static vbe_mode_info_t *vbe_get_info(void)
 {
-    return &g_mode;
+    return g_vbe_primary ? &g_vbe_primary->mode : NULL;
 }
 
 // Device operations
 static int display_dev_get_current_mode(device_t *dev, display_mode_t *mode)
 {
-    (void)dev;
-    if (!mode) return -1;
-    mode->width = g_mode.width;
-    mode->height = g_mode.height;
-    mode->bpp = g_mode.bpp;
-    mode->pitch = g_mode.pitch_bytes;
-    mode->phys_base = g_mode.phys_base;
+    vbe_device_t *vbe = (vbe_device_t *)dev->private_data;
+
+    if (!mode)
+    {
+        return -1;
+    }
+
+    if (!vbe)
+    {
+        return -1;
+    }
+
+    mode->width = vbe->mode.width;
+    mode->height = vbe->mode.height;
+    mode->bpp = vbe->mode.bpp;
+    mode->pitch = vbe->mode.pitch_bytes;
+    mode->phys_base = vbe->mode.phys_base;
+
     return 0;
 }
 
 static int display_dev_set_mode(device_t *dev, uint32_t width, uint32_t height, uint32_t bpp)
 {
-    (void)dev;
+    vbe_device_t *vbe = (vbe_device_t *)dev->private_data;
+
+    if (!vbe)
+    {
+        return -1;
+    }
+
     return vbe_set_mode(width, height, bpp);
 }
 
@@ -270,19 +290,31 @@ static display_device_t g_display_ops =
 void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
+    g_vbe_primary = &g_vbe_devices[0];
+    g_vbe_primary->dev = 0;
+    g_vbe_primary->found = 0;
+    g_vbe_primary->mode.phys_base = 0;
+    g_vbe_primary->mode.width = 0;
+    g_vbe_primary->mode.height = 0;
+    g_vbe_primary->mode.bpp = 0;
+    g_vbe_primary->mode.pitch_bytes = 0;
+    g_vbe_primary->mode.pitch_pixels = 0;
 
     // Detect Bochs dispi
     if (vbe_detect() != 0)
     {
         exports->printf("[VBE] No Bochs or QEMU dispi detected\n");
+
         return;
     }
 
     // Get the framebuffer physical address
     uint32_t lfb_phys = vga_get_bar0_phys_base();
+
     if (lfb_phys == 0)
     {
         exports->printf("[VBE] Failed to obtain LFB physical base via PCI\n");
+
         return;
     }
 
@@ -291,6 +323,7 @@ void ddf_driver_init(kernel_exports_t *exports)
     {
         exports->printf("[VBE] Failed to set mode %ux%u@%u\n",
                         (unsigned)g_req_width, (unsigned)g_req_height, (unsigned)g_req_bpp);
+
         return;
     }
 
@@ -306,49 +339,54 @@ void ddf_driver_init(kernel_exports_t *exports)
         {
             vwid = rx;
         }
+
         if (vhgt == 0)
         {
             vhgt = ry;
         }
+
         if (vwid < rx || vwid > 8192)
         {
             vwid = rx;
         }
+
         if (vhgt < ry || vhgt > 8192)
         {
             vhgt = ry;
         }
 
-        g_mode.width        = (uint32_t)rx;
-        g_mode.height       = (uint32_t)ry;
-        g_mode.bpp          = (uint32_t)rbpp;
-        g_mode.pitch_pixels = (uint32_t)vwid;
+        g_vbe_primary->mode.width        = (uint32_t)rx;
+        g_vbe_primary->mode.height       = (uint32_t)ry;
+        g_vbe_primary->mode.bpp          = (uint32_t)rbpp;
+        g_vbe_primary->mode.pitch_pixels = (uint32_t)vwid;
 
         // Compute pitch in bytes
-        uint32_t bpp_bytes  = (g_mode.bpp + 7u) / 8u;
-        g_mode.pitch_bytes  = g_mode.pitch_pixels * bpp_bytes;
-        g_mode.phys_base    = lfb_phys;
+        uint32_t bpp_bytes  = (g_vbe_primary->mode.bpp + 7u) / 8u;
+        g_vbe_primary->mode.pitch_bytes  = g_vbe_primary->mode.pitch_pixels * bpp_bytes;
+        g_vbe_primary->mode.phys_base    = lfb_phys;
     }
 
     // Register the VBE driver in the kernel
     if (exports->vbe_register)
     {
-        exports->vbe_register(g_mode.phys_base,
-                              g_mode.width,
-                              g_mode.height,
-                              g_mode.bpp,
-                              g_mode.pitch_bytes);
+        exports->vbe_register(g_vbe_primary->mode.phys_base,
+                              g_vbe_primary->mode.width,
+                              g_vbe_primary->mode.height,
+                              g_vbe_primary->mode.bpp,
+                              g_vbe_primary->mode.pitch_bytes);
     }
 
     // Register device
-    g_display_device = exports->device_register(DEVICE_CLASS_DISPLAY, "vbe_qemu", &g_display_ops);
-    if (g_display_device)
+    g_vbe_primary->dev = exports->device_register(DEVICE_CLASS_DISPLAY, "vbe_qemu", &g_display_ops);
+
+    if (g_vbe_primary->dev)
     {
-        g_display_device->bus_type = BUS_TYPE_PCI;
-        g_display_device->vendor_id = g_vga_device.vendor_id;
-        g_display_device->device_id = g_vga_device.device_id;
-        g_display_device->mmio_base = g_mode.phys_base;
-        exports->strlcpy(g_display_device->description, "QEMU/Bochs VBE Display", sizeof(g_display_device->description));
+        g_vbe_primary->dev->bus_type = BUS_TYPE_PCI;
+        g_vbe_primary->dev->vendor_id = g_vbe_primary->pci.vendor_id;
+        g_vbe_primary->dev->device_id = g_vbe_primary->pci.device_id;
+        g_vbe_primary->dev->mmio_base = g_vbe_primary->mode.phys_base;
+        g_vbe_primary->dev->private_data = g_vbe_primary;
+        exports->strlcpy(g_vbe_primary->dev->description, "QEMU/Bochs VBE Display", sizeof(g_vbe_primary->dev->description));
     }
 
     exports->printf("[DRIVER] VBE Graphics Driver Installed\n");
@@ -363,10 +401,10 @@ void ddf_driver_irq(unsigned irq, void *context)
 
 void ddf_driver_exit(void)
 {
-    if (g_display_device)
+    if (g_vbe_primary && g_vbe_primary->dev)
     {
-        kernel->device_unregister(g_display_device);
-        g_display_device = 0;
+        kernel->device_unregister(g_vbe_primary->dev);
+        g_vbe_primary->dev = 0;
     }
 
     vbe_write_reg(VBE_DISPI_INDEX_ENABLE, 0);

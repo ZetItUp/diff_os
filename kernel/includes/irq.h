@@ -25,6 +25,8 @@ extern void irq13(void);
 extern void irq14(void);
 extern void irq15(void);
 
+int irq_register_handler(uint8_t irq, irq_handler_t handler, void *context);
+int irq_unregister_handler(uint8_t irq, irq_handler_t handler, void *context);
 void irq_install_handler(uint8_t irq, irq_handler_t handler);
 void irq_uninstall_handler(uint8_t irq);
 void irq_init(void);

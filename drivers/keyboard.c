@@ -15,7 +15,7 @@
 #define KB_FIFO_SIZE      256   // Ring buffer for scan codes
 
 __attribute__((section(".ddf_meta"), used))
-volatile unsigned int ddf_irq_number = 1; // IRQ1 for PS2 keyboard
+volatile unsigned int ddf_irq_number = 0; // No module IRQ since devices register their own
 
 // Command sent to the device
 typedef struct
@@ -39,54 +39,57 @@ typedef enum
 // Kernel export table from loader
 static volatile kernel_exports_t *kernel = 0;
 
+typedef struct ps2_keyboard_device
+{
+    device_t *dev;
+    uint8_t irq;
+    kb_cmd_t cmdq[KB_CMD_QUEUE_SIZE];
+    int q_head;
+    int q_count;
+    kb_cmdq_state_t q_state;
+    int resend_limit;
+    volatile uint8_t fifo[KB_FIFO_SIZE];
+    volatile unsigned head;
+    volatile unsigned tail;
+} ps2_keyboard_device_t;
+
 // Device registration
-static device_t *g_keyboard_device = 0;
-
-// Command queue storage and tracking
-static kb_cmd_t kb_cmdq[KB_CMD_QUEUE_SIZE] = {0};
-static int kb_q_head = 0;
-static int kb_q_count = 0;
-static kb_cmdq_state_t kb_cmdq_state = KBQ_IDLE;
-static int kb_resend_limit = 3;
-
-// Scan code FIFO
-static volatile uint8_t kb_fifo[KB_FIFO_SIZE];
-static volatile unsigned kb_head = 0;
-static volatile unsigned kb_tail = 0;
+static ps2_keyboard_device_t g_keyboard_devices[1];
+static ps2_keyboard_device_t *g_keyboard_primary = 0;
 
 // Check if the kb_fifo is empty
-static inline int keyboard_fifo_empty(void)
+static inline int keyboard_fifo_empty(ps2_keyboard_device_t *kb)
 {
-    return kb_head == kb_tail;
+    return kb->head == kb->tail;
 }
 
 // Check if the kb_fifo is full
-static inline int keyboard_fifo_full(void)
+static inline int keyboard_fifo_full(ps2_keyboard_device_t *kb)
 {
-    return ((kb_tail + 1) & (KB_FIFO_SIZE - 1)) == kb_head;
+    return ((kb->tail + 1) & (KB_FIFO_SIZE - 1)) == kb->head;
 }
 
 // Push one byte into FIFO
-static inline void keyboard_fifo_push(uint8_t b)
+static inline void keyboard_fifo_push(ps2_keyboard_device_t *kb, uint8_t b)
 {
-    unsigned tail = (kb_tail + 1) & (KB_FIFO_SIZE - 1);
+    unsigned tail = (kb->tail + 1) & (KB_FIFO_SIZE - 1);
 
-    if (tail != kb_head)
+    if (tail != kb->head)
     {
-        kb_fifo[kb_tail] = b;
-        kb_tail = tail;
+        kb->fifo[kb->tail] = b;
+        kb->tail = tail;
     }
 }
 
 // Pop one byte from FIFO
-static inline uint8_t keyboard_fifo_pop(void)
+static inline uint8_t keyboard_fifo_pop(ps2_keyboard_device_t *kb)
 {
     uint8_t b = 0;
 
-    if (!keyboard_fifo_empty())
+    if (!keyboard_fifo_empty(kb))
     {
-        b = kb_fifo[kb_head];
-        kb_head = (kb_head + 1) & (KB_FIFO_SIZE - 1);
+        b = kb->fifo[kb->head];
+        kb->head = (kb->head + 1) & (KB_FIFO_SIZE - 1);
     }
 
     return b;
@@ -136,11 +139,11 @@ static void i8042_write_cmdbyte(uint8_t cb)
 }
 
 // Send one queued command to the device
-static void kbq_send_cmd(kb_cmd_t *cmd)
+static void kbq_send_cmd(ps2_keyboard_device_t *kb, kb_cmd_t *cmd)
 {
     wait_input();
 
-    kb_cmdq_state = KBQ_WAIT_ACK;
+    kb->q_state = KBQ_WAIT_ACK;
     kernel->outb(KEYBOARD_DATA, cmd->command);
 
     if (cmd->has_data)
@@ -151,79 +154,83 @@ static void kbq_send_cmd(kb_cmd_t *cmd)
 }
 
 // Start processing the next queued command
-static void kbq_start_next(void)
+static void kbq_start_next(ps2_keyboard_device_t *kb)
 {
-    if (kb_q_count == 0)
+    if (kb->q_count == 0)
     {
-        kb_cmdq_state = KBQ_IDLE;
+        kb->q_state = KBQ_IDLE;
+
         return;
     }
 
-    kb_cmdq_state = KBQ_SEND;
-    kbq_send_cmd(&kb_cmdq[kb_q_head]);
+    kb->q_state = KBQ_SEND;
+    kbq_send_cmd(kb, &kb->cmdq[kb->q_head]);
 }
 
 // Poll controller and move incoming bytes to FIFO or handle acks
-static void i8042_service(void)
+static void i8042_service(ps2_keyboard_device_t *kb)
 {
     while (kernel->inb(KEYBOARD_STATUS) & 0x01)
     {
         uint8_t val = kernel->inb(KEYBOARD_DATA);
 
-        if (kb_cmdq_state == KBQ_WAIT_ACK)
+        if (kb->q_state == KBQ_WAIT_ACK)
         {
             if (val == 0xFA) // ACK
             {
-                if (kb_cmdq[kb_q_head].command == 0xFF) // Reset
+                if (kb->cmdq[kb->q_head].command == 0xFF) // Reset
                 {
-                    kb_cmdq_state = KBQ_WAIT_BAT;
+                    kb->q_state = KBQ_WAIT_BAT;
                 }
                 else
                 {
-                    kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
-                    kb_q_count--;
-                    kb_cmdq_state = KBQ_IDLE;
-                    kbq_start_next();
+                    kb->q_head = (kb->q_head + 1) % KB_CMD_QUEUE_SIZE;
+                    kb->q_count--;
+                    kb->q_state = KBQ_IDLE;
+                    kbq_start_next(kb);
                 }
+
 
                 continue;
             }
             else if (val == 0xFE) // Resend request
             {
-                kb_cmdq[kb_q_head].retries++;
+                kb->cmdq[kb->q_head].retries++;
 
-                if (kb_cmdq[kb_q_head].retries < kb_resend_limit)
+                if (kb->cmdq[kb->q_head].retries < kb->resend_limit)
                 {
-                    kb_cmdq_state = KBQ_SEND;
-                    kbq_send_cmd(&kb_cmdq[kb_q_head]);
+                    kb->q_state = KBQ_SEND;
+                    kbq_send_cmd(kb, &kb->cmdq[kb->q_head]);
                 }
                 else
                 {
-                    kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
-                    kb_q_count--;
-                    kb_cmdq_state = KBQ_ERROR;
-                    kbq_start_next();
+                    kb->q_head = (kb->q_head + 1) % KB_CMD_QUEUE_SIZE;
+                    kb->q_count--;
+                    kb->q_state = KBQ_ERROR;
+                    kbq_start_next(kb);
                 }
+
 
                 continue;
             }
         }
 
-        if (kb_cmdq_state == KBQ_WAIT_BAT)
+        if (kb->q_state == KBQ_WAIT_BAT)
         {
             if (val == 0xAA) // BAT ok
             {
-                kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
-                kb_q_count--;
-                kb_cmdq_state = KBQ_IDLE;
-                kbq_start_next();
+                kb->q_head = (kb->q_head + 1) % KB_CMD_QUEUE_SIZE;
+                kb->q_count--;
+                kb->q_state = KBQ_IDLE;
+                kbq_start_next(kb);
+
                 continue;
             }
         }
 
         if (val != 0xFA && val != 0xFE && val != 0xAA)
         {
-            keyboard_fifo_push(val);
+            keyboard_fifo_push(kb, val);
         }
     }
 }
@@ -264,32 +271,34 @@ static void i8042_init(void)
 }
 
 // Read one byte if available
-int keyboard_read_byte(uint8_t *out)
+static int keyboard_read_byte_device(ps2_keyboard_device_t *kb, uint8_t *out)
 {
     int res = 0;
     asm volatile("cli");
 
-    if (!keyboard_fifo_empty())
+    if (!keyboard_fifo_empty(kb))
     {
-        *out = keyboard_fifo_pop();
+        *out = keyboard_fifo_pop(kb);
         res = 1;
     }
 
     asm volatile("sti");
+
     return res;
 }
 
 // Read one byte and block until it arrives
-uint8_t keyboard_read_byte_blocking(void)
+static uint8_t keyboard_read_byte_blocking_device(ps2_keyboard_device_t *kb)
 {
     for (;;)
     {
         asm volatile("cli");
 
-        if (!keyboard_fifo_empty())
+        if (!keyboard_fifo_empty(kb))
         {
-            uint8_t b = keyboard_fifo_pop();
+            uint8_t b = keyboard_fifo_pop(kb);
             asm volatile("sti");
+
             return b;
         }
 
@@ -297,29 +306,60 @@ uint8_t keyboard_read_byte_blocking(void)
     }
 }
 
+int keyboard_read_byte(uint8_t *out)
+{
+    if (!g_keyboard_primary)
+    {
+        return 0;
+    }
+
+    return keyboard_read_byte_device(g_keyboard_primary, out);
+}
+
+uint8_t keyboard_read_byte_blocking(void)
+{
+    if (!g_keyboard_primary)
+    {
+        return 0;
+    }
+
+    return keyboard_read_byte_blocking_device(g_keyboard_primary);
+}
+
 // Device operations
 static input_type_t kb_dev_get_type(device_t *dev)
 {
     (void)dev;
+
     return INPUT_TYPE_KEYBOARD;
 }
 
 static int kb_dev_poll_available(device_t *dev)
 {
-    (void)dev;
-    return keyboard_fifo_empty() ? 0 : 1;
+    ps2_keyboard_device_t *kb = (ps2_keyboard_device_t *)dev->private_data;
+
+    if (!kb)
+    {
+        return 0;
+    }
+
+    return keyboard_fifo_empty(kb) ? 0 : 1;
 }
 
 static int kb_dev_read_scancode(device_t *dev, uint8_t *out)
 {
-    (void)dev;
-    return keyboard_read_byte(out);
+    ps2_keyboard_device_t *kb = (ps2_keyboard_device_t *)dev->private_data;
+
+
+    return keyboard_read_byte_device(kb, out);
 }
 
 static uint8_t kb_dev_read_scancode_blocking(device_t *dev)
 {
-    (void)dev;
-    return keyboard_read_byte_blocking();
+    ps2_keyboard_device_t *kb = (ps2_keyboard_device_t *)dev->private_data;
+
+
+    return keyboard_read_byte_blocking_device(kb);
 }
 
 static input_device_t g_kb_ops =
@@ -332,6 +372,29 @@ static input_device_t g_kb_ops =
     .read_packet = 0,
     .read_packet_blocking = 0,
 };
+
+static void ps2_keyboard_irq_handler(unsigned irq, void *context);
+
+static int ps2_keyboard_stop(device_t *dev)
+{
+    (void)dev;
+    kernel->pic_set_mask(1); // Mask IRQ1
+
+
+    return 0;
+}
+
+static void ps2_keyboard_cleanup(device_t *dev)
+{
+    ps2_keyboard_device_t *kb = (ps2_keyboard_device_t *)dev->private_data;
+
+    if (!kb)
+    {
+        return;
+    }
+
+    kernel->irq_unregister_handler(kb->irq, ps2_keyboard_irq_handler, kb);
+}
 
 // Stop and start scanning to be safe after init
 static int ps2_keyboard_enable_scanning_sync(void)
@@ -360,20 +423,34 @@ __attribute__((section(".text")))
 void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
+    g_keyboard_primary = &g_keyboard_devices[0];
+    g_keyboard_primary->dev = 0;
+    g_keyboard_primary->irq = 1;
+    g_keyboard_primary->q_head = 0;
+    g_keyboard_primary->q_count = 0;
+    g_keyboard_primary->q_state = KBQ_IDLE;
+    g_keyboard_primary->resend_limit = 3;
+    g_keyboard_primary->head = 0;
+    g_keyboard_primary->tail = 0;
     i8042_init();
     ps2_keyboard_enable_scanning_sync();
-    i8042_service(); // Pull any pending bytes into FIFO
+    i8042_service(g_keyboard_primary); // Pull any pending bytes into FIFO
     kernel->keyboard_register(keyboard_read_byte, keyboard_read_byte_blocking);
 
     // Register device
-    g_keyboard_device = kernel->device_register(DEVICE_CLASS_INPUT, "ps2_keyboard", &g_kb_ops);
-    if (g_keyboard_device)
+    g_keyboard_primary->dev = kernel->device_register(DEVICE_CLASS_INPUT, "ps2_keyboard", &g_kb_ops);
+
+    if (g_keyboard_primary->dev)
     {
-        g_keyboard_device->bus_type = BUS_TYPE_PS2;
-        g_keyboard_device->irq = 1;
-        kernel->strlcpy(g_keyboard_device->description, "PS/2 Keyboard", sizeof(g_keyboard_device->description));
+        g_keyboard_primary->dev->bus_type = BUS_TYPE_PS2;
+        g_keyboard_primary->dev->irq = 1;
+        g_keyboard_primary->dev->private_data = g_keyboard_primary;
+        g_keyboard_primary->dev->stop = ps2_keyboard_stop;
+        g_keyboard_primary->dev->cleanup = ps2_keyboard_cleanup;
+        kernel->strlcpy(g_keyboard_primary->dev->description, "PS/2 Keyboard", sizeof(g_keyboard_primary->dev->description));
     }
 
+    kernel->irq_register_handler(1, ps2_keyboard_irq_handler, g_keyboard_primary);
     kernel->pic_clear_mask(1); // Unmask IRQ1
     kernel->printf("[DRIVER] PS2 Keyboard Driver Installed\n");
 }
@@ -382,13 +459,13 @@ void ddf_driver_init(kernel_exports_t *exports)
 __attribute__((section(".text")))
 void ddf_driver_exit(void)
 {
-    if (g_keyboard_device)
+    if (g_keyboard_primary && g_keyboard_primary->dev)
     {
-        kernel->device_unregister(g_keyboard_device);
-        g_keyboard_device = 0;
+        kernel->device_unregister(g_keyboard_primary->dev);
+        g_keyboard_primary->dev = 0;
     }
 
-    kernel->pic_set_mask(1); // Mask IRQ1
+    g_keyboard_primary = 0;
     kernel->printf("[DRIVER] PS2 Keyboard Driver Uninstalled\n");
 }
 
@@ -398,45 +475,60 @@ void ddf_driver_irq(unsigned irq, void *context)
 {
     (void)irq;
     (void)context;
+}
+
+static void ps2_keyboard_irq_handler(unsigned irq, void *context)
+{
+    (void)irq;
+
+    ps2_keyboard_device_t *kb = (ps2_keyboard_device_t *)context;
+
+    if (!kb)
+    {
+        return;
+    }
 
     while (kernel->inb(KEYBOARD_STATUS) & 0x01)
     {
         uint8_t val = kernel->inb(KEYBOARD_DATA);
 
-        if (kb_cmdq_state == KBQ_WAIT_ACK)
+        if (kb->q_state == KBQ_WAIT_ACK)
         {
             if (val == 0xFA)
             {
-                if (kb_cmdq[kb_q_head].command == 0xFF)
+                if (kb->cmdq[kb->q_head].command == 0xFF)
                 {
-                    kb_cmdq_state = KBQ_WAIT_BAT;
+                    kb->q_state = KBQ_WAIT_BAT;
+
                     continue;
                 }
                 else
                 {
-                    kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
-                    kb_q_count--;
-                    kb_cmdq_state = KBQ_IDLE;
-                    kbq_start_next();
+                    kb->q_head = (kb->q_head + 1) % KB_CMD_QUEUE_SIZE;
+                    kb->q_count--;
+                    kb->q_state = KBQ_IDLE;
+                    kbq_start_next(kb);
+
                     continue;
                 }
             }
             else if (val == 0xFE)
             {
-                kb_cmdq[kb_q_head].retries++;
+                kb->cmdq[kb->q_head].retries++;
 
-                if (kb_cmdq[kb_q_head].retries < kb_resend_limit)
+                if (kb->cmdq[kb->q_head].retries < kb->resend_limit)
                 {
-                    kb_cmdq_state = KBQ_SEND;
-                    kbq_send_cmd(&kb_cmdq[kb_q_head]);
+                    kb->q_state = KBQ_SEND;
+                    kbq_send_cmd(kb, &kb->cmdq[kb->q_head]);
                 }
                 else
                 {
-                    kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
-                    kb_q_count--;
-                    kb_cmdq_state = KBQ_ERROR;
-                    kbq_start_next();
+                    kb->q_head = (kb->q_head + 1) % KB_CMD_QUEUE_SIZE;
+                    kb->q_count--;
+                    kb->q_state = KBQ_ERROR;
+                    kbq_start_next(kb);
                 }
+
 
                 continue;
             }
@@ -444,13 +536,13 @@ void ddf_driver_irq(unsigned irq, void *context)
             continue;
         }
 
-        if (kb_cmdq_state == KBQ_WAIT_BAT)
+        if (kb->q_state == KBQ_WAIT_BAT)
         {
             if (val == 0xAA)
             {
-                kb_q_head = (kb_q_head + 1) % KB_CMD_QUEUE_SIZE;
-                kb_q_count--;
-                kb_cmdq_state = KBQ_IDLE;
+                kb->q_head = (kb->q_head + 1) % KB_CMD_QUEUE_SIZE;
+                kb->q_count--;
+                kb->q_state = KBQ_IDLE;
 
                 for (int i = 0; i < 2; i++)
                 {
@@ -461,12 +553,12 @@ void ddf_driver_irq(unsigned irq, void *context)
                     }
                 }
 
-                kbq_start_next();
+                kbq_start_next(kb);
+
                 continue;
             }
         }
 
-        keyboard_fifo_push(val);
+        keyboard_fifo_push(kb, val);
     }
 }
-
