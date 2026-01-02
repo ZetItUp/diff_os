@@ -639,12 +639,12 @@ int system_call_dispatch(struct syscall_frame *f)
         {
             uint64_t now = timer_now_ms();
 
-            // Guarantee strictly monotonic returns even if multiple calls land
+            // Keep time monotonic without accelerating when multiple calls land
             // in the same PIT tick.
             static uint64_t last_sys_time = 0;
-            if (now <= last_sys_time)
+            if (now < last_sys_time)
             {
-                now = last_sys_time + 1;
+                now = last_sys_time;
             }
             last_sys_time = now;
 

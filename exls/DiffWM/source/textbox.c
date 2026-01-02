@@ -5,6 +5,51 @@
 #include <string.h>
 #include <time.h>
 
+typedef struct textbox_blink_state_t
+{
+    textbox_t *box;
+    uint64_t blink_start_ms;
+    bool last_on;
+    bool last_focused;
+} textbox_blink_state_t;
+
+static textbox_blink_state_t g_textbox_blink_states[32];
+
+static textbox_blink_state_t *textbox_blink_state(textbox_t *box, bool create)
+{
+    if (!box)
+    {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < sizeof(g_textbox_blink_states) / sizeof(g_textbox_blink_states[0]); i++)
+    {
+        if (g_textbox_blink_states[i].box == box)
+        {
+            return &g_textbox_blink_states[i];
+        }
+    }
+
+    if (!create)
+    {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < sizeof(g_textbox_blink_states) / sizeof(g_textbox_blink_states[0]); i++)
+    {
+        if (!g_textbox_blink_states[i].box)
+        {
+            g_textbox_blink_states[i].box = box;
+            g_textbox_blink_states[i].blink_start_ms = 0;
+            g_textbox_blink_states[i].last_on = true;
+            g_textbox_blink_states[i].last_focused = false;
+            return &g_textbox_blink_states[i];
+        }
+    }
+
+    return NULL;
+}
+
 void textbox_init(textbox_t *box, int x, int y, int width, int height,
                   char *text_buffer, int max_length, font_t *font)
 {
@@ -35,6 +80,7 @@ void textbox_init(textbox_t *box, int x, int y, int width, int height,
     // Set polymorphic function pointers
     box->base.update = textbox_update;
     box->base.draw = textbox_paint;
+    (void)textbox_blink_state(box, true);
 }
 
 void textbox_set_colors(textbox_t *box, uint32_t bg, uint32_t fg,
@@ -323,8 +369,45 @@ bool textbox_handle_event(textbox_t *box, const diff_event_t *event)
 
 void textbox_update(window_component_t *self)
 {
-    // No update logic needed for now
-    (void)self;
+    if (!self)
+    {
+        return;
+    }
+
+    textbox_t *box = (textbox_t *)self;
+    window_t *parent = self->parent;
+    if (!parent)
+    {
+        return;
+    }
+
+    textbox_blink_state_t *state = textbox_blink_state(box, true);
+    if (!state)
+    {
+        return;
+    }
+
+    uint64_t now = monotonic_ms();
+    bool focused = box->focused;
+
+    if (focused != state->last_focused)
+    {
+        state->last_focused = focused;
+        state->blink_start_ms = now;
+        state->last_on = focused;
+        window_paint(&parent->base);
+        return;
+    }
+
+    if (focused)
+    {
+        bool on = (((now - state->blink_start_ms) / 1000) % 2) == 0;
+        if (on != state->last_on)
+        {
+            state->last_on = on;
+            window_paint(&parent->base);
+        }
+    }
 }
 
 void textbox_paint(window_component_t *self)
@@ -460,8 +543,14 @@ void textbox_paint(window_component_t *self)
     // Render blinking cursor (single vertical line)
     if (box->focused)
     {
-        uint64_t now = monotonic_ms();
-        if (((now / 500) % 2) == 0)
+        textbox_blink_state_t *state = textbox_blink_state(box, false);
+        bool draw_cursor = true;
+        if (state)
+        {
+            draw_cursor = state->last_on;
+        }
+
+        if (draw_cursor)
         {
             int fw = font_width(box->font);
             int fh = font_height(box->font);
