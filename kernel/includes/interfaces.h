@@ -57,6 +57,10 @@ typedef struct kernel_exports
     // Device registration
     device_t *(*device_register)(device_class_t class, const char *name, void *operations);
     void (*device_unregister)(device_t *dev);
+    int (*device_class_register)(device_class_t class, const char *name);
+    int (*device_bus_register)(uint8_t bus_type, const char *name);
+    int (*device_class_unregister)(device_class_t class);
+    int (*device_bus_unregister)(uint8_t bus_type);
 
     // String utilities
     size_t (*strlcpy)(char *dst, const char *src, size_t siz);

@@ -146,6 +146,7 @@ typedef struct tty_device
     int (*read_output)(struct device *dev, char *buffer, unsigned count);
 } tty_device_t;
 
+
 //
 // Generic Device
 //
@@ -174,20 +175,19 @@ typedef struct device
     // Driver Module Owner
     struct ddf_module *owner;           // Which driver owns this device
 
-    // Class
-    union
-    {
-        input_device_t *input;
-        network_device_t *network;
-        display_device_t *display;
-        tty_device_t *tty;
-        void *operations;
-    };
+    // Class Operations
+    void *operations;
 
-    // TODO: (Remove) Driver Data?
+    // Lifecycle Hooks
+    int (*stop)(struct device *dev);
+    void (*cleanup)(struct device *dev);
+
     void *private_data;
 
-    // TODO: This is a linked list for now
+    // Reference Tracking
+    int refcount;
+    int removing;
+
     struct device *next;
 } device_t;
 
@@ -202,6 +202,9 @@ typedef struct device
 #define BUS_TYPE_PS2        4
 #define BUS_TYPE_VIRTUAL    5
 
+#define DEVICE_CLASS_NAME_LEN  16
+#define DEVICE_BUS_NAME_LEN    16
+
 
 //
 // Device API
@@ -210,6 +213,15 @@ typedef struct device
 // Registration
 device_t *device_register(device_class_t class, const char *name, void *operations);
 void device_unregister(device_t *dev);
+
+// Class / Bus Registry
+void device_registry_init(void);
+int device_class_register(device_class_t class, const char *name);
+int device_bus_register(uint8_t bus_type, const char *name);
+int device_class_unregister(device_class_t class);
+int device_bus_unregister(uint8_t bus_type);
+const char *device_class_name(device_class_t class);
+const char *device_bus_name(uint8_t bus_type);
 
 // Get Device
 device_t *device_get_by_id(uint32_t id);
@@ -220,6 +232,7 @@ int device_get_count(void);
 int device_get_count_by_class(device_class_t class);
 device_t *device_get_by_index(int index);
 int device_enumerate_class(device_class_t class, device_t **out, int max_count);
+void device_put(device_t *dev);
 
 // Iteration
 device_t *device_first(void);
@@ -246,4 +259,3 @@ typedef struct device_info
 
 // Convert device_t to device_info_t
 void device_to_info(device_t *dev, device_info_t *info);
-

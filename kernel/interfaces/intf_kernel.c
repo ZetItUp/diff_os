@@ -34,5 +34,9 @@ kernel_exports_t g_exports =
     .free_phys_pages = free_phys_pages,
     .device_register = device_register,
     .device_unregister = device_unregister,
+    .device_class_register = device_class_register,
+    .device_bus_register = device_bus_register,
+    .device_class_unregister = device_class_unregister,
+    .device_bus_unregister = device_bus_unregister,
     .strlcpy = strlcpy,
 };

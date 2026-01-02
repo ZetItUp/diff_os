@@ -93,6 +93,7 @@ KERNEL_SRC = \
 	kernel/dex/dex_loader.c \
 	kernel/dex/exl_loader.c \
 	kernel/kernel.c \
+	kernel/drivers/device_registry.c \
 	kernel/serial.c \
     kernel/console.c \
     kernel/fs/diff.c \

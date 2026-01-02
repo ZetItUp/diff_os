@@ -19,6 +19,7 @@
 #include "drivers/config.h"
 #include "drivers/driver.h"
 #include "drivers/ata.h"
+#include "drivers/device.h"
 #include "dex/dex.h"
 #include "system/threads.h"
 #include "system/scheduler.h"
@@ -73,6 +74,7 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
     
     init_paging(ram_mb);
     init_heap(&__heap_start, &__heap_end);
+    device_registry_init();
     
     display_banner();
     pci_init();

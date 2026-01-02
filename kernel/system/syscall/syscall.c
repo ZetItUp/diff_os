@@ -191,9 +191,11 @@ int system_device_info(int index, device_info_t *user_info)
 
     if (copy_to_user(user_info, &info, sizeof(info)) != 0)
     {
+        device_put(dev);
         return -1;
     }
 
+    device_put(dev);
     return 0;
 }
 
