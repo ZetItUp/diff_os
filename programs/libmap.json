@@ -1,4 +1,11 @@
 {
+  "diffhardware.exl": [
+    "device_count",
+    "device_get_info",
+    "device_class_name",
+    "device_bus_name",
+    "device_status_name"
+  ],
   "diffc.exl": [
     "printf",
     "puts",

@@ -656,6 +656,9 @@ typedef struct desktop_icon
     int bbox_h;
     int label_x;
     int label_y;
+    int label_x2;
+    int label_y2;
+    int label_split;
     int selected;
 } desktop_icon_t;
 
@@ -687,7 +690,56 @@ static void wm_desktop_layout_icons(void)
         tga_image_t *img = icon->icon_img ? icon->icon_img : g_desktop_default_icon;
         int icon_w = img ? (int)img->width : 32;
         int icon_h = img ? (int)img->height : 32;
-        int text_w = (title_font && icon->name[0]) ? (int)strlen(icon->name) * font_w : 0;
+
+        int name_len = icon->name[0] ? (int)strlen(icon->name) : 0;
+        int text_w = name_len * font_w;
+        int line1_w = text_w;
+        int line2_w = 0;
+        int num_lines = 1;
+
+        icon->label_split = 0;
+        icon->label_x2 = 0;
+        icon->label_y2 = 0;
+
+        // Check if we should split the text into two lines
+        if (name_len > 12 && title_font)
+        {
+            // Find a space to split at, prefer middle
+            int best_split = 0;
+            int mid = name_len / 2;
+
+            for (int j = mid; j > 0; --j)
+            {
+                if (icon->name[j] == ' ')
+                {
+                    best_split = j;
+                    break;
+                }
+            }
+
+            // If no space found before middle, try after
+            if (best_split == 0)
+            {
+                for (int j = mid; j < name_len; ++j)
+                {
+                    if (icon->name[j] == ' ')
+                    {
+                        best_split = j;
+                        break;
+                    }
+                }
+            }
+
+            if (best_split > 0)
+            {
+                icon->label_split = best_split;
+                num_lines = 2;
+                line1_w = best_split * font_w;
+                line2_w = (name_len - best_split - 1) * font_w;
+                text_w = (line1_w > line2_w) ? line1_w : line2_w;
+            }
+        }
+
         int bbox_w = icon_w;
         int bbox_x = x;
 
@@ -699,7 +751,8 @@ static void wm_desktop_layout_icons(void)
             bbox_w = text_w;
         }
 
-        int total_h = icon_h + (label_h ? (DESKTOP_ICON_LABEL_GAP + label_h) : 0);
+        int total_label_h = label_h * num_lines;
+        int total_h = icon_h + (label_h ? (DESKTOP_ICON_LABEL_GAP + total_label_h) : 0);
 
         icon->icon_x = x;
         icon->icon_y = y;
@@ -707,9 +760,20 @@ static void wm_desktop_layout_icons(void)
         icon->bbox_y = y;
         icon->bbox_w = bbox_w;
         icon->bbox_h = total_h;
-        icon->label_x = x + (icon_w - text_w) / 2;
+
+        // Center first line
+        int icon_center = x + icon_w / 2;
+        icon->label_x = icon_center - line1_w / 2;
         if (icon->label_x < 0) icon->label_x = 0;
         icon->label_y = y + icon_h + DESKTOP_ICON_LABEL_GAP;
+
+        // Center second line if split
+        if (num_lines == 2)
+        {
+            icon->label_x2 = icon_center - line2_w / 2;
+            if (icon->label_x2 < 0) icon->label_x2 = 0;
+            icon->label_y2 = icon->label_y + font_h;
+        }
 
         y += total_h + DESKTOP_ICON_ROW_GAP;
         if (y + total_h > (int)g_mode.height)
@@ -956,13 +1020,44 @@ static void wm_draw_desktop_icons(int clip_x, int clip_y, int clip_w, int clip_h
         if (title_font && icon->name[0])
         {
             uint32_t text_color = icon->selected ? ICON_TINT_SELECTED : 0xFFFFFFFF;
-            font_draw_text(title_font,
-                           g_backbuffer,
-                           g_backbuffer_stride,
-                           icon->label_x,
-                           icon->label_y,
-                           icon->name,
-                           text_color);
+
+            if (icon->label_split > 0)
+            {
+                // Draw first line up to split point
+                char line1[NAME_MAX];
+                int split = icon->label_split;
+                if (split >= (int)sizeof(line1)) split = sizeof(line1) - 1;
+                memcpy(line1, icon->name, (size_t)split);
+                line1[split] = '\0';
+
+                font_draw_text(title_font,
+                               g_backbuffer,
+                               g_backbuffer_stride,
+                               icon->label_x,
+                               icon->label_y,
+                               line1,
+                               text_color);
+
+                // Draw second line after the space
+                const char *line2 = icon->name + split + 1;
+                font_draw_text(title_font,
+                               g_backbuffer,
+                               g_backbuffer_stride,
+                               icon->label_x2,
+                               icon->label_y2,
+                               line2,
+                               text_color);
+            }
+            else
+            {
+                font_draw_text(title_font,
+                               g_backbuffer,
+                               g_backbuffer_stride,
+                               icon->label_x,
+                               icon->label_y,
+                               icon->name,
+                               text_color);
+            }
         }
     }
 }

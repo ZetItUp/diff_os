@@ -69,8 +69,8 @@ static terminal_component_t g_terminal;
 static int g_terminal_font_height = 0;
 
 static const char *g_shell_name = "Different Terminal";
-static const unsigned g_ver_major = 1;
-static const unsigned g_ver_minor = 0;
+static const unsigned g_ver_major = 0;
+static const unsigned g_ver_minor = 1;
 
 static int g_last_status = 0;
 static char g_cwd[256] = "/";

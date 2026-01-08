@@ -1,0 +1,24 @@
+[
+  {
+    "arguments": [
+      "/home/zet/i386-elf/bin/i386-elf-gcc",
+      "-m32",
+      "-g",
+      "-ffreestanding",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-std=gnu99",
+      "-g",
+      "-I",
+      "kernel/includes",
+      "-c",
+      "-o",
+      "build/obj/kernel.o",
+      "kernel/kernel.c"
+    ],
+    "directory": "/home/zet/os",
+    "file": "/home/zet/os/kernel/kernel.c",
+    "output": "/home/zet/os/build/obj/kernel.o"
+  }
+]

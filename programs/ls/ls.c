@@ -227,7 +227,7 @@ int main(int argc, char *argv[])
         display_path[disp_len + 1] = '\0';
     }
 
-    printf("Content of %s\n", display_path);
+    printf("\nContent of %s\n", display_path);
     hr('=');
     printf(" %-12s %10s  %s\n", "Type", "Size (bytes)", "Name");
     hr('-');
