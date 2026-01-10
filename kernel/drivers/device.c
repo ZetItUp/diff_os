@@ -13,6 +13,15 @@ static uint32_t g_next_device_id = 1;
 static spinlock_t g_device_lock;
 static int g_device_lock_inited = 0;
 
+// Network device listeners
+#define MAX_NETWORK_LISTENERS 8
+#define MAX_NETWORK_NOTIFY_DEVICES 8
+
+static network_device_notify_t g_network_listeners[MAX_NETWORK_LISTENERS];
+static int g_network_listener_count = 0;
+static spinlock_t g_network_listener_lock;
+static int g_network_listener_lock_inited = 0;
+
 //
 // Class / Bus Registry
 //
@@ -53,6 +62,154 @@ static void device_registry_lock_init(void)
         spinlock_init(&g_bus_lock);
         g_registry_locks_inited = 1;
     }
+}
+
+static void network_listener_lock_init(void)
+{
+    if(!g_network_listener_lock_inited)
+    {
+        spinlock_init(&g_network_listener_lock);
+        g_network_listener_lock_inited = 1;
+    }
+}
+
+static void notify_network_listeners(device_t *dev, int added)
+{
+    network_device_notify_t listeners[MAX_NETWORK_LISTENERS];
+    int count = 0;
+
+    if(!dev)
+    {
+
+        return;
+    }
+
+    network_listener_lock_init();
+
+    uint32_t flags = 0;
+    spin_lock_irqsave(&g_network_listener_lock, &flags);
+
+    for(int i = 0; i < g_network_listener_count; i++)
+    {
+        listeners[count++] = g_network_listeners[i];
+    }
+
+    spin_unlock_irqrestore(&g_network_listener_lock, flags);
+
+    for(int i = 0; i < count; i++)
+    {
+        listeners[i](dev, added);
+    }
+}
+
+static int gather_network_devices(device_t **out, int max_count)
+{
+    if(!out || max_count <= 0)
+    {
+
+        return 0;
+    }
+
+    device_lock_init();
+
+    uint32_t flags = 0;
+    spin_lock_irqsave(&g_device_lock, &flags);
+
+    int count = 0;
+
+    for(device_t *dev = g_device_list; dev && count < max_count; dev = dev->next)
+    {
+        if(dev->class == DEVICE_CLASS_NETWORK)
+        {
+            dev->refcount++;
+            out[count++] = dev;
+        }
+    }
+
+    spin_unlock_irqrestore(&g_device_lock, flags);
+
+    return count;
+}
+
+int device_register_network_listener(network_device_notify_t callback)
+{
+    if(!callback)
+    {
+
+        return -1;
+    }
+
+    network_listener_lock_init();
+
+    uint32_t flags = 0;
+    spin_lock_irqsave(&g_network_listener_lock, &flags);
+
+    for(int i = 0; i < g_network_listener_count; i++)
+    {
+        if(g_network_listeners[i] == callback)
+        {
+            spin_unlock_irqrestore(&g_network_listener_lock, flags);
+
+            return 0;
+        }
+    }
+
+    if(g_network_listener_count >= MAX_NETWORK_LISTENERS)
+    {
+        spin_unlock_irqrestore(&g_network_listener_lock, flags);
+
+        return -1;
+    }
+
+    g_network_listeners[g_network_listener_count++] = callback;
+
+    spin_unlock_irqrestore(&g_network_listener_lock, flags);
+
+    device_t *devices[MAX_NETWORK_NOTIFY_DEVICES];
+    int device_count = gather_network_devices(devices, MAX_NETWORK_NOTIFY_DEVICES);
+
+    for(int i = 0; i < device_count; i++)
+    {
+        callback(devices[i], 1);
+        device_put(devices[i]);
+    }
+
+    return 0;
+}
+
+int device_unregister_network_listener(network_device_notify_t callback)
+{
+    if(!callback)
+    {
+
+        return -1;
+    }
+
+    network_listener_lock_init();
+
+    uint32_t flags = 0;
+    spin_lock_irqsave(&g_network_listener_lock, &flags);
+
+    for(int i = 0; i < g_network_listener_count; i++)
+    {
+        if(g_network_listeners[i] == callback)
+        {
+            for(int j = i; j < g_network_listener_count - 1; j++)
+            {
+                g_network_listeners[j] = g_network_listeners[j + 1];
+            }
+
+            g_network_listener_count--;
+
+            spin_unlock_irqrestore(&g_network_listener_lock, flags);
+
+            return 0;
+        }
+    }
+
+    spin_unlock_irqrestore(&g_network_listener_lock, flags);
+
+    return -1;
 }
 
 int device_class_register(device_class_t class, const char *name)
@@ -291,6 +448,11 @@ device_t *device_register(device_class_t class, const char *name, void *operatio
 
     spin_unlock_irqrestore(&g_device_lock, flags);
 
+    if(class == DEVICE_CLASS_NETWORK)
+    {
+        notify_network_listeners(dev, 1);
+    }
+
     return dev;
 }
 
@@ -320,6 +482,12 @@ void device_unregister(device_t *dev)
             dev->status = DEVICE_STATUS_DISABLED;
 
             spin_unlock_irqrestore(&g_device_lock, flags);
+
+            if(dev->class == DEVICE_CLASS_NETWORK)
+            {
+                notify_network_listeners(dev, 0);
+            }
+
             device_put(dev);
 
             return;

@@ -64,6 +64,8 @@ typedef struct kernel_exports
     int (*device_bus_register)(uint8_t bus_type, const char *name);
     int (*device_class_unregister)(device_class_t class);
     int (*device_bus_unregister)(uint8_t bus_type);
+    int (*device_register_network_listener)(network_device_notify_t callback);
+    int (*device_unregister_network_listener)(network_device_notify_t callback);
 
     // String utilities
     size_t (*strlcpy)(char *dst, const char *src, size_t siz);

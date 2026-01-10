@@ -40,5 +40,7 @@ kernel_exports_t g_exports =
     .device_bus_register = device_bus_register,
     .device_class_unregister = device_class_unregister,
     .device_bus_unregister = device_bus_unregister,
+    .device_register_network_listener = device_register_network_listener,
+    .device_unregister_network_listener = device_unregister_network_listener,
     .strlcpy = strlcpy,
 };

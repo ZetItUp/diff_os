@@ -122,6 +122,7 @@
 // TX Buffer: 4 Descriptors, each can hold one maximum size packet
 #define TX_BUF_SIZE             1536            // Max Eternet Frame
 #define TX_BUF_COUNT            4               // 4 TX Descriptors
+#define RX_QUEUE_LEN            32
 
 // RTL8139 will be configured dynamically after reading PCI config
 // Let's start with IRQ11 is usually the first PCI slot.
@@ -146,6 +147,16 @@ typedef struct rtl8139_device
     int tx_current;
     uint16_t rx_read_ptr;
     uint8_t mac_address[6];
+
+    struct
+    {
+        uint16_t length;
+        uint8_t data[TX_BUF_SIZE];
+    } rx_queue[RX_QUEUE_LEN];
+    uint8_t rx_head;
+    uint8_t rx_tail;
+    uint8_t rx_count;
+    uint32_t rx_dropped;
 
     struct rtl8139_device *next;
 } rtl8139_device_t;
@@ -382,12 +393,28 @@ static void handle_rx(rtl8139_device_t *nic)
         uint8_t *packet_data = nic->rx_buffer + nic->rx_read_ptr + 4;
         uint16_t packet_len = length - 4;   // Exclude CRC
 
-        // TODO: Pass packet to network stack
-        // For now just print some info
-        kernel->printf("[DRIVER] RTL8139 - RX packet: len=%d, src=%02x:%02x:%02x:%02x:%02x:%02x\n",
-                       packet_len,
-                       packet_data[6], packet_data[7], packet_data[8],
-                       packet_data[9], packet_data[10], packet_data[11]);
+        if (packet_len <= TX_BUF_SIZE)
+        {
+            if (nic->rx_count < RX_QUEUE_LEN)
+            {
+                uint8_t slot = nic->rx_tail;
+                nic->rx_queue[slot].length = packet_len;
+                for (uint16_t i = 0; i < packet_len; i++)
+                {
+                    nic->rx_queue[slot].data[i] = packet_data[i];
+                }
+                nic->rx_tail = (uint8_t)((nic->rx_tail + 1) % RX_QUEUE_LEN);
+                nic->rx_count++;
+            }
+            else
+            {
+                nic->rx_dropped++;
+            }
+        }
+        else
+        {
+            nic->rx_dropped++;
+        }
 
         // Advance read pointer - must be 4 byte aligned
         nic->rx_read_ptr = (nic->rx_read_ptr + 4 + length + 3) & ~3;
@@ -487,6 +514,10 @@ static void pci_scan_callback(const pci_device_t *dev, void *ctx)
         {
             nic->mac_address[i] = 0;
         }
+        nic->rx_head = 0;
+        nic->rx_tail = 0;
+        nic->rx_count = 0;
+        nic->rx_dropped = 0;
         nic->next = g_devices;
         g_devices = nic;
 
@@ -546,6 +577,76 @@ static int nic_dev_send_packet(device_t *dev, const void *data, uint16_t length)
     return rtl8139_send(nic, (const uint8_t *)data, length);
 }
 
+static int nic_dev_receive_packet(device_t *dev, void *buffer, uint16_t buf_size)
+{
+    rtl8139_device_t *nic = (rtl8139_device_t *)dev->private_data;
+
+    if (!nic || !buffer || buf_size == 0)
+    {
+        return -1;
+    }
+
+    if (nic->rx_count == 0)
+    {
+        return 0;
+    }
+
+    uint8_t slot = nic->rx_head;
+    uint16_t length = nic->rx_queue[slot].length;
+
+    if (length > buf_size)
+    {
+        return -1;
+    }
+
+    for (uint16_t i = 0; i < length; i++)
+    {
+        ((uint8_t *)buffer)[i] = nic->rx_queue[slot].data[i];
+    }
+
+    nic->rx_head = (uint8_t)((nic->rx_head + 1) % RX_QUEUE_LEN);
+    nic->rx_count--;
+
+    return (int)length;
+}
+
+static int nic_dev_packets_available(device_t *dev)
+{
+    rtl8139_device_t *nic = (rtl8139_device_t *)dev->private_data;
+
+    if (!nic)
+    {
+        return 0;
+    }
+
+    return nic->rx_count;
+}
+
+static int nic_dev_set_promiscuous(device_t *dev, int enabled)
+{
+    rtl8139_device_t *nic = (rtl8139_device_t *)dev->private_data;
+
+    if (!nic)
+    {
+        return -1;
+    }
+
+    uint32_t rcr = kernel->inl(nic->io_base + REG_RCR);
+
+    if (enabled)
+    {
+        rcr |= RCR_AAP;
+    }
+    else
+    {
+        rcr &= ~RCR_AAP;
+    }
+
+    kernel->outl(nic->io_base + REG_RCR, rcr);
+
+    return 0;
+}
+
 static int nic_dev_get_link_status(device_t *dev)
 {
     (void)dev;
@@ -564,11 +665,11 @@ static network_device_t g_nic_ops =
 {
     .get_mac = nic_dev_get_mac,
     .send_packet = nic_dev_send_packet,
-    .receive_packet = 0,
-    .packets_available = 0,
+    .receive_packet = nic_dev_receive_packet,
+    .packets_available = nic_dev_packets_available,
     .get_link_status = nic_dev_get_link_status,
     .get_speed = nic_dev_get_speed,
-    .set_promiscuous = 0,
+    .set_promiscuous = nic_dev_set_promiscuous,
     .set_multicast = 0,
 };
 

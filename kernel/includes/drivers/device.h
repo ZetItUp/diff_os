@@ -223,6 +223,11 @@ int device_bus_unregister(uint8_t bus_type);
 const char *device_class_name(device_class_t class);
 const char *device_bus_name(uint8_t bus_type);
 
+typedef void (*network_device_notify_t)(device_t *dev, int added);
+
+int device_register_network_listener(network_device_notify_t callback);
+int device_unregister_network_listener(network_device_notify_t callback);
+
 // Get Device
 device_t *device_get_by_id(uint32_t id);
 device_t *device_get_by_name(const char *name);
