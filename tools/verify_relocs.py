@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
 Verify that all relocations from an ELF file are properly converted to DEX/EXL format.
-Compares relocations between the ELF dump and the final DEX/EXL file.
 """
-
 import sys
 import struct
 import subprocess
@@ -49,11 +47,13 @@ DEX_TYPE_NAMES = {
 def read_elf_relocations(dump_file):
     """Read relocations from elfdump output."""
     relocs = []
+    
     with open(dump_file, 'r') as f:
         for line in f:
             if line.startswith("RELOC "):
                 parts = line.split()
                 kv = {}
+                
                 for part in parts[1:]:
                     if '=' in part:
                         k, v = part.split('=', 1)
@@ -85,8 +85,10 @@ def read_dex_relocations(dex_file):
     with open(dex_file, 'rb') as f:
         # Read DEX header
         magic = f.read(4)
+        
         if magic != b'\x00DEX':  # DEX magic
             print(f"Error: {dex_file} is not a valid DEX file (magic={magic.hex()})")
+            
             return relocs
 
         version = struct.unpack('<I', f.read(4))[0]
@@ -121,8 +123,10 @@ def read_dex_relocations(dex_file):
         if reloc_count > 0 and reloc_offset > 0:
             try:
                 f.seek(reloc_offset)
+                
                 for i in range(reloc_count):
                     data = f.read(16)  # 4 fields * 4 bytes
+                    
                     if len(data) < 16:
                         print(f"Warning: Incomplete relocation entry #{i}")
                         break
@@ -167,6 +171,7 @@ def compare_relocations(elf_dump, dex_file, verbose=False):
 
     print("\n=== DEX Relocation Type Summary ===")
     dex_by_type = {}
+    
     for r in dex_relocs:
         rtype = r['type']
         dex_by_type[rtype] = dex_by_type.get(rtype, 0) + 1
@@ -178,6 +183,7 @@ def compare_relocations(elf_dump, dex_file, verbose=False):
 
     # Build offset maps for DEX relocations
     dex_by_offset = {}
+    
     for r in dex_relocs:
         dex_by_offset[r['offset']] = r
 
@@ -187,10 +193,6 @@ def compare_relocations(elf_dump, dex_file, verbose=False):
     missing = []
     type_mismatch = []
     found = []
-
-    # We need to map ELF offsets to image offsets
-    # This requires understanding section mappings
-    # For now, let's focus on detecting patterns
 
     # Count PC32 relocations in ELF that should be in DEX
     pc32_in_elf = [r for r in elf_relocs if r['type'] == R_386_PC32]
@@ -202,6 +204,7 @@ def compare_relocations(elf_dump, dex_file, verbose=False):
 
     if verbose and len(pc32_in_elf) > 0:
         print("\n  Sample PC32 relocations from ELF:")
+        
         for r in pc32_in_elf[:10]:
             print(f"    offset=0x{r['offset']:08x} symname={r['symname']}")
 
@@ -216,8 +219,10 @@ def compare_relocations(elf_dump, dex_file, verbose=False):
 
     # Find W_CheckNumForName PC32 relocations
     w_check_pc32 = [r for r in elf_relocs if r['type'] == R_386_PC32 and 'W_CheckNumForName' in r['symname']]
+    
     if w_check_pc32:
         print(f"\nFound {len(w_check_pc32)} PC32 relocations to W_CheckNumForName in ELF:")
+        
         for r in w_check_pc32:
             print(f"  offset=0x{r['offset']:08x} type={ELF_TYPE_NAMES.get(r['type'])} symname={r['symname']}")
 

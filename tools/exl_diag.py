@@ -73,9 +73,13 @@ def parse_header(blob):
 
 def read_imports(blob, hdr, strtab):
     imports = []
+
     if hdr["import_cnt"] == 0 or hdr["import_off"] == 0:
-        return imports
+
+    return imports
+    
     base = hdr["import_off"]
+    
     for i in range(hdr["import_cnt"]):
         off = base + i * 16
         exl_off = u32_le(blob, off + 0)
@@ -84,26 +88,34 @@ def read_imports(blob, hdr, strtab):
         exl = strtab[exl_off:].split(b"\x00", 1)[0].decode("utf-8", "ignore") if exl_off < len(strtab) else f"<bad:{exl_off}>"
         sym = strtab[sym_off:].split(b"\x00", 1)[0].decode("utf-8", "ignore") if sym_off < len(strtab) else f"<bad:{sym_off}>"
         imports.append((i, exl, sym, typ))
+    
     return imports
 
 def read_relocs(blob, hdr):
     relocs = []
+    
     if hdr["reloc_cnt"] == 0 or hdr["reloc_off"] == 0:
         return relocs
+    
     base = hdr["reloc_off"]
+    
     for i in range(hdr["reloc_cnt"]):
         off = base + i * 16
         r_off = u32_le(blob, off + 0)
         symidx = u32_le(blob, off + 4)
         typ = u32_le(blob, off + 8)
         relocs.append((i, r_off, symidx, typ))
+    
     return relocs
 
 def read_symbols(blob, hdr, strtab):
     syms = []
+    
     if hdr["sym_cnt"] == 0 or hdr["sym_off"] == 0:
         return syms
+    
     base = hdr["sym_off"]
+    
     for i in range(hdr["sym_cnt"]):
         off = base + i * 12
         name_off = u32_le(blob, off + 0)
@@ -111,6 +123,7 @@ def read_symbols(blob, hdr, strtab):
         typ = u32_le(blob, off + 8)
         name = strtab[name_off:].split(b"\x00", 1)[0].decode("utf-8", "ignore") if name_off < len(strtab) else f"<bad:{name_off}>"
         syms.append((i, name, val_off, typ))
+    
     return syms
 
 def main():

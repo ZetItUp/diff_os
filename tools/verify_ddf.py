@@ -6,16 +6,21 @@ def read_cstr(data, off):
     out = []
     n = len(data)
     i = off
+
     while i < n:
         b = data[i]
+
         if b == 0:
             break
+
         out.append(b)
         i += 1
+
     try:
         return bytes(out).decode('utf-8')
     except:
         return ''
+
 
 def main(filename):
     with open(filename, "rb") as f:
@@ -23,6 +28,7 @@ def main(filename):
 
     if len(data) < 80 or data[:4] != b'DDF\x00':
         print("Not a valid DDF file (missing magic or too short)")
+
         return 1
 
     # ddf_header_t: magic + 19 x uint32
@@ -73,29 +79,41 @@ def main(filename):
     file_size = len(data)
     module_total = max(file_size, bss_off + bss_size)
 
-    # Grundsanitet
+    # Basic sanity checks
     def in_file(off, sz):
         return off + sz <= file_size
 
     ok = True
-    if not in_file(text_off, text_size):
-        print("ERROR: .text out of file range"); ok = False
-    if not in_file(ro_off, ro_size):
-        print("ERROR: .rodata out of file range"); ok = False
-    if not in_file(data_off, data_size):
-        print("ERROR: .data out of file range"); ok = False
-    if symtab_off and not in_file(symtab_off, symcount * 12):
-        print("ERROR: .ddf_symtab out of file range"); ok = False
-    # strtab storlek okänd i header; vi kan bara kontrollera att offset finns
-    if strtab_off >= file_size:
-        print("ERROR: .ddf_strtab offset beyond file"); ok = False
-    if reloc_off and not in_file(reloc_off, reloc_count * 16):
-        print("ERROR: .ddf_reloc out of file range (by count)"); ok = False
 
-    # Symboler: dumpa några och validera att value_offset ligger inom [0, module_total)
+    if not in_file(text_off, text_size):
+        print("ERROR: .text out of file range")
+        ok = False
+
+    if not in_file(ro_off, ro_size):
+        print("ERROR: .rodata out of file range")
+        ok = False
+
+    if not in_file(data_off, data_size):
+        print("ERROR: .data out of file range")
+        ok = False
+
+    if symtab_off and not in_file(symtab_off, symcount * 12):
+        print("ERROR: .ddf_symtab out of file range")
+        ok = False
+
+    # Strtab size is unknown in header, we can only check that offset exists
+    if strtab_off >= file_size:
+        print("ERROR: .ddf_strtab offset beyond file")
+        ok = False
+
+    if reloc_off and not in_file(reloc_off, reloc_count * 16):
+        print("ERROR: .ddf_reloc out of file range (by count)")
+        ok = False
+
+    # Symbols: dump and validate that value_offset is within [0, module_total)
     if symtab_off and symcount:
         sym_blob = data[symtab_off:symtab_off + symcount * 12]
-        # Lägg ett rimligt tak på strtab-läsning
+        # Set a reasonable limit on strtab reading
         strtab_blob = data[strtab_off:] if strtab_off < file_size else b''
 
         for i in range(symcount):
@@ -103,13 +121,15 @@ def main(filename):
             name = read_cstr(strtab_blob, noff) if noff < len(strtab_blob) else ''
             within = (valoff < module_total)
             print(f"  Symbol[{i:03d}] name_off={noff:5d} value_off=0x{valoff:08x} type={typ}  name='{name}'  {'OK' if within else 'OUT-OF-RANGE'}")
+
             if not within:
                 ok = False
 
     print(f"\nModule total (incl. BSS in RAM): {module_total} bytes")
     print("VERIFY:", "OK" if ok else "FAILED")
+
     return 0 if ok else 2
+
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1]) if len(sys.argv) >= 2 else 1)
-

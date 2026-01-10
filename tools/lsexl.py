@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import sys
 import struct
 import argparse
@@ -8,7 +7,7 @@ from collections import defaultdict
 DEX_MAGIC = 0x58454400  # "DEX\0"
 HDR_SIZE = 0x100
 
-# Header offsets (u32, little-endian)
+# Header offsets
 OFF_MAGIC = 0x00
 OFF_VERSION_MAJ = 0x04
 OFF_VERSION_MIN = 0x08
@@ -190,8 +189,7 @@ def list_exports(f, hdr, strtab):
             break
 
         name_off, val_off, typ = struct.unpack("<III", raw)
-        name = cstr_at(strtab, name_off)
-        t = "func" if typ == 0 else "obj"
+        name = cstr_at(strtab, name_off) 
 
         if typ == 0:
             funcs.append((i, name, val_off))
@@ -221,11 +219,13 @@ def list_relocations(f, hdr):
     if rel_off == 0 or rel_cnt == 0:
         print("  (none)")
         print()
+        
         return
 
     f.seek(rel_off)
 
-    type_names = {
+    type_names = 
+    {
         0: "ABS32",
         2: "PC32",
         8: "DEX_RELATIVE"
@@ -235,6 +235,7 @@ def list_relocations(f, hdr):
 
     for i in range(min(rel_cnt, 20)):  # Show first 20
         raw = f.read(16)  # dex_reloc_t is 16 bytes (offset, symbol_idx, type, reserved)
+        
         if len(raw) != 16:
             break
 
@@ -249,6 +250,7 @@ def list_relocations(f, hdr):
         print(f"  ... ({rel_cnt - 10} more relocations)")
 
     print(f"\nRelocation summary:")
+    
     for rtype, count in sorted(by_type.items()):
         print(f"  {rtype}: {count}")
 

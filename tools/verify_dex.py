@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-Enhanced DEX Verifier with Relocation Simulation
-This tool verifies DEX files by simulating the actual relocation process
-that occurs in the kernel's dex_loader.c
-"""
-
 import sys
 import struct
 import os
@@ -30,6 +24,7 @@ def read_dex_header(data):
         return None
 
     magic = struct.unpack_from("<I", data, 0)[0]
+    
     if magic != DEX_MAGIC:
         return None
 
@@ -77,12 +72,14 @@ def read_imports(data, hdr):
         if exl_name_off < hdr['strtab_size']:
             str_off = hdr['strtab_offset'] + exl_name_off
             end = data.find(b'\0', str_off)
+            
             if end != -1:
                 exl_name = data[str_off:end].decode('utf-8', errors='replace')
 
         if sym_name_off < hdr['strtab_size']:
             str_off = hdr['strtab_offset'] + sym_name_off
             end = data.find(b'\0', str_off)
+            
             if end != -1:
                 sym_name = data[str_off:end].decode('utf-8', errors='replace')
 
@@ -92,6 +89,7 @@ def read_imports(data, hdr):
             'type': import_type,
             'idx': i
         })
+        
         offset += 16
 
     return imports
@@ -104,6 +102,7 @@ def read_relocations(data, hdr):
     for i in range(hdr['reloc_table_count']):
         if offset + 16 > len(data):
             print(f"ERROR: Relocation {i} extends beyond file")
+            
             break
 
         rel_offset = struct.unpack_from("<I", data, offset)[0]
@@ -115,6 +114,7 @@ def read_relocations(data, hdr):
             'idx': rel_idx,
             'type': rel_type
         })
+        
         offset += 16
 
     return relocs
@@ -125,6 +125,7 @@ def simulate_import_resolution(imports):
     Returns a list of simulated addresses for each import
     """
     import_addrs = []
+    
     # Simulate EXL being loaded at a different user address
     simulated_exl_base = 0x50000000
 
@@ -144,7 +145,7 @@ def simulate_import_resolution(imports):
 
 def apply_relocations(image, hdr, relocs, import_addrs, verbose=False):
     """
-    Apply relocations to the image, simulating what dex_loader.c does
+    Apply relocations to the image
     Returns (success, errors)
     """
     errors = []
@@ -163,6 +164,7 @@ def apply_relocations(image, hdr, relocs, import_addrs, verbose=False):
         # Check bounds
         if offset + 4 > image_size:
             errors.append(f"Reloc {i}: offset 0x{offset:08x} + 4 exceeds image size 0x{image_size:08x}")
+            
             continue
 
         # Read old value
@@ -173,6 +175,7 @@ def apply_relocations(image, hdr, relocs, import_addrs, verbose=False):
             # Absolute 32-bit relocation: replace with absolute address
             if idx >= len(import_addrs):
                 errors.append(f"Reloc {i} (ABS32): idx {idx} >= import count {len(import_addrs)}")
+                
                 continue
 
             new_value = import_addrs[idx]
@@ -192,6 +195,7 @@ def apply_relocations(image, hdr, relocs, import_addrs, verbose=False):
             # P = address of next instruction (target + 4)
             if idx >= len(import_addrs):
                 errors.append(f"Reloc {i} (PC32): idx {idx} >= import count {len(import_addrs)}")
+                
                 continue
 
             S = import_addrs[idx]
@@ -203,8 +207,10 @@ def apply_relocations(image, hdr, relocs, import_addrs, verbose=False):
             if disp > 0x7FFFFFFF:
                 # Negative displacement
                 actual_disp = disp - 0x100000000
+                
                 if actual_disp < -0x40000000:
                     errors.append(f"Reloc {i} (PC32): displacement {actual_disp} seems too large")
+            
             elif disp > 0x40000000:
                 errors.append(f"Reloc {i} (PC32): displacement 0x{disp:08x} seems too large")
 
@@ -236,18 +242,16 @@ def apply_relocations(image, hdr, relocs, import_addrs, verbose=False):
 def scan_for_suspicious_pointers(image, hdr, relocated_offsets, verbose=False):
     """
     Scan the image for suspicious pointer values that might not have been relocated
-    Focus on .data and .rodata sections where pointers are more common
     """
     warnings = []
 
     # Create a set of offsets that were relocated
     relocated_set = set(relocated_offsets)
 
-    # Focus on .data and .rodata sections (not .text)
-    # These sections are more likely to contain pointer tables
     sections = []
     if hdr['rodata_size'] > 0:
         sections.append(('rodata', hdr['rodata_offset'], hdr['rodata_size']))
+    
     if hdr['data_size'] > 0:
         sections.append(('data', hdr['data_offset'], hdr['data_size']))
 
@@ -278,7 +282,6 @@ def scan_for_suspicious_pointers(image, hdr, relocated_offsets, verbose=False):
 def verify_text_section(image, hdr, relocated_offsets, verbose=False):
     """
     Verify that the .text section contains valid x86 instructions
-    This is a basic sanity check
     """
     errors = []
     text_start = hdr['text_offset']
@@ -291,7 +294,6 @@ def verify_text_section(image, hdr, relocated_offsets, verbose=False):
         entry_bytes = image[entry_off:entry_off+16]
 
         # Check for some common valid instruction patterns
-        # We don't want to see: 00 00 00 00 (all zeros)
         if entry_bytes == b'\x00' * 16:
             errors.append(f"Entry point at 0x{entry_off:08x} is all zeros")
 
@@ -305,10 +307,13 @@ def verify_text_section(image, hdr, relocated_offsets, verbose=False):
 
     # Scan for suspicious unrelocated pointers
     warnings = scan_for_suspicious_pointers(image, hdr, relocated_offsets, verbose)
+    
     if warnings and verbose:
         print(f"\nSuspicious pointer scan found {len(warnings)} warnings:")
+        
         for i, warn in enumerate(warnings[:20]):
             print(f"  {warn}")
+        
         if len(warnings) > 20:
             print(f"  ... and {len(warnings) - 20} more warnings")
 
@@ -321,6 +326,7 @@ def verify_dex_with_relocation(filepath, verbose=False):
 
     if not os.path.exists(filepath):
         print(f"ERROR: File not found: {filepath}")
+        
         return False
 
     with open(filepath, 'rb') as f:
@@ -331,8 +337,10 @@ def verify_dex_with_relocation(filepath, verbose=False):
 
     # Parse header
     hdr = read_dex_header(data)
+    
     if not hdr:
         print("ERROR: Invalid DEX file (bad magic)")
+        
         return False
 
     print(f"\nDEX Header:")
@@ -348,15 +356,20 @@ def verify_dex_with_relocation(filepath, verbose=False):
     print(f"  Symbols: {hdr['symbol_table_count']} at 0x{hdr['symbol_table_offset']:08x}")
     print(f"  Strtab:  size=0x{hdr['strtab_size']:08x} at 0x{hdr['strtab_offset']:08x}")
 
-    # Calculate image size (like dex_loader.c does)
+    # Calculate image size
     max_end = hdr['data_offset'] + hdr['data_size'] + hdr['bss_size']
     tmp = hdr['rodata_offset'] + hdr['rodata_size']
+    
     if tmp > max_end:
         max_end = tmp
+    
     tmp = hdr['text_offset'] + hdr['text_size']
+    
     if tmp > max_end:
         max_end = tmp
+    
     tmp = hdr['entry_offset'] + 16
+    
     if tmp > max_end:
         max_end = tmp
 
@@ -374,8 +387,10 @@ def verify_dex_with_relocation(filepath, verbose=False):
 
     if verbose and len(imports) > 0:
         print("\nImports:")
+        
         for imp in imports[:10]:  # Show first 10
             print(f"  [{imp['idx']}] {imp['exl']}:{imp['symbol']}")
+        
         if len(imports) > 10:
             print(f"  ... and {len(imports) - 10} more")
 
@@ -397,12 +412,13 @@ def verify_dex_with_relocation(filepath, verbose=False):
             data[hdr['data_offset']:hdr['data_offset']+hdr['data_size']]
 
     # BSS is already zero-filled
-
     # Simulate import resolution
     print("\nSimulating import resolution...")
     import_addrs = simulate_import_resolution(imports)
+    
     if import_addrs is None:
         print("ERROR: Import resolution failed")
+        
         return False
 
     # Apply relocations
@@ -411,8 +427,10 @@ def verify_dex_with_relocation(filepath, verbose=False):
 
     if not success:
         print(f"\nERROR: Relocation failed with {len(errors)} errors:")
+        
         for err in errors:
             print(f"  {err}")
+        
         return False
 
     # Collect relocated offsets
@@ -424,14 +442,17 @@ def verify_dex_with_relocation(filepath, verbose=False):
 
     if not success:
         print(f"\nERROR: Text verification failed:")
+        
         for err in text_errors:
             print(f"  {err}")
+        
         return False
 
     print("\n" + "=" * 80)
     print("SUCCESS: DEX file passed all checks")
     print(f"  Simulated image base: 0x{SIMULATED_IMAGE_BASE:08x}")
     print(f"  Simulated entry point: 0x{SIMULATED_IMAGE_BASE + hdr['entry_offset']:08x}")
+    
     return True
 
 if __name__ == '__main__':

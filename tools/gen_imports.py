@@ -17,9 +17,12 @@ def u32(buf, off):
 def cstr_at(buf, off):
     if off >= len(buf):
         return ""
+
     end = buf.find(b"\x00", off)
+    
     if end < 0:
         end = len(buf)
+    
     return buf[off:end].decode("utf-8", errors="replace")
 
 def read_exl_exports(exl_path):
@@ -27,12 +30,14 @@ def read_exl_exports(exl_path):
     try:
         with open(exl_path, "rb") as f:
             hdr = f.read(HDR_SIZE)
+            
             if len(hdr) != HDR_SIZE or u32(hdr, 0x00) != DEX_MAGIC:
                 return []
 
             # Read strtab
             strtab_off = u32(hdr, 0x44)
             strtab_len = u32(hdr, 0x48)
+            
             if strtab_off == 0 or strtab_len == 0:
                 return []
 
@@ -42,17 +47,22 @@ def read_exl_exports(exl_path):
             # Read symbol table
             sym_off = u32(hdr, 0x3C)
             sym_cnt = u32(hdr, 0x40)
+            
             if sym_off == 0 or sym_cnt == 0:
                 return []
 
             f.seek(sym_off)
             symbols = []
+            
             for i in range(sym_cnt):
                 raw = f.read(12)
+                
                 if len(raw) != 12:
                     break
+                
                 name_off, val_off, typ = struct.unpack("<III", raw)
                 name = cstr_at(strtab, name_off)
+                
                 if name:
                     symbols.append(name)
 
@@ -84,17 +94,23 @@ def scan_exl_directory(exl_dir):
 def normalize_exl(name):
     if not name:
         return "diffc.exl"
+    
     name = str(name).strip()
+    
     if not name.endswith(".exl"):
         name += ".exl"
+    
     return name
 
 def load_libmap(path):
     if not path or not os.path.exists(path):
         return {}
+    
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
+    
     sym_to_exl = {}
+    
     if all(isinstance(v, list) for v in data.values()):
         for exl, syms in data.items():
             for s in syms:
@@ -102,6 +118,7 @@ def load_libmap(path):
     else:
         for s, exl in data.items():
             sym_to_exl[str(s)] = normalize_exl(exl)
+    
     return sym_to_exl
 
 def get_undefined_symbols(elf_path):
@@ -112,17 +129,23 @@ def get_undefined_symbols(elf_path):
             capture_output=True,
             text=True
         )
+        
         syms = []
+        
         for line in res.stdout.splitlines():
             line = line.strip()
+            
             if not line:
                 continue
+            
             parts = line.split()
             sym = parts[-1]
             syms.append(sym)
+        
         return sorted(set(syms))
     except FileNotFoundError:
         print("error: i386-elf-nm not found in PATH", file=sys.stderr)
+        
         return []
 
 def main():
@@ -130,10 +153,10 @@ def main():
         print(USAGE, file=sys.stderr)
         sys.exit(2)
 
-    elf_path      = sys.argv[1]
-    out_dir       = sys.argv[2]
-    libmap_json   = sys.argv[3] if len(sys.argv) >= 4 else None
-    default_exl   = sys.argv[4] if len(sys.argv) >= 5 else "diffc.exl"
+    elf_path = sys.argv[1]
+    out_dir = sys.argv[2]
+    libmap_json = sys.argv[3] if len(sys.argv) >= 4 else None
+    default_exl = sys.argv[4] if len(sys.argv) >= 5 else "diffc.exl"
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
