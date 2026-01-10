@@ -1,6 +1,3 @@
-# Window Template Makefile
-# Supports multiple .c files and local headers
-
 CC        := i386-elf-gcc
 PYTHON    := python3
 

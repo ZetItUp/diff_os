@@ -38,6 +38,9 @@ typedef struct window_t
     int damage_y_position;
     int damage_width;
     int damage_height;
+
+    // Dirty flag for automatic repaint tracking
+    int dirty;
 } window_t;
 
 /* High-level window API for GUI programming */
@@ -50,3 +53,8 @@ int window_has_maximize_button(const window_t *window);
 /* Polymorphic methods (virtual functions) */
 void window_update(window_component_t *self);
 void window_paint(window_component_t *self);
+
+/* Dirty tracking - automatic repaint management */
+void window_mark_dirty(window_t *window);
+int window_needs_repaint(window_t *window);
+void window_clear_dirty(window_t *window);

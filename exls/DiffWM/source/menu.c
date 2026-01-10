@@ -24,8 +24,16 @@ static void menubar_on_mouse_leave(window_component_t *self)
     // Only clear hover if dropdown is not open
     if (!menubar->dropdown_open)
     {
-        menubar->hover_menu = -1;
-        menubar->hover_item = -1;
+        if (menubar->hover_menu != -1 || menubar->hover_item != -1)
+        {
+            menubar->hover_menu = -1;
+            menubar->hover_item = -1;
+            // Mark dirty so the change is visible
+            if (menubar->base.parent)
+            {
+                window_mark_dirty(menubar->base.parent);
+            }
+        }
     }
 }
 
@@ -316,6 +324,15 @@ static int menubar_hit_test_item(menubar_t *menubar, int menu_index, int x, int 
     return -1;
 }
 
+// Helper to mark parent window dirty
+static void menubar_mark_dirty(menubar_t *menubar)
+{
+    if (menubar && menubar->base.parent)
+    {
+        window_mark_dirty(menubar->base.parent);
+    }
+}
+
 bool menubar_handle_event(menubar_t *menubar, const diff_event_t *event)
 {
     if (!menubar || !event || !menubar->base.enabled)
@@ -363,6 +380,11 @@ bool menubar_handle_event(menubar_t *menubar, const diff_event_t *event)
                 // Use base class mouse tracking (fires on_mouse_leave callback)
                 bool mouse_changed = window_component_update_mouse(&menubar->base, mx, my);
 
+                // Track previous state to detect actual changes
+                int prev_hover_menu = menubar->hover_menu;
+                int prev_hover_item = menubar->hover_item;
+                int prev_open_menu = menubar->open_menu;
+
                 if (in_bar)
                 {
                     int title_hit = menubar_hit_test_title(menubar, mx, my);
@@ -376,6 +398,12 @@ bool menubar_handle_event(menubar_t *menubar, const diff_event_t *event)
                         menubar->hover_item = -1;
                     }
 
+                    // Only mark dirty if state changed
+                    if (menubar->hover_menu != prev_hover_menu ||
+                        menubar->open_menu != prev_open_menu)
+                    {
+                        menubar_mark_dirty(menubar);
+                    }
                     return true;
                 }
                 else if (in_dropdown)
@@ -384,6 +412,12 @@ bool menubar_handle_event(menubar_t *menubar, const diff_event_t *event)
                     menubar->hover_menu = -1;
                     menubar->hover_item = menubar_hit_test_item(menubar, menubar->open_menu, mx, my, font);
 
+                    // Only mark dirty if hover item changed
+                    if (menubar->hover_item != prev_hover_item ||
+                        menubar->hover_menu != prev_hover_menu)
+                    {
+                        menubar_mark_dirty(menubar);
+                    }
                     return true;
                 }
                 else if (menubar->dropdown_open)
@@ -392,11 +426,19 @@ bool menubar_handle_event(menubar_t *menubar, const diff_event_t *event)
                     menubar->hover_menu = -1;
                     menubar->hover_item = -1;
 
+                    if (prev_hover_menu != -1 || prev_hover_item != -1)
+                    {
+                        menubar_mark_dirty(menubar);
+                    }
                     return true;
                 }
                 else if (mouse_changed)
                 {
                     // Mouse left the menubar - callback already cleared hover
+                    if (prev_hover_menu != -1)
+                    {
+                        menubar_mark_dirty(menubar);
+                    }
                     return true;
                 }
 
@@ -426,6 +468,7 @@ bool menubar_handle_event(menubar_t *menubar, const diff_event_t *event)
                             menubar->hover_item = -1;
                         }
 
+                        menubar_mark_dirty(menubar);
                         return true;
                     }
                 }
@@ -434,6 +477,7 @@ bool menubar_handle_event(menubar_t *menubar, const diff_event_t *event)
                     // Click outside closes dropdown
                     menubar_close(menubar);
 
+                    menubar_mark_dirty(menubar);
                     return true;
                 }
 
@@ -459,6 +503,7 @@ bool menubar_handle_event(menubar_t *menubar, const diff_event_t *event)
 
                         menubar_close(menubar);
 
+                        menubar_mark_dirty(menubar);
                         return true;
                     }
                 }

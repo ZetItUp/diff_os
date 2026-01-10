@@ -1,5 +1,4 @@
-// Device Manager - Lists all devices grouped by bus type
-
+#include "diffwm/menu.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -22,6 +21,7 @@ static font_t *g_font_large = NULL;
 static font_t *g_font_normal = NULL;
 
 static device_info_t g_devices[MAX_DEVICES];
+static menubar_t g_menubar;
 static int g_device_count = 0;
 
 // Custom component for device list
@@ -31,6 +31,12 @@ typedef struct
 } device_list_component_t;
 
 static device_list_component_t g_device_list;
+
+static void on_file_exit(void *data)
+{
+    (void)data;
+    g_running = false;
+}
 
 static void load_devices(void)
 {
@@ -84,10 +90,13 @@ static void device_list_draw(window_component_t *self)
     uint32_t header_color = 0xFF000000;
     uint32_t device_color = 0xFF000000;
 
-    int y = MARGIN;
+    int y = MENUBAR_HEIGHT + MARGIN;
 
     // Track which bus types we have
-    int bus_types[] = { BUS_TYPE_PS2, BUS_TYPE_ISA, BUS_TYPE_PCI, BUS_TYPE_USB, BUS_TYPE_VIRTUAL, BUS_TYPE_UNKNOWN };
+    int bus_types[] = { 
+        BUS_TYPE_PS2, BUS_TYPE_ISA, BUS_TYPE_PCI, 
+        BUS_TYPE_USB, BUS_TYPE_VIRTUAL, BUS_TYPE_UNKNOWN };
+    
     int num_bus_types = 6;
 
     for (int b = 0; b < num_bus_types; ++b)
@@ -165,6 +174,12 @@ static void device_list_init(device_list_component_t *comp, int x, int y, int wi
 
 static void handle_event(const diff_event_t *ev)
 {
+    // Menubar handles its own dirty marking now
+    if(menubar_handle_event(&g_menubar, ev))
+    {
+        return;
+    }
+
     switch (ev->type)
     {
         case DIFF_EVENT_KEY:
@@ -196,8 +211,18 @@ int main(void)
         return -1;
     }
 
+    // Init menu bar
+    menubar_init(&g_menubar, 0, 0, WIN_W);
+
+    // Create File Menu
+    int file_menu = menubar_add_menu(&g_menubar, "File");
+    menu_add_item(&g_menubar, file_menu, "Exit", on_file_exit, NULL);
+
+    // Add menubar as child component so it gets rendered
+    window_add_component(g_win, &g_menubar.base);
+
     // Init and add device list component
-    device_list_init(&g_device_list, 0, 0, WIN_W, WIN_H);
+    device_list_init(&g_device_list, 0, MENUBAR_HEIGHT, WIN_W, WIN_H - MENUBAR_HEIGHT);
     window_add_component(g_win, &g_device_list.base);
 
     window_request_focus(g_win);
@@ -214,7 +239,14 @@ int main(void)
             handle_event(&ev);
         }
 
-        thread_yield();
+        if (window_needs_repaint(g_win))
+        {
+            window_paint(&g_win->base);
+        }
+        else
+        {
+            thread_sleep_ms(10);
+        }
     }
 
     window_destroy(g_win);

@@ -157,6 +157,7 @@ window_t* window_create(int x, int y, int width, int height, uint32_t flags, con
     win->damage_y_position = 0;
     win->damage_width = 0;
     win->damage_height = 0;
+    win->dirty = 1;  // Start dirty to trigger initial paint
 
     /* Allocate backbuffer for rendering */
     win->backbuffer = malloc((size_t)width * height * sizeof(uint32_t));
@@ -208,6 +209,9 @@ void window_present(window_t *window, const void *pixels)
     {
         return;
     }
+
+    // Clear dirty flag - we're presenting now
+    window->dirty = 0;
 
     int pitch = window->base.width * 4;
 
@@ -314,6 +318,12 @@ int window_poll_event(window_t *window, diff_event_t *event)
     }
 
     *event = msg.event;
+
+    // Automatically mark window dirty on focus changes
+    if (event->type == DIFF_EVENT_FOCUS_GAINED || event->type == DIFF_EVENT_FOCUS_LOST)
+    {
+        window_mark_dirty(window);
+    }
 
     return 1;
 }

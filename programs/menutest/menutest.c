@@ -1,9 +1,5 @@
-// Menu Test Program
-// Demonstrates the menu bar component with File and Edit menus
-
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <system/threads.h>
 #include <diffwm/diffwm.h>
 #include <diffgfx/draw.h>
@@ -12,7 +8,6 @@
 #define WIN_H 300
 
 static bool g_running = true;
-static bool g_dirty = true;
 static window_t *g_window = NULL;
 static menubar_t g_menubar;
 static const char *g_last_action = "Click a menu item";
@@ -23,21 +18,21 @@ static void on_file_new(void *data)
 {
     (void)data;
     g_last_action = "File -> New";
-    g_dirty = true;
+    window_mark_dirty(g_window);
 }
 
 static void on_file_open(void *data)
 {
     (void)data;
     g_last_action = "File -> Open";
-    g_dirty = true;
+    window_mark_dirty(g_window);
 }
 
 static void on_file_save(void *data)
 {
     (void)data;
     g_last_action = "File -> Save";
-    g_dirty = true;
+    window_mark_dirty(g_window);
 }
 
 static void on_file_exit(void *data)
@@ -51,44 +46,42 @@ static void on_edit_undo(void *data)
 {
     (void)data;
     g_last_action = "Edit -> Undo";
-    g_dirty = true;
+    window_mark_dirty(g_window);
 }
 
 static void on_edit_redo(void *data)
 {
     (void)data;
     g_last_action = "Edit -> Redo";
-    g_dirty = true;
+    window_mark_dirty(g_window);
 }
 
 static void on_edit_cut(void *data)
 {
     (void)data;
     g_last_action = "Edit -> Cut";
-    g_dirty = true;
+    window_mark_dirty(g_window);
 }
 
 static void on_edit_copy(void *data)
 {
     (void)data;
     g_last_action = "Edit -> Copy";
-    g_dirty = true;
+    window_mark_dirty(g_window);
 }
 
 static void on_edit_paste(void *data)
 {
     (void)data;
     g_last_action = "Edit -> Paste";
-    g_dirty = true;
+    window_mark_dirty(g_window);
 }
 
 static void handle_event(diff_event_t *ev)
 {
-    // Let menubar handle events first
+    // Menubar handles its own dirty marking now
     if (menubar_handle_event(&g_menubar, ev))
     {
-        g_dirty = true;
-
         return;
     }
 
@@ -101,10 +94,7 @@ static void handle_event(diff_event_t *ev)
             }
             break;
 
-        case DIFF_EVENT_FOCUS_GAINED:
-        case DIFF_EVENT_FOCUS_LOST:
-            g_dirty = true;
-            break;
+        // Focus events are auto-marked dirty by window_poll_event
 
         default:
             break;
@@ -122,7 +112,6 @@ static void draw_content(void)
     int w = g_window->base.width;
     int h = g_window->base.height;
 
-    // Fill background below menubar
     for (int y = MENUBAR_HEIGHT; y < h; y++)
     {
         for (int x = 0; x < w; x++)
@@ -131,7 +120,6 @@ static void draw_content(void)
         }
     }
 
-    // Draw text using cached font
     if (g_font && g_last_action)
     {
         int text_x = 20;
@@ -153,7 +141,6 @@ static void repaint(void)
 
 int main(void)
 {
-    // Load font once at startup
     g_font = font_load_bdf("/system/fonts/spleen-8x16.bdf");
 
     g_window = window_create(100, 100, WIN_W, WIN_H, 0, "Menu Test");
@@ -200,10 +187,9 @@ int main(void)
             handle_event(&ev);
         }
 
-        if (g_dirty)
+        if (window_needs_repaint(g_window))
         {
             repaint();
-            g_dirty = false;
         }
         else
         {

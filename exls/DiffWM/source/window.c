@@ -1,6 +1,7 @@
 #include <diffwm/window.h>
 #include <diffwm/diff_ipc.h>
 #include <diffwm/terminal_component.h>
+#include <diffwm/menu.h>
 #include <diffgfx/draw.h>
 #include <stddef.h>
 
@@ -31,6 +32,7 @@ void window_init(window_t *window, int x, int y, int width, int height, const ch
     window->damage_y_position = 0;
     window->damage_width = 0;
     window->damage_height = 0;
+    window->dirty = 1;  // Start dirty to trigger initial paint
 
     window->base.update = window_update;
     window->base.draw = window_paint;
@@ -118,16 +120,18 @@ void window_paint(window_component_t *self)
         memset32(window->backbuffer, color_rgb(192, 192, 192), total);
     }
 
-    // Render all child components
+    // First pass: render all non-menubar components
     for (int i = 0; i < window->child_count; i++)
     {
         window_component_t *child = window->children[i];
         if (!child || !child->visible)
             continue;
 
+        // Skip menubars - render them last
+        if (child->draw == menubar_paint)
+            continue;
+
         // Check if this is a terminal component (has render method)
-        // We need to call the specific render function based on type
-        // For now, check if it's a terminal_component_t
         if (child->draw == terminal_component_paint)
         {
             terminal_component_t *term = (terminal_component_t*)child;
@@ -135,11 +139,44 @@ void window_paint(window_component_t *self)
         }
         else if (child->draw)
         {
-            // Call polymorphic draw for other components
+            child->draw(child);
+        }
+    }
+
+    // Second pass: render menubars last (so dropdowns appear on top)
+    for (int i = 0; i < window->child_count; i++)
+    {
+        window_component_t *child = window->children[i];
+        if (!child || !child->visible)
+            continue;
+
+        if (child->draw == menubar_paint)
+        {
             child->draw(child);
         }
     }
 
     // Present to window manager
     window_present(window, window->backbuffer);
+}
+
+void window_mark_dirty(window_t *window)
+{
+    if (window)
+    {
+        window->dirty = 1;
+    }
+}
+
+int window_needs_repaint(window_t *window)
+{
+    return window ? window->dirty : 0;
+}
+
+void window_clear_dirty(window_t *window)
+{
+    if (window)
+    {
+        window->dirty = 0;
+    }
 }
