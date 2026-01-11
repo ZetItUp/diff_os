@@ -5,6 +5,7 @@
 #include "pci.h"
 #include "irq.h"
 #include "drivers/device.h"
+#include "system/irqsw.h"
 
 // Mouse packet (relative movement + buttons)
 typedef struct mouse_packet
@@ -50,6 +51,7 @@ typedef struct kernel_exports
                          int (*read_output_fn)(char*, unsigned)); // Plug TTY backend
     int (*irq_register_handler)(uint8_t irq, irq_handler_t handler, void *context);
     int (*irq_unregister_handler)(uint8_t irq, irq_handler_t handler, void *context);
+    int (*irqsw_queue)(irqsw_handler_t handler, void *context);
 
     // DMA memory allocation (returns physical addresses)
     uint32_t (*alloc_phys_page)(void);          // Allocate 4KB physical page, returns phys addr

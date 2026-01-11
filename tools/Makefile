@@ -9,18 +9,21 @@ BUILD_DIR = ../build
 SRCS := $(wildcard *.c)
 TOOLS := $(SRCS:.c=)
 TARGETS := $(addprefix $(BUILD_DIR)/, $(TOOLS))
+LOCAL_TARGETS := $(TOOLS)
 
-all: $(TARGETS)
+all: $(TARGETS) $(LOCAL_TARGETS)
 
 $(BUILD_DIR)/%: %.c | $(BUILD_DIR)
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) $< -o $@
 
+%: $(BUILD_DIR)/%
+	@cp $< $@
+
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
 
 clean:
-	@rm -f $(TARGETS)
+	@rm -f $(TARGETS) $(LOCAL_TARGETS)
 
 .PHONY: all clean
-

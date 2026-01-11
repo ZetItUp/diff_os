@@ -20,6 +20,7 @@
 #include "system/scheduler.h"
 #include "system/syscall.h"
 #include "system/process.h"
+#include "system/irqsw.h"
 
 __attribute__((naked, section(".text.start")))
 void _start(void)
@@ -123,6 +124,7 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
     }
 
     scheduler_init();
+    irqsw_init();
     thread_create(init_thread, NULL, 32 * 1024);
 
     asm volatile("sti");

@@ -125,7 +125,7 @@ int ethernet_unregister_handler(uint16_t ethernet_type, ethernet_rx_handler_t ha
     {
         if(g_handlers[i].ethernet_type == ethernet_type && g_handlers[i].handler == handler)
         {
-            for(int j; j < g_handler_count - 1; j++)
+            for(int j = i; j < g_handler_count - 1; j++)
             {
                 g_handlers[j] = g_handlers[j + 1];
             }
@@ -294,7 +294,7 @@ device_t *ethernet_get_primary_device(void)
 {
     for(int i = 0; i < ETHERNET_MAX_DEVICES; i++)
     {
-        if(!g_devices[i].active)
+        if(g_devices[i].active)
         {
             return g_devices[i].device;
         }

@@ -4,6 +4,7 @@
 #include "pic.h"
 #include "paging.h"
 #include "string.h"
+#include "system/irqsw.h"
 
 kernel_exports_t g_exports = 
 {
@@ -30,6 +31,7 @@ kernel_exports_t g_exports =
     .tty_register = tty_register,
     .irq_register_handler = irq_register_handler,
     .irq_unregister_handler = irq_unregister_handler,
+    .irqsw_queue = irqsw_queue,
     .alloc_phys_page = alloc_phys_page,
     .free_phys_page = free_phys_page,
     .alloc_phys_pages = alloc_phys_pages,

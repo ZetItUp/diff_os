@@ -6,6 +6,7 @@
 #include "stddef.h"
 #include "stdint.h"
 #include "pci.h"
+#include "system/irqsw.h"
 
 // PCI Identifiers
 #define VENDOR_ID   0x10EC      // Realtek
@@ -157,6 +158,8 @@ typedef struct rtl8139_device
     uint8_t rx_tail;
     uint8_t rx_count;
     uint32_t rx_dropped;
+    uint16_t irqsw_status;
+    uint8_t irqsw_pending;
 
     struct rtl8139_device *next;
 } rtl8139_device_t;
@@ -518,6 +521,8 @@ static void pci_scan_callback(const pci_device_t *dev, void *ctx)
         nic->rx_tail = 0;
         nic->rx_count = 0;
         nic->rx_dropped = 0;
+        nic->irqsw_status = 0;
+        nic->irqsw_pending = 0;
         nic->next = g_devices;
         g_devices = nic;
 
@@ -674,6 +679,7 @@ static network_device_t g_nic_ops =
 };
 
 static void rtl8139_irq_handler(unsigned irq, void *context);
+static void rtl8139_irqsw_handler(void *context);
 
 static int rtl8139_stop(device_t *dev)
 {
@@ -724,40 +730,72 @@ static void rtl8139_irq_handler(unsigned irq, void *context)
         return;     // Not our interrupt
     }
 
-    // Handle RX
-    if (status & INT_RX_OK)
+    nic->irqsw_status |= status;
+
+    if (!nic->irqsw_pending && kernel->irqsw_queue)
     {
-        handle_rx(nic);
+        nic->irqsw_pending = 1;
+        kernel->irqsw_queue(rtl8139_irqsw_handler, nic);
     }
 
-    // Handle TX
-    if (status & INT_TX_OK)
-    {
-        handle_tx(nic);
-    }
-
-    // Handle errors
-    if (status & INT_RX_ERR)
-    {
-        kernel->printf("[DRIVER] RTL8139 - RX error\n");
-    }
-
-    if (status & INT_TX_ERR)
-    {
-        kernel->printf("[DRIVER] RTL8139 - TX error\n");
-    }
-
-    if (status & INT_RX_OVERFLOW)
-    {
-        kernel->printf("[DRIVER] RTL8139 - RX overflow, resetting RX\n");
-
-        // Reset RX by toggling the enable bit
-        kernel->outb(nic->io_base + REG_CMD, CMD_TX_ENABLE);
-        kernel->outb(nic->io_base + REG_CMD, CMD_TX_ENABLE | CMD_RX_ENABLE);
-    }
-
-    // Acknowledge all interrupts by writing status back
     kernel->outw(nic->io_base + REG_ISR, status);
+}
+
+static void rtl8139_irqsw_handler(void *context)
+{
+    rtl8139_device_t *nic = (rtl8139_device_t *)context;
+
+    if (!nic)
+    {
+        return;
+    }
+
+    for (;;)
+    {
+        uint16_t status = nic->irqsw_status;
+        nic->irqsw_status = 0;
+
+        if (status == 0)
+        {
+            break;
+        }
+
+        if (status & INT_RX_OK)
+        {
+            handle_rx(nic);
+        }
+
+        if (status & INT_TX_OK)
+        {
+            handle_tx(nic);
+        }
+
+        if (status & INT_RX_ERR)
+        {
+            kernel->printf("[DRIVER] RTL8139 - RX error\n");
+        }
+
+        if (status & INT_TX_ERR)
+        {
+            kernel->printf("[DRIVER] RTL8139 - TX error\n");
+        }
+
+        if (status & INT_RX_OVERFLOW)
+        {
+            kernel->printf("[DRIVER] RTL8139 - RX overflow, resetting RX\n");
+
+            kernel->outb(nic->io_base + REG_CMD, CMD_TX_ENABLE);
+            kernel->outb(nic->io_base + REG_CMD, CMD_TX_ENABLE | CMD_RX_ENABLE);
+        }
+    }
+
+    nic->irqsw_pending = 0;
+
+    if (nic->irqsw_status != 0 && kernel->irqsw_queue)
+    {
+        nic->irqsw_pending = 1;
+        kernel->irqsw_queue(rtl8139_irqsw_handler, nic);
+    }
 }
 
 void ddf_driver_init(kernel_exports_t *exports)

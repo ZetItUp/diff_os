@@ -85,6 +85,7 @@ KERNEL_SRC = \
 	kernel/system/threads.c \
 	kernel/system/process.c \
 	kernel/system/scheduler.c \
+	kernel/system/irqsw.c \
 	kernel/system/spinlock.c \
 	kernel/system/messaging.c \
 	kernel/system/shared_mem.c \
