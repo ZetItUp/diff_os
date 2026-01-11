@@ -19,6 +19,7 @@
 #include "system/shared_mem.h"
 #include "system/signal.h"
 #include "drivers/device.h"
+#include "drivers/ipv4_config.h"
 
 struct dirent;
 
@@ -196,6 +197,32 @@ int system_device_info(int index, device_info_t *user_info)
     }
 
     device_put(dev);
+    return 0;
+}
+
+// IPv4 config syscall
+static int system_ipv4_get_config(ipv4_config_t *user_config)
+{
+    ipv4_config_t config;
+
+    if (!user_config)
+    {
+
+        return -1;
+    }
+
+    if (ipv4_get_config(&config) != 0)
+    {
+
+        return -1;
+    }
+
+    if (copy_to_user(user_config, &config, sizeof(config)) != 0)
+    {
+
+        return -1;
+    }
+
     return 0;
 }
 
@@ -1086,6 +1113,11 @@ int system_call_dispatch(struct syscall_frame *f)
         case SYSTEM_DEVICE_INFO:
         {
             ret = system_device_info(arg0, (device_info_t *)(uintptr_t)arg1);
+            break;
+        }
+        case SYSTEM_IPV4_GET_CONFIG:
+        {
+            ret = system_ipv4_get_config((ipv4_config_t *)(uintptr_t)arg0);
             break;
         }
         default:

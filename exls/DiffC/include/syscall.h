@@ -89,6 +89,7 @@ enum
     SYSTEM_SIGNAL_GETMASK = 75,
     SYSTEM_TTY_READ_OUTPUT = 76,
     SYSTEM_TTY_SET_OUTPUT = 77,
+    SYSTEM_IPV4_GET_CONFIG = 80,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)

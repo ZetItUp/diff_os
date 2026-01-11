@@ -1,372 +1,381 @@
 #include "drivers/ddf.h"
 #include "drivers/device.h"
-#include "interfaces.h"
+#include "network/network_interface.h"
+#include "network/packet.h"
 #include "stdint.h"
 #include "stddef.h"
 
 #define ETHERNET_ADDRESS_SIZE   6
 #define ETHERNET_HEADER_SIZE    14
-#define ETHERNET_MTU            1500        // Maximum Transmission Unit
+#define ETHERNET_MTU            1500
 #define ETHERNET_FRAME_MAX      (ETHERNET_HEADER_SIZE + ETHERNET_MTU)
-#define ETHERNET_MAX_HANDLERS   8
 #define ETHERNET_MAX_DEVICES    4
-
-#define ETHERNET_TYPE_IPV4      0x0800
-#define ETHERNET_TYPE_ARP       0x0806
 
 __attribute__((section(".ddf_meta"), used))
 volatile unsigned int ddf_irq_number = 0;
 
 static volatile kernel_exports_t *kernel = 0;
 
-// Ethernet Header
-typedef struct ethernet_header
-{
-    uint8_t destination[ETHERNET_ADDRESS_SIZE];
-    uint8_t source[ETHERNET_ADDRESS_SIZE];
-    uint8_t type[2];
-} __attribute__((packed)) ethernet_header_t;
-
-// Ethernet RX Handler
-typedef void (*ethernet_rx_handler_t)(const uint8_t *payload,
-                                      uint16_t payload_length,
-                                      uint16_t ethernet_type,
-                                      const uint8_t source[ETHERNET_ADDRESS_SIZE],
-                                      const uint8_t destination[ETHERNET_ADDRESS_SIZE],
-                                      void *context);
-
-// Ethernet Handler
-typedef struct ethernet_handler
-{
-    uint16_t ethernet_type;
-    ethernet_rx_handler_t handler;
-    void *context;
-} ethernet_handler_t;
-
-// Ethernet Device
-typedef struct ethernet_device
+typedef struct ethernet_adapter
 {
     device_t *device;
     network_device_t *operations;
+    network_interface_t *interface;
     uint8_t mac_address[ETHERNET_ADDRESS_SIZE];
     uint8_t receive_buffer[ETHERNET_FRAME_MAX];
+    uint8_t irqsw_pending;
+    uint8_t irq_number;
     int active;
-} ethernet_device_t;
+} ethernet_adapter_t;
 
-// Global Handlers
-static ethernet_handler_t g_handlers[ETHERNET_MAX_HANDLERS];
-static int g_handler_count = 0;
-static ethernet_device_t g_devices[ETHERNET_MAX_DEVICES];
+static ethernet_adapter_t g_adapters[ETHERNET_MAX_DEVICES];
 
-
-// Helpers
-
-// Read Data With Big Endian 16-bits
-static uint16_t read_be16(const uint8_t *data)
+static ethernet_adapter_t *ethernet_find_slot(void)
 {
-    if(!data)
+    for (int index = 0; index < ETHERNET_MAX_DEVICES; index++)
     {
-        return 0;
-    }
-
-    return (uint16_t)((uint16_t)data[0] << 8 | (uint16_t)data[1]);
-}
-
-// Write Data With Big Endian 16-bits
-static void write_be16(uint8_t *data, uint16_t value)
-{
-    if(!data)
-    {
-        return;
-    }
-
-    data[0] = (uint8_t)(value >> 8);
-    data[1] = (uint8_t)(value & 0xFF);
-}
-
-// Register Ethernet Handler
-int ethernet_register_handler(uint16_t ethernet_type, ethernet_rx_handler_t handler, void *context)
-{
-    if(!handler)
-    {
-        return -1;
-    }
-
-    for(int i = 0; i < g_handler_count; i++)
-    {
-        if(g_handlers[i].ethernet_type == ethernet_type && g_handlers[i].handler == handler)
+        if (!g_adapters[index].active)
         {
-            return 0;
-        }
-    }
-
-    if(g_handler_count >= ETHERNET_MAX_HANDLERS)
-    {
-        return -1;
-    }
-
-    g_handlers[g_handler_count].ethernet_type = ethernet_type;
-    g_handlers[g_handler_count].handler = handler;
-    g_handlers[g_handler_count].context = context;
-    g_handler_count++;
-
-    return 0;
-}
-
-// Unregister Ethernet Handler
-int ethernet_unregister_handler(uint16_t ethernet_type, ethernet_rx_handler_t handler)
-{
-    if(!handler)
-    {
-        return -1;
-    }   
-
-    for(int i = 0; i < g_handler_count; i++)
-    {
-        if(g_handlers[i].ethernet_type == ethernet_type && g_handlers[i].handler == handler)
-        {
-            for(int j = i; j < g_handler_count - 1; j++)
-            {
-                g_handlers[j] = g_handlers[j + 1];
-            }
-
-            g_handler_count--;
-
-            return 0;
-        }   
-    }
-
-    return -1;
-}
-
-// Ethernet Dispatch
-static void ethernet_dispatch(const uint8_t *frame, uint16_t frame_length)
-{
-    if(!frame || frame_length < ETHERNET_HEADER_SIZE)
-    {
-        return;
-    }
-
-    // Get Ethernet Type
-    const ethernet_header_t *header = (const ethernet_header_t*)frame;
-    uint16_t ethernet_type = read_be16(header->type);
-
-    // Get Payload and Length
-    const uint8_t *payload = frame + ETHERNET_HEADER_SIZE;
-    uint16_t payload_length = (uint16_t)(frame_length - ETHERNET_HEADER_SIZE);
-
-    // Find the correct handler and handle the payload
-    for(int i = 0; i < g_handler_count; i++)
-    {
-        if(g_handlers[i].ethernet_type == ethernet_type && g_handlers[i].handler)
-        {
-            g_handlers[i].handler(payload, payload_length, ethernet_type, header->source, header->destination, g_handlers[i].context);
-        }
-    }
-}
-
-// Poll Ethernet Device
-static void ethernet_poll_device(ethernet_device_t *entry)
-{
-    if(!entry || !entry->active || !entry->operations)
-    {
-        return;
-    }
-
-    // Make sure we have packets available
-    if(!entry->operations->packets_available || !entry->operations->receive_packet)
-    {
-        return;
-    }
-
-    while(entry->operations->packets_available(entry->device) > 0)
-    {
-        // Attempt to receive packet
-        int received = entry->operations->receive_packet(entry->device, entry->receive_buffer, ETHERNET_FRAME_MAX);
-
-        if(received <= 0)
-        {
-            // No packet data received
-            break;
-        }
-
-        ethernet_dispatch(entry->receive_buffer, (uint16_t)received);
-    }
-}
-
-// Poll All Ethernet Devices
-void ethernet_poll(void)
-{
-    for(int i = 0; i< ETHERNET_MAX_DEVICES; i++)
-    {
-        if(g_devices[i].active)
-        {
-            ethernet_poll_device(&g_devices[i]);
-        }
-    }
-}
-
-// Find Free Device Slot
-static ethernet_device_t *ethernet_find_slot(void)
-{
-    for(int i = 0; i < ETHERNET_MAX_DEVICES; i++)
-    {
-        if(!g_devices[i].active)
-        {
-            return &g_devices[i];
+            return &g_adapters[index];
         }
     }
 
     return NULL;
 }
 
-// Find Ethernet Device
-static ethernet_device_t *ethernet_find_device(device_t *device)
+static ethernet_adapter_t *ethernet_find_device(device_t *device)
 {
-    if(!device)
+    if (!device)
     {
         return NULL;
     }
 
-    for(int i = 0; i < ETHERNET_MAX_DEVICES; i++)
+    for (int index = 0; index < ETHERNET_MAX_DEVICES; index++)
     {
-        if(g_devices[i].active && g_devices[i].device == device)
+        if (g_adapters[index].active && g_adapters[index].device == device)
         {
-            return &g_devices[i];
+            return &g_adapters[index];
         }
     }
 
     return NULL;
 }
 
-// Notify Ethernet Device
+static int ethernet_transmit(network_interface_t *interface, packet_buffer_t *packet)
+{
+    if (!interface || !packet || !packet->data)
+    {
+
+        return -1;
+    }
+
+    ethernet_adapter_t *adapter = (ethernet_adapter_t *)interface->private_data;
+
+    if (!adapter || !adapter->operations || !adapter->operations->send_packet)
+    {
+
+        return -1;
+    }
+
+    if (packet->length == 0 || packet->length > ETHERNET_FRAME_MAX)
+    {
+
+        return -1;
+    }
+
+    return adapter->operations->send_packet(adapter->device, packet->data, (uint16_t)packet->length);
+}
+
+static int ethernet_set_promiscuous(network_interface_t *interface, int enabled)
+{
+    if (!interface)
+    {
+
+        return -1;
+    }
+
+    ethernet_adapter_t *adapter = (ethernet_adapter_t *)interface->private_data;
+
+    if (!adapter || !adapter->operations || !adapter->operations->set_promiscuous)
+    {
+
+        return -1;
+    }
+
+    return adapter->operations->set_promiscuous(adapter->device, enabled);
+}
+
+static int ethernet_set_multicast(network_interface_t *interface, int enabled)
+{
+    if (!interface)
+    {
+
+        return -1;
+    }
+
+    ethernet_adapter_t *adapter = (ethernet_adapter_t *)interface->private_data;
+
+    if (!adapter || !adapter->operations || !adapter->operations->set_multicast)
+    {
+
+        return -1;
+    }
+
+    return adapter->operations->set_multicast(adapter->device, enabled);
+}
+
+static int ethernet_get_link_status(network_interface_t *interface)
+{
+    if (!interface)
+    {
+
+        return 0;
+    }
+
+    ethernet_adapter_t *adapter = (ethernet_adapter_t *)interface->private_data;
+
+    if (!adapter || !adapter->operations || !adapter->operations->get_link_status)
+    {
+
+        return 0;
+    }
+
+    return adapter->operations->get_link_status(adapter->device);
+}
+
+static uint32_t ethernet_get_speed(network_interface_t *interface)
+{
+    if (!interface)
+    {
+
+        return 0;
+    }
+
+    ethernet_adapter_t *adapter = (ethernet_adapter_t *)interface->private_data;
+
+    if (!adapter || !adapter->operations || !adapter->operations->get_speed)
+    {
+
+        return 0;
+    }
+
+    return adapter->operations->get_speed(adapter->device);
+}
+
+static network_interface_ops_t g_interface_ops =
+{
+    .transmit = ethernet_transmit,
+    .set_promiscuous = ethernet_set_promiscuous,
+    .set_multicast = ethernet_set_multicast,
+    .get_link_status = ethernet_get_link_status,
+    .get_speed = ethernet_get_speed
+};
+
+static void ethernet_poll_device(ethernet_adapter_t *adapter)
+{
+    if (!adapter || !adapter->active || !adapter->operations)
+    {
+
+        return;
+    }
+
+    if (!adapter->operations->packets_available || !adapter->operations->receive_packet)
+    {
+
+        return;
+    }
+
+    for (;;)
+    {
+        if (adapter->operations->packets_available(adapter->device) <= 0)
+        {
+
+            break;
+        }
+
+        int received = adapter->operations->receive_packet(adapter->device,
+            adapter->receive_buffer, ETHERNET_FRAME_MAX);
+
+        if (received <= 0)
+        {
+
+            break;
+        }
+
+        packet_buffer_t *packet = NULL;
+
+        if (kernel && kernel->packet_buffer_alloc)
+        {
+            packet = kernel->packet_buffer_alloc((uint32_t)received, 0);
+        }
+
+        if (!packet)
+        {
+
+            continue;
+        }
+
+        for (int copy_index = 0; copy_index < received; copy_index++)
+        {
+            packet->data[copy_index] = adapter->receive_buffer[copy_index];
+        }
+
+        packet->length = (uint32_t)received;
+        packet->flags = PACKET_FLAG_INGRESS;
+
+        if (kernel && kernel->timer_now_ms)
+        {
+            packet->timestamp_ms = (uint32_t)kernel->timer_now_ms();
+        }
+
+        if (kernel && kernel->network_interface_receive && adapter->interface)
+        {
+            kernel->network_interface_receive(adapter->interface, packet);
+        }
+
+        if (kernel && kernel->packet_buffer_release)
+        {
+            kernel->packet_buffer_release(packet);
+        }
+    }
+}
+
+static void ethernet_irqsw_worker(void *context)
+{
+    ethernet_adapter_t *adapter = (ethernet_adapter_t *)context;
+
+    if (!adapter)
+    {
+
+        return;
+    }
+
+    adapter->irqsw_pending = 0;
+
+    ethernet_poll_device(adapter);
+}
+
+static void ethernet_irq_handler(unsigned irq, void *context)
+{
+    (void)irq;
+
+    ethernet_adapter_t *adapter = (ethernet_adapter_t *)context;
+
+    if (!adapter || !kernel || !kernel->irqsw_queue)
+    {
+
+        return;
+    }
+
+    if (!adapter->irqsw_pending)
+    {
+        adapter->irqsw_pending = 1;
+        kernel->irqsw_queue(ethernet_irqsw_worker, adapter);
+    }
+}
+
 static void ethernet_device_notify(device_t *device, int added)
 {
-    if(!device)
+    if (!device)
     {
         return;
     }
 
-    if(added)
+    if (added)
     {
-        ethernet_device_t *entry = ethernet_find_slot();
+        ethernet_adapter_t *adapter = ethernet_find_slot();
 
-        if(!entry)
+        if (!adapter)
         {
             return;
         }
 
-        network_device_t *operations = (network_device_t*)device->operations;
+        network_device_t *operations = (network_device_t *)device->operations;
 
-        if(!operations || !operations->get_mac)
+        if (!operations || !operations->get_mac || !operations->send_packet ||
+            !operations->receive_packet || !operations->packets_available)
         {
             return;
         }
 
-        entry->device = device;
-        entry->operations = operations;
-        entry->active = 1;
+        adapter->device = device;
+        adapter->operations = operations;
+        adapter->interface = NULL;
+        adapter->active = 1;
+        adapter->irqsw_pending = 0;
+        adapter->irq_number = device->irq;
 
-        operations->get_mac(device, entry->mac_address);
+        operations->get_mac(device, adapter->mac_address);
+
+        if (kernel && kernel->network_interface_register)
+        {
+            adapter->interface = kernel->network_interface_register(device,
+                &g_interface_ops,
+                adapter->mac_address,
+                ETHERNET_MTU,
+                adapter);
+        }
+
+        if (kernel && kernel->irq_register_handler && adapter->irq_number != 0 &&
+            adapter->irq_number != 0xFF)
+        {
+            kernel->irq_register_handler(adapter->irq_number, ethernet_irq_handler, adapter);
+        }
     }
-    else 
+    else
     {
-        ethernet_device_t *entry = ethernet_find_device(device);
+        ethernet_adapter_t *adapter = ethernet_find_device(device);
 
-        if(!entry)
+        if (!adapter)
         {
             return;
         }
 
-        entry->active = 0;
-        entry->device = NULL;
-        entry->operations = NULL;
-
-        for(int i = 0; i < ETHERNET_ADDRESS_SIZE; i++)
+        if (kernel && kernel->irq_unregister_handler && adapter->irq_number != 0 &&
+            adapter->irq_number != 0xFF)
         {
-            entry->mac_address[i] = 0;
-        }   
-    }
-}
+            kernel->irq_unregister_handler(adapter->irq_number, ethernet_irq_handler, adapter);
+        }
 
-// Get Primary Device
-device_t *ethernet_get_primary_device(void)
-{
-    for(int i = 0; i < ETHERNET_MAX_DEVICES; i++)
-    {
-        if(g_devices[i].active)
+        if (kernel && kernel->network_interface_unregister && adapter->interface)
         {
-            return g_devices[i].device;
+            kernel->network_interface_unregister(adapter->interface);
+        }
+
+        adapter->active = 0;
+        adapter->device = NULL;
+        adapter->operations = NULL;
+        adapter->interface = NULL;
+        adapter->irqsw_pending = 0;
+        adapter->irq_number = 0;
+
+        for (int index = 0; index < ETHERNET_ADDRESS_SIZE; index++)
+        {
+            adapter->mac_address[index] = 0;
         }
     }
-
-    return NULL;
-}
-
-// Send Payload
-int ethernet_send(device_t *device, const uint8_t destination[ETHERNET_ADDRESS_SIZE], uint16_t ethernet_type,
-                  const void *payload, uint16_t payload_length)
-{
-    if(!device || !destination || !payload)
-    {
-        return -1;
-    }
-
-    if(payload_length > ETHERNET_MTU)
-    {
-        return -1;
-    }
-
-    ethernet_device_t *entry = ethernet_find_device(device);
-
-    if(!entry || !entry->operations || !entry->operations->send_packet)
-    {
-        return -1;
-    }
-
-    uint8_t frame[ETHERNET_FRAME_MAX];
-
-    ethernet_header_t *header = (ethernet_header_t*)frame;
-
-    for(int i = 0; i < ETHERNET_ADDRESS_SIZE; i++)
-    {
-        header->destination[i] = destination[i];
-        header->source[i] = entry->mac_address[i];
-    }
-
-    write_be16(header->type, ethernet_type);
-
-    const uint8_t *payload_bytes = (const uint8_t*)payload;
-
-    for(uint16_t i = 0; i < payload_length; i++)
-    {
-        frame[ETHERNET_HEADER_SIZE + i] = payload_bytes[i];
-    }
-
-    uint16_t frame_length = (uint16_t)(ETHERNET_HEADER_SIZE + payload_length);
-
-    return entry->operations->send_packet(device, frame, frame_length);
 }
 
 void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
-    
-    for(int i = 0; i < ETHERNET_MAX_DEVICES; i++)
-    {
-        g_devices[i].active = 0;
-        g_devices[i].device = 0;
-        g_devices[i].operations = NULL;
 
-        for(int j = 0; j < ETHERNET_ADDRESS_SIZE; j++)
+    for (int index = 0; index < ETHERNET_MAX_DEVICES; index++)
+    {
+        g_adapters[index].active = 0;
+        g_adapters[index].device = NULL;
+        g_adapters[index].operations = NULL;
+        g_adapters[index].interface = NULL;
+        g_adapters[index].irqsw_pending = 0;
+        g_adapters[index].irq_number = 0;
+
+        for (int mac_index = 0; mac_index < ETHERNET_ADDRESS_SIZE; mac_index++)
         {
-            g_devices[i].mac_address[j] = 0;
+            g_adapters[index].mac_address[mac_index] = 0;
         }
     }
 
-    g_handler_count = 0;
-
-    if(kernel->device_register_network_listener)
+    if (kernel && kernel->device_register_network_listener)
     {
         kernel->device_register_network_listener(ethernet_device_notify);
     }
@@ -374,19 +383,33 @@ void ddf_driver_init(kernel_exports_t *exports)
 
 void ddf_driver_exit(void)
 {
-    if(kernel && kernel->device_unregister_network_listener)
+    if (kernel && kernel->device_unregister_network_listener)
     {
         kernel->device_unregister_network_listener(ethernet_device_notify);
     }
 
-    for(int i = 0; i < ETHERNET_MAX_DEVICES; i++)
+    for (int index = 0; index < ETHERNET_MAX_DEVICES; index++)
     {
-        g_devices[i].active = 0;
-        g_devices[i].device = NULL;
-        g_devices[i].operations = NULL;
-    }
+        ethernet_adapter_t *adapter = &g_adapters[index];
 
-    g_handler_count = 0;
+        if (adapter->active && kernel && kernel->irq_unregister_handler &&
+            adapter->irq_number != 0 && adapter->irq_number != 0xFF)
+        {
+            kernel->irq_unregister_handler(adapter->irq_number, ethernet_irq_handler, adapter);
+        }
+
+        if (adapter->active && kernel && kernel->network_interface_unregister && adapter->interface)
+        {
+            kernel->network_interface_unregister(adapter->interface);
+        }
+
+        adapter->active = 0;
+        adapter->device = NULL;
+        adapter->operations = NULL;
+        adapter->interface = NULL;
+        adapter->irqsw_pending = 0;
+        adapter->irq_number = 0;
+    }
 }
 
 void ddf_driver_irq(unsigned irq, void *context)

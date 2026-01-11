@@ -25,6 +25,7 @@ fpstest=/programs/fpstest/fpstest.dex
 mousetest=/programs/mousetest/mousetest.dex
 sigtest=/programs/sigtest/sigtest.dex
 menutest=/programs/menutest/menutest.dex
+iptest=/programs/iptest/iptest.dex
 
 # Games
 doom=/games/doom/doom.dex

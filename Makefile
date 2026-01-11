@@ -74,8 +74,12 @@ KERNEL_SRC = \
 	kernel/arch/x86_64/cpu/tss.c \
 	kernel/drivers/ata.c \
 	kernel/drivers/config.c \
+	kernel/drivers/ipv4_config.c \
 	kernel/drivers/device.c \
 	kernel/drivers/module_loader.c \
+	kernel/network/network_interface.c \
+	kernel/network/network_communicator.c \
+	kernel/network/packet.c \
 	kernel/system/system.c \
 	kernel/system/syscall.c \
 	kernel/system/syscall_dir.c \
@@ -286,6 +290,11 @@ $(OBJ)/%.o: kernel/system/%.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJ)/%.o: kernel/interfaces/%.c
+	@mkdir -p $(OBJ)
+	@echo "[CC] Compiling $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJ)/%.o: kernel/network/%.c
 	@mkdir -p $(OBJ)
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@

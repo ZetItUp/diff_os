@@ -90,6 +90,7 @@ enum
     SYSTEM_TTY_SET_OUTPUT = 77,
     SYSTEM_DEVICE_COUNT = 78,
     SYSTEM_DEVICE_INFO = 79,
+    SYSTEM_IPV4_GET_CONFIG = 80,
 };
 
 struct syscall_frame 

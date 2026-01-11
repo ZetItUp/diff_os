@@ -24,3 +24,8 @@ typedef struct arp_packet
     uint8_t target_mac_address[ETHERNET_ADDRESS_SIZE];
     uint8_t target_ip_address[ARP_PROTOCOL_ADDRESS_LENGTH];
 } __attribute__((packed)) arp_packet_t;
+
+int arp_packet_is_ethernet_ipv4(const arp_packet_t *packet);
+uint16_t arp_packet_get_operation(const arp_packet_t *packet);
+int arp_packet_is_request(const arp_packet_t *packet);
+int arp_packet_is_reply(const arp_packet_t *packet);

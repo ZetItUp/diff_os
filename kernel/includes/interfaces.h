@@ -5,6 +5,9 @@
 #include "pci.h"
 #include "irq.h"
 #include "drivers/device.h"
+#include "drivers/ipv4_config.h"
+#include "network/network_communicator.h"
+#include "network/network_interface.h"
 #include "system/irqsw.h"
 
 // Mouse packet (relative movement + buttons)
@@ -69,6 +72,26 @@ typedef struct kernel_exports
     int (*device_bus_unregister)(uint8_t bus_type);
     int (*device_register_network_listener)(network_device_notify_t callback);
     int (*device_unregister_network_listener)(network_device_notify_t callback);
+    int (*ipv4_get_config)(ipv4_config_t *out);
+    network_interface_t *(*network_interface_register)(struct device *device,
+        network_interface_ops_t *ops,
+        const uint8_t mac_address[6],
+        uint32_t mtu,
+        void *private_data);
+    void (*network_interface_unregister)(network_interface_t *interface);
+    network_interface_t *(*network_interface_get_primary)(void);
+    network_interface_t *(*network_interface_get_by_device)(struct device *device);
+    int (*network_interface_receive)(network_interface_t *interface, packet_buffer_t *packet);
+    int (*network_communicator_register_ethernet_type)(uint16_t ethernet_type,
+        network_communicator_handler_t handler,
+        void *context);
+    int (*network_communicator_unregister_ethernet_type)(uint16_t ethernet_type,
+        network_communicator_handler_t handler,
+        void *context);
+    int (*network_communicator_transmit)(network_interface_t *interface, packet_buffer_t *packet);
+    packet_buffer_t *(*packet_buffer_alloc)(uint32_t capacity, uint32_t head);
+    void (*packet_buffer_retain)(packet_buffer_t *packet);
+    void (*packet_buffer_release)(packet_buffer_t *packet);
 
     // String utilities
     size_t (*strlcpy)(char *dst, const char *src, size_t siz);

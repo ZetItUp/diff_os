@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <diffnetwork/arp.h>
 #include <diffnetwork/ethernet.h>
+#include <diffnetwork/icmp.h>
+#include <diffnetwork/ipv4.h>
 
 #define NETWORK_IP_ADDRESS_SIZE 4 // IPv4 address size
 

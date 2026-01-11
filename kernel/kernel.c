@@ -14,6 +14,7 @@
 #include "system.h"
 #include "graphics/vbe_text.h"
 #include "drivers/config.h"
+#include "drivers/ipv4_config.h"
 #include "drivers/device.h"
 #include "dex/dex.h"
 #include "system/threads.h"
@@ -154,6 +155,7 @@ static void init_thread(void* argument)
     {
         if (shell_spawn_state == 0)
         {
+            ipv4_config_load(file_table, "system/network/ipv4.cfg");
             load_drivers(file_table, system_config_file);
 
             char* shell_path = find_shell_path(file_table, system_config_file);
