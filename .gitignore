@@ -22,3 +22,4 @@ build/
 cross/
 fonts/
 1token
+__pycache__/
