@@ -5,6 +5,7 @@
 #include "paging.h"
 #include "string.h"
 #include "system/irqsw.h"
+#include "timer.h"
 
 kernel_exports_t g_exports = 
 {
@@ -27,6 +28,7 @@ kernel_exports_t g_exports =
     .pci_config_write32 = pci_interface_config_write32,
     .pci_enable_device = pci_interface_enable_device,
     .pci_get_bar = pci_interface_get_bar,
+    .timer_now_ms = timer_now_ms,
     .mouse_register = mouse_register,
     .tty_register = tty_register,
     .irq_register_handler = irq_register_handler,

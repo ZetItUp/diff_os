@@ -41,6 +41,7 @@ typedef struct kernel_exports
     void (*pci_config_write32)(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t value);
     void (*pci_enable_device)(const pci_device_t *dev);
     int (*pci_get_bar)(const pci_device_t *dev, uint8_t bar_index, uint32_t *out_base, uint32_t *out_size, int *is_mmio);
+    uint64_t (*timer_now_ms)(void);
     void (*mouse_register)(int (*read_fn)(mouse_packet_t*), int (*read_block_fn)(mouse_packet_t*)); // Plug mouse backend
     void (*tty_register)(int (*read_fn)(char*, unsigned),
                          int (*write_fn)(const char*, unsigned),
