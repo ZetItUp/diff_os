@@ -80,6 +80,8 @@ KERNEL_SRC = \
 	kernel/network/network_interface.c \
 	kernel/network/network_communicator.c \
 	kernel/network/packet.c \
+	kernel/network/arp_service.c \
+	kernel/network/socket.c \
 	kernel/system/system.c \
 	kernel/system/syscall.c \
 	kernel/system/syscall_dir.c \

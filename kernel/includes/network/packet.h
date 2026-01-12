@@ -54,7 +54,7 @@ static inline uint32_t packet_head(const packet_buffer_t *packet)
 
 static inline uint32_t packet_tail(const packet_buffer_t *packet)
 {
-    uint32_t headroom;
+    uint32_t head_offset;
 
     if (!packet)
     {
@@ -62,12 +62,12 @@ static inline uint32_t packet_tail(const packet_buffer_t *packet)
         return 0;
     }
 
-    headroom = packet_head(packet);
-    if (packet->capacity < headroom + packet->length)
+    head_offset = packet_head(packet);
+    if (packet->capacity < head_offset + packet->length)
     {
 
         return 0;
     }
 
-    return packet->capacity - headroom - packet->length;
+    return packet->capacity - head_offset - packet->length;
 }

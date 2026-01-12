@@ -175,22 +175,43 @@ static void ethernet_poll_device(ethernet_adapter_t *adapter)
 {
     if (!adapter || !adapter->active || !adapter->operations)
     {
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ETH] poll: adapter not ready\n");
+        }
 
         return;
     }
 
     if (!adapter->operations->packets_available || !adapter->operations->receive_packet)
     {
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ETH] poll: no ops\n");
+        }
 
         return;
     }
 
+    int first_check = adapter->operations->packets_available(adapter->device);
+
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ETH] poll: initial check=%d\n", first_check);
+    }
+
     for (;;)
     {
-        if (adapter->operations->packets_available(adapter->device) <= 0)
-        {
+        int avail = adapter->operations->packets_available(adapter->device);
 
+        if (avail <= 0)
+        {
             break;
+        }
+
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ETH] poll: %d packets available\n", avail);
         }
 
         int received = adapter->operations->receive_packet(adapter->device,
@@ -198,8 +219,12 @@ static void ethernet_poll_device(ethernet_adapter_t *adapter)
 
         if (received <= 0)
         {
-
             break;
+        }
+
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ETH] poll: received %d bytes\n", received);
         }
 
         packet_buffer_t *packet = NULL;
@@ -211,7 +236,6 @@ static void ethernet_poll_device(ethernet_adapter_t *adapter)
 
         if (!packet)
         {
-
             continue;
         }
 
@@ -246,8 +270,12 @@ static void ethernet_irqsw_worker(void *context)
 
     if (!adapter)
     {
-
         return;
+    }
+
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ETH] irqsw_worker running\n");
     }
 
     adapter->irqsw_pending = 0;
@@ -263,8 +291,12 @@ static void ethernet_irq_handler(unsigned irq, void *context)
 
     if (!adapter || !kernel || !kernel->irqsw_queue)
     {
-
         return;
+    }
+
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ETH] IRQ %d fired\n", irq);
     }
 
     if (!adapter->irqsw_pending)
@@ -281,12 +313,22 @@ static void ethernet_device_notify(device_t *device, int added)
         return;
     }
 
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ETH] device_notify: added=%d\n", added);
+    }
+
     if (added)
     {
         ethernet_adapter_t *adapter = ethernet_find_slot();
 
         if (!adapter)
         {
+            if (kernel && kernel->printf)
+            {
+                kernel->printf("[ETH] device_notify: no slot\n");
+            }
+
             return;
         }
 
@@ -316,10 +358,21 @@ static void ethernet_device_notify(device_t *device, int added)
                 adapter);
         }
 
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ETH] adapter active, IRQ=%d, interface=%p\n",
+                adapter->irq_number, (void *)adapter->interface);
+        }
+
         if (kernel && kernel->irq_register_handler && adapter->irq_number != 0 &&
             adapter->irq_number != 0xFF)
         {
             kernel->irq_register_handler(adapter->irq_number, ethernet_irq_handler, adapter);
+
+            if (kernel && kernel->printf)
+            {
+                kernel->printf("[ETH] IRQ %d handler registered\n", adapter->irq_number);
+            }
         }
     }
     else
@@ -359,6 +412,11 @@ static void ethernet_device_notify(device_t *device, int added)
 void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
+
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ETH] driver init\n");
+    }
 
     for (int index = 0; index < ETHERNET_MAX_DEVICES; index++)
     {

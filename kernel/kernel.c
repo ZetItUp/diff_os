@@ -115,6 +115,9 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
         // Unmask keyboard (IRQ1) and mouse (IRQ12) so PS/2 input works in APIC mode
         ioapic_unmask_irq(1);
         ioapic_unmask_irq(12);
+
+        // Unmask IRQ11 for PCI network devices like RTL8139
+        ioapic_unmask_irq(11);
     }
     else
     {

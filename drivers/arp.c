@@ -1,15 +1,11 @@
 #include "drivers/ddf.h"
 #include "drivers/device.h"
+#include "drivers/ipv4_config.h"
 #include "network/network_communicator.h"
 #include "network/network_interface.h"
 #include "network/packet.h"
 #include "stdint.h"
 #include "stddef.h"
-
-#define ARP_DEFAULT_IP0         192
-#define ARP_DEFAULT_IP1         168
-#define ARP_DEFAULT_IP2         0
-#define ARP_DEFAULT_IP3         2
 
 #define ETHERNET_ADDRESS_SIZE   6
 #define ETHERNET_HEADER_SIZE    14
@@ -82,7 +78,7 @@ typedef struct arp_device
 static arp_device_t g_devices[ARP_MAX_DEVICES];
 static arp_entry_t g_arp_cache[ARP_CACHE_SIZE];
 static arp_pending_t g_arp_pending[ARP_PENDING_SIZE];
-static uint8_t g_default_ip[4] = { ARP_DEFAULT_IP0, ARP_DEFAULT_IP1, ARP_DEFAULT_IP2, ARP_DEFAULT_IP3 };
+static ipv4_config_t g_ipv4_config;
 
 static uint16_t read_be16(const uint8_t *data)
 {
@@ -279,6 +275,10 @@ static int arp_send_frame(arp_device_t *device_entry, const uint8_t *frame, uint
 
         if (!packet)
         {
+            if (kernel && kernel->printf)
+            {
+                kernel->printf("[ARP] send_frame: packet alloc failed\n");
+            }
 
             return -1;
         }
@@ -299,6 +299,11 @@ static int arp_send_frame(arp_device_t *device_entry, const uint8_t *frame, uint
 
         int result = kernel->network_communicator_transmit(interface, packet);
 
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ARP] send_frame: transmit result=%d\n", result);
+        }
+
         if (kernel->packet_buffer_release)
         {
             kernel->packet_buffer_release(packet);
@@ -307,15 +312,32 @@ static int arp_send_frame(arp_device_t *device_entry, const uint8_t *frame, uint
         return result;
     }
 
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ARP] send_frame: no interface, trying direct\n");
+    }
+
     if (device_entry->operations && device_entry->operations->send_packet)
     {
-        return device_entry->operations->send_packet(device_entry->device, frame, frame_length);
+        int result = device_entry->operations->send_packet(device_entry->device, frame, frame_length);
+
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ARP] send_frame: direct send result=%d\n", result);
+        }
+
+        return result;
+    }
+
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ARP] send_frame: no send method available\n");
     }
 
     return -1;
 }
 
-static void __attribute__((unused)) arp_send_request(arp_device_t *device_entry,
+static void arp_send_request(arp_device_t *device_entry,
     const uint8_t target_ip_address[4],
     uint32_t current_time_ms)
 {
@@ -419,10 +441,20 @@ static void arp_handle_packet(packet_buffer_t *packet)
         return;
     }
 
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ARP] received packet\n");
+    }
+
     arp_device_t *device_entry = arp_find_device_for_packet(packet);
 
     if (!device_entry)
     {
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ARP] no device for packet\n");
+        }
+
         return;
     }
 
@@ -476,11 +508,103 @@ static void arp_receive(packet_buffer_t *packet, void *context)
     arp_handle_packet(packet);
 }
 
+static arp_device_t *arp_get_active_device(void)
+{
+    for (int index = 0; index < ARP_MAX_DEVICES; index++)
+    {
+        if (g_devices[index].active)
+        {
+
+            return &g_devices[index];
+        }
+    }
+
+
+    return NULL;
+}
+
+static int arp_resolve(const uint8_t ip_address[4], uint8_t mac_address_out[ETHERNET_ADDRESS_SIZE])
+{
+    if (!ip_address || !mac_address_out)
+    {
+
+        return -1;
+    }
+
+    uint32_t current_time_ms = 0;
+    if (kernel && kernel->timer_now_ms)
+    {
+        current_time_ms = (uint32_t)kernel->timer_now_ms();
+    }
+
+    for (int index = 0; index < ARP_CACHE_SIZE; index++)
+    {
+        if (!g_arp_cache[index].valid)
+        {
+            continue;
+        }
+
+        if (g_arp_cache[index].expires_ms <= current_time_ms)
+        {
+            g_arp_cache[index].valid = 0;
+
+            continue;
+        }
+
+        if (ip_equal(g_arp_cache[index].ip_address, ip_address))
+        {
+            mac_copy(mac_address_out, g_arp_cache[index].mac_address);
+
+
+            return 0;
+        }
+    }
+
+    arp_device_t *device_entry = arp_get_active_device();
+
+    if (!device_entry)
+    {
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ARP] resolve: no active device\n");
+        }
+
+        return -1;
+    }
+
+    if (ip_equal(device_entry->ip_address, ip_address))
+    {
+        mac_copy(mac_address_out, device_entry->mac_address);
+
+        return 0;
+    }
+
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ARP] resolve: sending request for %d.%d.%d.%d\n",
+            ip_address[0], ip_address[1], ip_address[2], ip_address[3]);
+    }
+
+    arp_send_request(device_entry, ip_address, current_time_ms);
+
+    return -1;
+}
+
 static void arp_device_notify(device_t *device, int is_added)
 {
     if (!device)
     {
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ARP] device_notify: device is NULL\n");
+        }
+
         return;
+    }
+
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ARP] device_notify: is_added=%d\n", is_added);
     }
 
     if (is_added)
@@ -489,6 +613,11 @@ static void arp_device_notify(device_t *device, int is_added)
 
         if (!device_entry)
         {
+            if (kernel && kernel->printf)
+            {
+                kernel->printf("[ARP] device_notify: no free slot\n");
+            }
+
             return;
         }
 
@@ -496,6 +625,11 @@ static void arp_device_notify(device_t *device, int is_added)
 
         if (!operations || !operations->get_mac || !operations->send_packet)
         {
+            if (kernel && kernel->printf)
+            {
+                kernel->printf("[ARP] device_notify: missing operations\n");
+            }
+
             return;
         }
 
@@ -505,7 +639,16 @@ static void arp_device_notify(device_t *device, int is_added)
         device_entry->active = 1;
 
         operations->get_mac(device, device_entry->mac_address);
-        ip_copy(device_entry->ip_address, g_default_ip);
+        ip_copy(device_entry->ip_address, g_ipv4_config.ip_address);
+
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ARP] device activated, IP=%d.%d.%d.%d\n",
+                device_entry->ip_address[0],
+                device_entry->ip_address[1],
+                device_entry->ip_address[2],
+                device_entry->ip_address[3]);
+        }
 
         if (kernel && kernel->network_interface_get_by_device)
         {
@@ -531,6 +674,30 @@ static void arp_device_notify(device_t *device, int is_added)
 void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
+
+    for (int index = 0; index < DEVICE_NAME_LEN; index++)
+    {
+        g_ipv4_config.device_name[index] = '\0';
+    }
+
+    for (int index = 0; index < 4; index++)
+    {
+        g_ipv4_config.ip_address[index] = 0;
+        g_ipv4_config.netmask[index] = 0;
+        g_ipv4_config.gateway[index] = 0;
+        g_ipv4_config.primary_dns[index] = 0;
+        g_ipv4_config.secondary_dns[index] = 0;
+    }
+
+    g_ipv4_config.use_dhcp = 0;
+    g_ipv4_config.mtu = 0;
+    g_ipv4_config.default_ttl = 0;
+    g_ipv4_config.valid = 0;
+
+    if (kernel && kernel->ipv4_get_config)
+    {
+        kernel->ipv4_get_config(&g_ipv4_config);
+    }
 
     for (int index = 0; index < ARP_MAX_DEVICES; index++)
     {
@@ -565,6 +732,15 @@ void ddf_driver_init(kernel_exports_t *exports)
     if (kernel && kernel->device_register_network_listener)
     {
         kernel->device_register_network_listener(arp_device_notify);
+    }
+
+    if (kernel && kernel->network_arp_register_resolver)
+    {
+        int result = kernel->network_arp_register_resolver(arp_resolve);
+        if (kernel->printf)
+        {
+            kernel->printf("[ARP] resolver register %d\n", result);
+        }
     }
 
     if (kernel && kernel->network_communicator_register_ethernet_type)

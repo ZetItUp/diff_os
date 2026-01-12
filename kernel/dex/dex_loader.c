@@ -227,18 +227,17 @@ static uint32_t build_user_stack(
         argument_pointers[argument_index] = stack_pointer;
     }
 
-    // Stack layout from stack_pointer
-    // [SP] is return address
-    // [SP+4] is argc
-    // [SP+8] is argv[0]
-    // [SP+12] is argv[1]
-    // [SP+4*(argc+2)] is NULL for argv end
-    // [SP+4*(argc+3)] is NULL for envp end
-    // The return address is needed by the main prologue
+    // Stack layout from stack_pointer (callee expects a call frame)
+    // [SP] is argc
+    // [SP+4] is argv pointer
+    // [SP+8] is envp pointer
+    // argv array follows (argc pointers + NULL)
+    // envp array follows (NULL)
+    // The stub does a call, so the return address is pushed above this frame
     // The stack pointer must stay 16 byte aligned
 
-    // We need space for ret argc argv[argc] NULL envp_NULL
-    uint32_t needed_bytes = 4 + 4 + (uint32_t)((argument_count + 1) * sizeof(uint32_t)) + 4;
+    // We need space for argc, argv ptr, envp ptr, argv array, envp NULL
+    uint32_t needed_bytes = 12 + (uint32_t)((argument_count + 1) * sizeof(uint32_t)) + 4;
     if (stack_pointer < base_address + needed_bytes)
     {
         kfree(argument_pointers);
@@ -251,23 +250,25 @@ static uint32_t build_user_stack(
     // Ensure SP ends up 16 byte aligned
     stack_pointer &= ~0xF;
 
-    // Write return address
-    *(uint32_t *)stack_pointer = 0;
+    uint32_t argv_ptr = stack_pointer + 12;
+    uint32_t envp_ptr = argv_ptr + (uint32_t)((argument_count + 1) * sizeof(uint32_t));
 
-    // Write argc at SP+4
-    *(uint32_t *)(stack_pointer + 4) = (uint32_t)argument_count;
+    // Write argc, argv pointer, envp pointer
+    *(uint32_t *)stack_pointer = (uint32_t)argument_count;
+    *(uint32_t *)(stack_pointer + 4) = argv_ptr;
+    *(uint32_t *)(stack_pointer + 8) = envp_ptr;
 
-    // Write argv array starting at SP+8
+    // Write argv array
     for (int argument_index = 0; argument_index < argument_count; ++argument_index)
     {
-        ((uint32_t *)(stack_pointer + 8))[argument_index] = argument_pointers[argument_index];
+        ((uint32_t *)argv_ptr)[argument_index] = argument_pointers[argument_index];
     }
 
     // Null terminator for argv
-    ((uint32_t *)(stack_pointer + 8))[argument_count] = 0;
+    ((uint32_t *)argv_ptr)[argument_count] = 0;
 
     // Null terminator for envp
-    ((uint32_t *)(stack_pointer + 8))[argument_count + 1] = 0;
+    *(uint32_t *)envp_ptr = 0;
 
     kfree(argument_pointers);
 

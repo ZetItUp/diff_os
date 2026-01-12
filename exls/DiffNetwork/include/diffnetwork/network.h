@@ -5,6 +5,7 @@
 #include <diffnetwork/ethernet.h>
 #include <diffnetwork/icmp.h>
 #include <diffnetwork/ipv4.h>
+#include <diffnetwork/socket.h>
 
 #define NETWORK_IP_ADDRESS_SIZE 4 // IPv4 address size
 

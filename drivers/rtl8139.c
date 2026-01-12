@@ -332,6 +332,9 @@ static void init_tx(rtl8139_device_t *nic)
 
         // Tell NIC each TX buffers physical address
         kernel->outl(nic->io_base + REG_TXADDR0 + (i * 4), nic->tx_buffer_phys[i]);
+
+        // Clear TX status so the descriptor starts owned by the CPU
+        kernel->outl(nic->io_base + REG_TXSTATUS0 + (i * 4), 0);
     }
 
     // Configure transmitter - normal inter-frame gap, 2048 byte DMA burst
@@ -375,6 +378,11 @@ static void handle_rx(rtl8139_device_t *nic)
 
         uint16_t status = header->status;
         uint16_t length = header->length;
+
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[RTL] RX packet len=%d status=0x%04x\n", length, status);
+        }
 
         // Check for valid packet
         if (!(status & RX_STATUS_ROK))
@@ -458,29 +466,39 @@ static int rtl8139_send(rtl8139_device_t *nic, const uint8_t *data, uint16_t len
         return -1;
     }
 
-    // Wait for current descriptor to be free
-    uint32_t status = kernel->inl(nic->io_base + REG_TXSTATUS0 + (nic->tx_current * 4));
+    int descriptor_index = -1;
 
-    if (status & TX_STATUS_OWN)
+    for (int attempt = 0; attempt < TX_BUF_COUNT; attempt++)
     {
-        // NIC still owns this buffer
-        kernel->printf("[DRIVER] RTL8139 - TX buffer %d busy\n", nic->tx_current);
+        int candidate = (nic->tx_current + attempt) % TX_BUF_COUNT;
+        uint32_t status = kernel->inl(nic->io_base + REG_TXSTATUS0 + (candidate * 4));
 
-        return -1;
+        if ((status & TX_STATUS_OWN) == 0)
+        {
+            descriptor_index = candidate;
+
+            break;
+        }
+    }
+
+    if (descriptor_index < 0)
+    {
+        descriptor_index = nic->tx_current;
+        kernel->outl(nic->io_base + REG_TXSTATUS0 + (descriptor_index * 4), 0);
     }
 
     // Copy packet data to TX buffer
     for (uint16_t i = 0; i < length; i++)
     {
-        nic->tx_buffer[nic->tx_current][i] = data[i];
+        nic->tx_buffer[descriptor_index][i] = data[i];
     }
 
     // Tell the NIC to send - write length to status register
     // Bit 13 (OWN) must be 0, bits 0-12 are the size
-    kernel->outl(nic->io_base + REG_TXSTATUS0 + (nic->tx_current * 4), length);
+    kernel->outl(nic->io_base + REG_TXSTATUS0 + (descriptor_index * 4), length);
 
     // Move to next descriptor
-    nic->tx_current = (nic->tx_current + 1) % TX_BUF_COUNT;
+    nic->tx_current = (descriptor_index + 1) % TX_BUF_COUNT;
 
     return 0;
 }
@@ -730,6 +748,11 @@ static void rtl8139_irq_handler(unsigned irq, void *context)
         return;     // Not our interrupt
     }
 
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[RTL] IRQ status=0x%04x\n", status);
+    }
+
     nic->irqsw_status |= status;
 
     if (!nic->irqsw_pending && kernel->irqsw_queue)
@@ -856,10 +879,7 @@ void ddf_driver_init(kernel_exports_t *exports)
         // Enable interrupts
         enable_interrupts(nic);
 
-        // Register IRQ handler
-        kernel->irq_register_handler(nic->irq, rtl8139_irq_handler, nic);
-
-        // Register device
+        // Register device first - this notifies ethernet driver which registers its IRQ
         nic->dev = kernel->device_register(DEVICE_CLASS_NETWORK, "rtl8139", &g_nic_ops);
         if (nic->dev)
         {
@@ -873,6 +893,11 @@ void ddf_driver_init(kernel_exports_t *exports)
             nic->dev->cleanup = rtl8139_cleanup;
             kernel->strlcpy(nic->dev->description, "Realtek RTL8139 Fast Ethernet", sizeof(nic->dev->description));
         }
+
+        // Register IRQ handler AFTER device_register so RTL8139's handler
+        // is at head of hook list and runs first (processes packets before
+        // ethernet driver polls)
+        kernel->irq_register_handler(nic->irq, rtl8139_irq_handler, nic);
     }
 
     kernel->printf("[DRIVER] RTL8139 Network Driver Installed!\n");

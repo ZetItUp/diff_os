@@ -26,6 +26,7 @@ mousetest=/programs/mousetest/mousetest.dex
 sigtest=/programs/sigtest/sigtest.dex
 menutest=/programs/menutest/menutest.dex
 iptest=/programs/iptest/iptest.dex
+ping=/programs/ping/ping.dex
 
 # Games
 doom=/games/doom/doom.dex

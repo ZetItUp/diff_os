@@ -503,6 +503,26 @@ static void icmp_handle_packet(icmp_device_t *device_entry, packet_buffer_t *pac
         return;
     }
 
+    if (icmp_header->type == ICMP_TYPE_ECHO_REPLY && icmp_header->code == ICMP_CODE_ECHO)
+    {
+        uint16_t identifier = read_be16((const uint8_t *)&icmp_header->identifier);
+        uint16_t sequence = read_be16((const uint8_t *)&icmp_header->sequence);
+        uint16_t payload_length = (uint16_t)(icmp_length - sizeof(icmp_header_t));
+        const uint8_t *payload = (const uint8_t *)(icmp_header + 1);
+
+        if (kernel && kernel->network_socket_deliver_icmp_reply)
+        {
+            kernel->network_socket_deliver_icmp_reply(ipv4_header->source_ip_address,
+                identifier,
+                sequence,
+                payload,
+                payload_length);
+        }
+
+
+        return;
+    }
+
     if (icmp_header->type != ICMP_TYPE_ECHO_REQUEST || icmp_header->code != ICMP_CODE_ECHO)
     {
         return;

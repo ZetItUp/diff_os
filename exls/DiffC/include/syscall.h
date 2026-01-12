@@ -90,6 +90,10 @@ enum
     SYSTEM_TTY_READ_OUTPUT = 76,
     SYSTEM_TTY_SET_OUTPUT = 77,
     SYSTEM_IPV4_GET_CONFIG = 80,
+    SYSTEM_NET_SOCKET_CREATE = 81,
+    SYSTEM_NET_SOCKET_CLOSE = 82,
+    SYSTEM_NET_SOCKET_SEND = 83,
+    SYSTEM_NET_SOCKET_RECV = 84,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)

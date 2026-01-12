@@ -6,8 +6,10 @@
 #include "irq.h"
 #include "drivers/device.h"
 #include "drivers/ipv4_config.h"
+#include "network/arp_service.h"
 #include "network/network_communicator.h"
 #include "network/network_interface.h"
+#include "network/socket.h"
 #include "system/irqsw.h"
 
 // Mouse packet (relative movement + buttons)
@@ -92,6 +94,12 @@ typedef struct kernel_exports
     packet_buffer_t *(*packet_buffer_alloc)(uint32_t capacity, uint32_t head);
     void (*packet_buffer_retain)(packet_buffer_t *packet);
     void (*packet_buffer_release)(packet_buffer_t *packet);
+    int (*network_arp_register_resolver)(network_arp_resolve_t resolver);
+    int (*network_socket_deliver_icmp_reply)(const uint8_t source_ip[4],
+        uint16_t identifier,
+        uint16_t sequence,
+        const uint8_t *payload,
+        uint16_t payload_length);
 
     // String utilities
     size_t (*strlcpy)(char *dst, const char *src, size_t siz);

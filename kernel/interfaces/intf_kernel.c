@@ -58,5 +58,7 @@ kernel_exports_t g_exports =
     .packet_buffer_alloc = packet_buffer_alloc,
     .packet_buffer_retain = packet_buffer_retain,
     .packet_buffer_release = packet_buffer_release,
+    .network_arp_register_resolver = network_arp_register_resolver,
+    .network_socket_deliver_icmp_reply = network_socket_deliver_icmp_reply,
     .strlcpy = strlcpy,
 };

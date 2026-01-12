@@ -20,6 +20,8 @@
 #include "system/signal.h"
 #include "drivers/device.h"
 #include "drivers/ipv4_config.h"
+#include "network/socket.h"
+#include "heap.h"
 
 struct dirent;
 
@@ -218,6 +220,106 @@ static int system_ipv4_get_config(ipv4_config_t *user_config)
     }
 
     if (copy_to_user(user_config, &config, sizeof(config)) != 0)
+    {
+
+        return -1;
+    }
+
+    return 0;
+}
+
+// Network socket syscalls
+static int system_network_socket_create(uint32_t protocol)
+{
+    return network_socket_create((uint8_t)protocol);
+}
+
+static int system_network_socket_close(int socket_id)
+{
+    process_t *process = process_current();
+
+    if (!process)
+    {
+
+        return -1;
+    }
+
+    return network_socket_close(socket_id, process->pid);
+}
+
+static int system_network_socket_send(int socket_id, const network_socket_send_t *user_send)
+{
+    process_t *process = process_current();
+
+    if (!process || !user_send)
+    {
+
+        return -1;
+    }
+
+    network_socket_send_t send_info;
+    if (copy_from_user(&send_info, user_send, sizeof(send_info)) != 0)
+    {
+
+        return -1;
+    }
+
+    if (send_info.payload_length > NETWORK_SOCKET_MAX_PAYLOAD)
+    {
+
+        return -1;
+    }
+
+    uint8_t *payload = NULL;
+
+    if (send_info.payload_length > 0)
+    {
+        payload = (uint8_t *)kmalloc(send_info.payload_length);
+
+        if (!payload)
+        {
+
+            return -1;
+        }
+
+        if (copy_from_user(payload, send_info.payload, send_info.payload_length) != 0)
+        {
+            kfree(payload);
+
+            return -1;
+        }
+    }
+
+    send_info.payload = payload;
+
+    int result = network_socket_send(socket_id, process->pid, &send_info);
+
+    if (payload)
+    {
+        kfree(payload);
+    }
+
+    return result;
+}
+
+static int system_network_socket_recv(int socket_id, network_socket_packet_t *user_packet)
+{
+    process_t *process = process_current();
+
+    if (!process || !user_packet)
+    {
+
+        return -1;
+    }
+
+    network_socket_packet_t packet;
+    if (network_socket_recv(socket_id, process->pid, &packet) != 0)
+    {
+
+        return -1;
+    }
+
+    if (copy_to_user(user_packet, &packet, sizeof(packet)) != 0)
     {
 
         return -1;
@@ -1118,6 +1220,28 @@ int system_call_dispatch(struct syscall_frame *f)
         case SYSTEM_IPV4_GET_CONFIG:
         {
             ret = system_ipv4_get_config((ipv4_config_t *)(uintptr_t)arg0);
+            break;
+        }
+        case SYSTEM_NET_SOCKET_CREATE:
+        {
+            ret = system_network_socket_create((uint32_t)arg0);
+            break;
+        }
+        case SYSTEM_NET_SOCKET_CLOSE:
+        {
+            ret = system_network_socket_close((int)arg0);
+            break;
+        }
+        case SYSTEM_NET_SOCKET_SEND:
+        {
+            ret = system_network_socket_send((int)arg0,
+                (const network_socket_send_t *)(uintptr_t)arg1);
+            break;
+        }
+        case SYSTEM_NET_SOCKET_RECV:
+        {
+            ret = system_network_socket_recv((int)arg0,
+                (network_socket_packet_t *)(uintptr_t)arg1);
             break;
         }
         default:
