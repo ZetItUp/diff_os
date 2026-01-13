@@ -30,3 +30,4 @@ ping=/programs/ping/ping.dex
 
 # Games
 doom=/games/doom/doom.dex
+quake=/games/quake/quake.dex

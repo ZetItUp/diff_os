@@ -137,7 +137,7 @@ TARGET = $(BUILD)/diffos.img
 ISO = $(BUILD)/diffos.iso
 CD_ISO = $(BUILD)/diffos_cd.iso
 
-.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean iso vdi vmdk graphics cd run-cd
+.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean iso vdi vmdk graphics cd run-cd quake
 
 all: tools drivers $(ISO)
 
@@ -404,6 +404,10 @@ games:
 	@echo "[Games] Compiling all games"
 	@$(MAKE) -C games/doom clean
 	@$(MAKE) -C games/doom
+
+quake:
+	@echo "[Games] Compiling quake"
+	@$(MAKE) -C games/quake/WinQuake
 
 allclean: clean
 	@echo "[CLEAN] Cleaning everything!"

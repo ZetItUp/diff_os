@@ -591,6 +591,11 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
     return ret;
 }
 
+int vsprintf(char *str, const char *fmt, va_list ap)
+{
+    return vsnprintf(str, (size_t)-1, fmt, ap);
+}
+
 int snprintf(char *buf, size_t size, const char *fmt, ...)
 {
     va_list ap;
