@@ -1,4 +1,5 @@
 #include <unistd.h>
+#include <errno.h>
 #include <syscall.h>
 
 int exec_dex(const char *path, int argc, char **argv)
@@ -56,4 +57,15 @@ off_t lseek(int fd, off_t offset, int whence)
 ssize_t readlink(const char *path, char *buf, size_t bufsize)
 {
     return (ssize_t)system_readlink(path, buf, bufsize);
+}
+
+int unlink(const char *path)
+{
+    if (!path || !*path)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return system_file_delete(path);
 }

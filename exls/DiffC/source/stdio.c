@@ -781,15 +781,12 @@ int rename(const char *oldpath, const char *newpath)
 }
 
 
-int sscanf(const char *str, const char *fmt, ...)
+int vsscanf(const char *str, const char *fmt, va_list ap)
 {
     const char *p = str;
     const char *f = fmt;
     int asgn = 0;
     int nread = 0;
-
-    va_list ap;
-    va_start(ap, fmt);
 
     while (*f)
     {
@@ -915,8 +912,6 @@ int sscanf(const char *str, const char *fmt, ...)
                 {
                     if (*p == 0)
                     {
-                        va_end(ap);
-
                         return asgn ? asgn : -1;
                     }
 
@@ -930,8 +925,6 @@ int sscanf(const char *str, const char *fmt, ...)
                 {
                     if (*p == 0)
                     {
-                        va_end(ap);
-
                         return asgn ? asgn : -1;
                     }
 
@@ -964,8 +957,6 @@ int sscanf(const char *str, const char *fmt, ...)
 
             if (cnt == 0)
             {
-                va_end(ap);
-
                 return asgn ? asgn : -1;
             }
 
@@ -978,7 +969,7 @@ int sscanf(const char *str, const char *fmt, ...)
                     outs[i] = start[i];
                 }
 
-                outs[cnt] = '\0';
+                outs[cnt] = ' ';
                 asgn++;
             }
 
@@ -1023,7 +1014,7 @@ int sscanf(const char *str, const char *fmt, ...)
                     k++;
                 }
 
-                tmp[k] = '\0';
+                tmp[k] = ' ';
                 src = tmp;
             }
 
@@ -1033,8 +1024,6 @@ int sscanf(const char *str, const char *fmt, ...)
 
                 if (endp == src)
                 {
-                    va_end(ap);
-
                     return asgn ? asgn : -1;
                 }
 
@@ -1075,8 +1064,6 @@ int sscanf(const char *str, const char *fmt, ...)
 
                 if (endp == src)
                 {
-                    va_end(ap);
-
                     return asgn ? asgn : -1;
                 }
 
@@ -1138,7 +1125,7 @@ int sscanf(const char *str, const char *fmt, ...)
                     k++;
                 }
 
-                tmp[k] = '\0';
+                tmp[k] = ' ';
                 src = tmp;
             }
 
@@ -1146,8 +1133,6 @@ int sscanf(const char *str, const char *fmt, ...)
 
             if (endp == src)
             {
-                va_end(ap);
-
                 return asgn ? asgn : -1;
             }
 
@@ -1184,10 +1169,38 @@ int sscanf(const char *str, const char *fmt, ...)
         break;
     }
 
-    va_end(ap);
-
     return asgn;
 }
+
+int sscanf(const char *str, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = vsscanf(str, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
+int fscanf(FILE *stream, const char *fmt, ...)
+{
+    if (!stream || !fmt)
+    {
+        return -1;
+    }
+
+    char buf[1024];
+    if (!fgets(buf, sizeof(buf), stream))
+    {
+        return -1;
+    }
+
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = vsscanf(buf, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
 
 int fprintf(FILE *stream, const char *fmt, ...)
 {

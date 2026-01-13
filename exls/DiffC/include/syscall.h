@@ -266,6 +266,11 @@ static inline int system_readlink(const char *path, char *buf, size_t bufsize)
                   (int)bufsize, 0);
 }
 
+static inline int system_file_delete(const char *path)
+{
+    return do_sys(SYSTEM_FILE_DELETE, (int)(uintptr_t)path, 0, 0, 0);
+}
+
 static inline int system_close(int file_descriptor)
 {
     return do_sys(SYSTEM_FILE_CLOSE, file_descriptor, 0, 0, 0);

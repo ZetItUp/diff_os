@@ -126,3 +126,16 @@ long double fabsl(long double x)
 
     return x < 0.0L ? -x : x;
 }
+
+static unsigned int g_rand_state = 1;
+
+void srand(unsigned int seed)
+{
+    g_rand_state = seed ? seed : 1u;
+}
+
+int rand(void)
+{
+    g_rand_state = g_rand_state * 1103515245u + 12345u;
+    return (int)((g_rand_state >> 16) & 0x7FFF);
+}

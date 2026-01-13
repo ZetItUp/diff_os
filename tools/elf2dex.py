@@ -391,17 +391,33 @@ def build_dex(dumpfile, elffile, outfile, default_exl, import_map_path=None, for
         
         return len(imports) - 1
 
+    exported_names = set()
+    for sym in symbols:
+        name = sym.get("name", "")
+        shndx = sym.get("shndx", -1)
+        if not name or shndx not in secinfo:
+            continue
+        bind = sym.get("bind", STB_LOCAL)
+        if bind not in (STB_GLOBAL, STB_WEAK):
+            continue
+        stype = sym.get("type", STT_NOTYPE)
+        if stype in (STT_SECTION, STT_FILE, STT_TLS):
+            continue
+        exported_names.add(name)
+
     used_undef = set()
-    
+
     for r in relocs:
         si = r["symidx"]
-        
+
         if 0 <= si < len(symbols):
             sym = symbols[si]
-            
+
             if sym["shndx"] == 0 and sym["name"]:
+                if sym["name"] in exported_names:
+                    continue
                 used_undef.add(sym["name"])
-    
+
     for name in sorted(used_undef):
         ensure_import(name, import_map.get(name, default_exl), True)
 
@@ -423,25 +439,25 @@ def build_dex(dumpfile, elffile, outfile, default_exl, import_map_path=None, for
     for sym in symbols:
         name = sym.get("name", "")
         shndx = sym.get("shndx", -1)
-        
+
         if not name or shndx not in secinfo:
             continue
-        
+
         bind = sym.get("bind", STB_LOCAL)
-        
+
         if bind not in (STB_GLOBAL, STB_WEAK):
             continue
-        
+
         stype = sym.get("type", STT_NOTYPE)
-        
+
         if stype in (STT_SECTION, STT_FILE, STT_TLS):
             continue
-        
+
         base, _, _ = base_for_secidx(shndx)
-        
+
         if base is None:
             continue
-        
+
         sec_group = secinfo[shndx]["group"]
         is_func = (stype == STT_FUNC) or (stype == STT_NOTYPE and sec_group == "text")
         value_off = (base + sym["value"]) & 0xFFFFFFFF

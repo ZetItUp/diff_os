@@ -19,6 +19,9 @@ float fabsf(float x);
 long double fabsl(long double x);
 double atof(const char *s);
 
+int rand(void);
+void srand(unsigned int seed);
+
 long strtol(const char *nptr, char **endptr, int base);
 unsigned long strtoul(const char *nptr, char **endptr, int base);
 long long strtoll(const char *nptr, char **endptr, int base);
@@ -29,4 +32,3 @@ void *realloc(void *ptr, size_t size);
 void *calloc(size_t count, size_t size);
 void *malloc(size_t size);
 void free(void *ptr);
-

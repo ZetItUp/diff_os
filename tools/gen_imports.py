@@ -148,6 +148,34 @@ def get_undefined_symbols(elf_path):
         
         return []
 
+def get_defined_symbols(elf_path):
+    try:
+        res = subprocess.run(
+            ["i386-elf-nm", "--defined-only", elf_path],
+            check=False,
+            capture_output=True,
+            text=True
+        )
+
+        syms = set()
+
+        for line in res.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            parts = line.split()
+            if not parts:
+                continue
+
+            sym = parts[-1]
+            syms.add(sym)
+
+        return syms
+    except FileNotFoundError:
+        print("error: i386-elf-nm not found in PATH", file=sys.stderr)
+        return set()
+
 def main():
     if len(sys.argv) < 3:
         print(USAGE, file=sys.stderr)
@@ -161,6 +189,9 @@ def main():
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
     syms = get_undefined_symbols(elf_path)
+    defined = get_defined_symbols(elf_path)
+    if defined:
+        syms = [s for s in syms if s not in defined]
 
     # Auto-discover symbols from .exl files in image/system/exls/
     script_dir = Path(__file__).parent

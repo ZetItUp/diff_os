@@ -73,6 +73,8 @@ int vfprintf(FILE *stream, const char *fmt, va_list ap);
 char *fgets(char *s, int size, FILE *fp);
 int fputs(const char *s, FILE *fp);
 int sscanf(const char *str, const char *fmt, ...);
+int vsscanf(const char *str, const char *fmt, va_list ap);
+int fscanf(FILE *stream, const char *fmt, ...);
 
 /* Error handling */
 int feof(FILE *fp);
@@ -89,5 +91,4 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list ap);
 int fprintf(FILE *fp, const char *fmt, ...);
 int vfprintf(FILE *fp, const char *fmt, va_list ap);
 ssize_t getline(char **lineptr, size_t *n);
-
 
