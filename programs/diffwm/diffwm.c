@@ -1147,7 +1147,7 @@ static void wm_fill_bg_region(int x, int y, int w, int h)
     if (y + h > (int)g_mode.height) h = (int)g_mode.height - y;
     if (w <= 0 || h <= 0) return;
 
-    const uint32_t bg = color_rgb(69, 67, 117);
+    const uint32_t bg = desktop_background_color;
     for (int row = y; row < y + h; row++)
     {
         uint32_t *dst = g_backbuffer + (size_t)row * g_backbuffer_stride + x;
@@ -1417,7 +1417,7 @@ void wm_clear_region(int x, int y, int w, int h)
 {
     if (!g_backbuffer) return;
 
-    const uint32_t bg = color_rgb(69, 67, 117);
+    const uint32_t bg = desktop_background_color;
 
     // Clamp to screen bounds
     int x0 = (x < 0) ? 0 : x;
@@ -1941,7 +1941,7 @@ int main(void)
     }
 
     /* Fill background to a known color before any client draws */
-    const uint32_t bg = color_rgb(69, 67, 117);
+    const uint32_t bg = desktop_background_color;
     size_t total = (size_t)g_backbuffer_stride * g_mode.height;
     for (int b = 0; b < 2; ++b)
     {

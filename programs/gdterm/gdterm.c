@@ -87,6 +87,44 @@ static bool g_need_prompt = false;
 static bool g_should_quit = false;
 static bool g_has_focus = false;
 
+// Command history
+#define HISTORY_MAX 50
+static char g_history[HISTORY_MAX][512];
+static int g_history_count = 0;
+static int g_history_index = -1;
+
+// Key codes for arrow keys
+#define KEY_UP    0xad
+#define KEY_DOWN  0xaf
+
+static void history_add(const char *cmd)
+{
+    if (!cmd || !cmd[0])
+    {
+        return;
+    }
+
+    // Don't add duplicate of the last command
+    if (g_history_count > 0 && strcmp(g_history[g_history_count - 1], cmd) == 0)
+    {
+        return;
+    }
+
+    // Shift history if full
+    if (g_history_count >= HISTORY_MAX)
+    {
+        for (int i = 0; i < HISTORY_MAX - 1; i++)
+        {
+            strcpy(g_history[i], g_history[i + 1]);
+        }
+        g_history_count = HISTORY_MAX - 1;
+    }
+
+    strncpy(g_history[g_history_count], cmd, 511);
+    g_history[g_history_count][511] = '\0';
+    g_history_count++;
+}
+
 static void window_damage_terminal_full(window_t *window);
 
 static int terminal_visible_line_count(int font_height_value)
@@ -626,6 +664,10 @@ int main(void)
 
                 if (input_pos > 0)
                 {
+                    // Add to history before tokenizing (which modifies the string)
+                    history_add(input_line);
+                    g_history_index = -1;
+
                     char *argv[16];
                     int argc = tokenize(input_line, argv, 16);
 
@@ -639,9 +681,10 @@ int main(void)
                     }
                 }
 
-                // Reset input
+                // Reset input and history browsing
                 input_pos = 0;
                 input_line[0] = '\0';
+                g_history_index = -1;
 
                 // Mark that we need to show the next prompt (after child completion)
                 if (!g_prompt_blocked)
@@ -667,6 +710,68 @@ int main(void)
                     window_damage_terminal_line(win, g_terminal.cursor_y);
                 }
             }
+            else if (ev.key == KEY_UP) // Up arrow - previous command
+            {
+                if (g_history_count > 0)
+                {
+                    // Clear current input from display
+                    while (input_pos > 0)
+                    {
+                        terminal_backspace(&g_terminal);
+                        input_pos--;
+                    }
+
+                    // Move to previous history entry
+                    if (g_history_index < 0)
+                    {
+                        g_history_index = g_history_count - 1;
+                    }
+                    else if (g_history_index > 0)
+                    {
+                        g_history_index--;
+                    }
+
+                    // Copy history entry to input
+                    strcpy(input_line, g_history[g_history_index]);
+                    input_pos = strlen(input_line);
+
+                    // Display the history entry
+                    terminal_puts(&g_terminal, input_line);
+                    dirty = 1;
+                    window_damage_terminal_line(win, g_terminal.cursor_y);
+                }
+            }
+            else if (ev.key == KEY_DOWN) // Down arrow - next command
+            {
+                if (g_history_index >= 0)
+                {
+                    // Clear current input from display
+                    while (input_pos > 0)
+                    {
+                        terminal_backspace(&g_terminal);
+                        input_pos--;
+                    }
+
+                    if (g_history_index < g_history_count - 1)
+                    {
+                        // Move to next history entry
+                        g_history_index++;
+                        strcpy(input_line, g_history[g_history_index]);
+                        input_pos = strlen(input_line);
+                        terminal_puts(&g_terminal, input_line);
+                    }
+                    else
+                    {
+                        // Past the end of history, show empty line
+                        g_history_index = -1;
+                        input_line[0] = '\0';
+                        input_pos = 0;
+                    }
+
+                    dirty = 1;
+                    window_damage_terminal_line(win, g_terminal.cursor_y);
+                }
+            }
             else if (c >= 32 && c < 127) // Printable character
             {
                 if (input_pos < (int)sizeof(input_line) - 1)
@@ -676,6 +781,9 @@ int main(void)
                     terminal_putchar(&g_terminal, c);
                     dirty = 1;
                     window_damage_terminal_line(win, previous_cursor_y_position);
+
+                    // Reset history browsing when user types
+                    g_history_index = -1;
                 }
             }
         }

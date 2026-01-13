@@ -26,6 +26,8 @@
 #define ICMP_TYPE_ECHO_REQUEST 8
 #define ICMP_CODE_ECHO 0
 
+#define ICMP_TRACE 1
+
 __attribute__((section(".ddf_meta"), used))
 volatile unsigned int ddf_irq_number = 0;
 
@@ -286,6 +288,13 @@ static int icmp_send_frame(icmp_device_t *device_entry, const uint8_t *frame, ui
         return -1;
     }
 
+#if ICMP_TRACE
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ICMP] send_frame len=%u\n", (unsigned)frame_length);
+    }
+#endif
+
     network_interface_t *interface = icmp_get_interface(device_entry);
 
     if (interface && kernel && kernel->network_communicator_transmit)
@@ -351,6 +360,13 @@ static void icmp_send_echo_reply(icmp_device_t *device_entry,
         return;
     }
 
+#if ICMP_TRACE
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ICMP] echo_reply len=%u\n", (unsigned)icmp_length);
+    }
+#endif
+
     uint8_t frame[ETHERNET_FRAME_MAX];
     uint16_t header_length = IPV4_HEADER_MIN;
     uint16_t ipv4_length = (uint16_t)(header_length + icmp_length);
@@ -413,6 +429,13 @@ static void icmp_handle_packet(icmp_device_t *device_entry, packet_buffer_t *pac
         return;
     }
 
+#if ICMP_TRACE
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ICMP] rx packet len=%u\n", (unsigned)packet->length);
+    }
+#endif
+
     if (packet->length < ETHERNET_HEADER_SIZE + IPV4_HEADER_MIN)
     {
         return;
@@ -423,6 +446,12 @@ static void icmp_handle_packet(icmp_device_t *device_entry, packet_buffer_t *pac
 
     if (ethernet_type != ETHERNET_TYPE_IPV4)
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop non-ipv4 type=0x%04x\n", ethernet_type);
+        }
+#endif
         return;
     }
 
@@ -431,6 +460,12 @@ static void icmp_handle_packet(icmp_device_t *device_entry, packet_buffer_t *pac
 
     if (payload_length < IPV4_HEADER_MIN)
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop short ipv4 payload\n");
+        }
+#endif
         return;
     }
 
@@ -441,16 +476,34 @@ static void icmp_handle_packet(icmp_device_t *device_entry, packet_buffer_t *pac
 
     if (version != IPV4_VERSION)
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop bad version %u\n", (unsigned)version);
+        }
+#endif
         return;
     }
 
     if (header_length < IPV4_HEADER_MIN || header_length > payload_length)
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop bad header len=%u\n", (unsigned)header_length);
+        }
+#endif
         return;
     }
 
     if (!checksum_valid(payload, header_length))
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop bad ipv4 checksum\n");
+        }
+#endif
         return;
     }
 
@@ -458,16 +511,34 @@ static void icmp_handle_packet(icmp_device_t *device_entry, packet_buffer_t *pac
 
     if (total_length < header_length || total_length > payload_length)
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop bad total len=%u\n", (unsigned)total_length);
+        }
+#endif
         return;
     }
 
     if (ip_is_zero(device_entry->ip_address))
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop ip not set\n");
+        }
+#endif
         return;
     }
 
     if (!ip_equal(ipv4_header->destination_ip_address, device_entry->ip_address))
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop dst mismatch\n");
+        }
+#endif
         return;
     }
 
@@ -476,11 +547,23 @@ static void icmp_handle_packet(icmp_device_t *device_entry, packet_buffer_t *pac
     if ((flags_and_fragment & IPV4_FLAG_MORE_FRAGMENTS) != 0 ||
         (flags_and_fragment & IPV4_FRAGMENT_MASK) != 0)
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop fragmented\n");
+        }
+#endif
         return;
     }
 
     if (ipv4_header->protocol != IPV4_PROTOCOL_ICMP)
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop proto=%u\n", (unsigned)ipv4_header->protocol);
+        }
+#endif
         return;
     }
 
@@ -488,11 +571,23 @@ static void icmp_handle_packet(icmp_device_t *device_entry, packet_buffer_t *pac
 
     if (icmp_length < sizeof(icmp_header_t))
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop short icmp len=%u\n", (unsigned)icmp_length);
+        }
+#endif
         return;
     }
 
     if (header_length + icmp_length > payload_length)
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop icmp overrun\n");
+        }
+#endif
         return;
     }
 
@@ -500,11 +595,25 @@ static void icmp_handle_packet(icmp_device_t *device_entry, packet_buffer_t *pac
 
     if (!checksum_valid((const uint8_t *)icmp_header, icmp_length))
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop bad icmp checksum\n");
+        }
+#endif
         return;
     }
 
     if (icmp_header->type == ICMP_TYPE_ECHO_REPLY && icmp_header->code == ICMP_CODE_ECHO)
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] echo_reply id=%u seq=%u\n",
+                (unsigned)read_be16((const uint8_t *)&icmp_header->identifier),
+                (unsigned)read_be16((const uint8_t *)&icmp_header->sequence));
+        }
+#endif
         uint16_t identifier = read_be16((const uint8_t *)&icmp_header->identifier);
         uint16_t sequence = read_be16((const uint8_t *)&icmp_header->sequence);
         uint16_t payload_length = (uint16_t)(icmp_length - sizeof(icmp_header_t));
@@ -525,8 +634,25 @@ static void icmp_handle_packet(icmp_device_t *device_entry, packet_buffer_t *pac
 
     if (icmp_header->type != ICMP_TYPE_ECHO_REQUEST || icmp_header->code != ICMP_CODE_ECHO)
     {
+#if ICMP_TRACE
+        if (kernel && kernel->printf)
+        {
+            kernel->printf("[ICMP] drop type=%u code=%u\n",
+                (unsigned)icmp_header->type,
+                (unsigned)icmp_header->code);
+        }
+#endif
         return;
     }
+
+#if ICMP_TRACE
+    if (kernel && kernel->printf)
+    {
+        kernel->printf("[ICMP] echo_request id=%u seq=%u\n",
+            (unsigned)read_be16((const uint8_t *)&icmp_header->identifier),
+            (unsigned)read_be16((const uint8_t *)&icmp_header->sequence));
+    }
+#endif
 
     icmp_send_echo_reply(device_entry, ethernet_header, ipv4_header,
         (const uint8_t *)icmp_header, icmp_length);

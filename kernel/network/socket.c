@@ -17,6 +17,8 @@
 #define ICMP_HEADER_SIZE 8
 #define IPV4_VERSION 4
 
+#define PING_TRACE 1
+
 static network_socket_entry_t g_network_sockets[NETWORK_SOCKET_MAX_SOCKETS];
 static spinlock_t g_network_socket_lock;
 static int g_network_socket_lock_inited = 0;
@@ -205,6 +207,15 @@ static uint16_t checksum_finish(const uint8_t *data, uint16_t length)
     return (uint16_t)~checksum_sum(data, length);
 }
 
+static void print_ip(const uint8_t ip_address[4])
+{
+    printf("%u.%u.%u.%u",
+        (unsigned)ip_address[0],
+        (unsigned)ip_address[1],
+        (unsigned)ip_address[2],
+        (unsigned)ip_address[3]);
+}
+
 static int network_socket_send_icmp(const network_socket_send_t *send_info)
 {
     if (!send_info)
@@ -240,6 +251,14 @@ static int network_socket_send_icmp(const network_socket_send_t *send_info)
 
         return -1;
     }
+
+#if PING_TRACE
+    printf("[PING] send id=%u seq=%u dst=",
+        (unsigned)send_info->identifier,
+        (unsigned)send_info->sequence);
+    print_ip(send_info->destination_ip);
+    printf("\n");
+#endif
 
     uint8_t target_ip[4];
     int off_net = 0;
@@ -290,6 +309,14 @@ static int network_socket_send_icmp(const network_socket_send_t *send_info)
         return -1;
     }
 
+#if PING_TRACE
+    printf("[PING] route off_net=%d gw=", off_net);
+    print_ip(config.gateway);
+    printf(" target=");
+    print_ip(target_ip);
+    printf("\n");
+#endif
+
     if (ip_equal(send_info->destination_ip, config.ip_address))
     {
         network_socket_deliver_icmp_reply(config.ip_address,
@@ -322,6 +349,18 @@ static int network_socket_send_icmp(const network_socket_send_t *send_info)
 
         return -1;
     }
+
+#if PING_TRACE
+    printf("[PING] arp ok target=");
+    print_ip(target_ip);
+    printf(" mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+        destination_mac[0],
+        destination_mac[1],
+        destination_mac[2],
+        destination_mac[3],
+        destination_mac[4],
+        destination_mac[5]);
+#endif
 
     uint16_t payload_length = send_info->payload_length;
 
@@ -394,6 +433,10 @@ static int network_socket_send_icmp(const network_socket_send_t *send_info)
     int result = network_communicator_transmit(interface, packet);
 
     packet_buffer_release(packet);
+
+#if PING_TRACE
+    printf("[PING] tx result=%d\n", result);
+#endif
 
     if (result != 0)
     {

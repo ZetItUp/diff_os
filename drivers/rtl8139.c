@@ -8,653 +8,462 @@
 #include "pci.h"
 #include "system/irqsw.h"
 
-// PCI Identifiers
-#define VENDOR_ID   0x10EC      // Realtek
-#define DEVICE_ID   0x8139      // RTL8139
+// RTL8139 PCI identifiers
+#define RTL_VENDOR_ID       0x10EC
+#define RTL_DEVICE_ID       0x8139
 
-// RTL8139 Register Map
-// 0x00-0x05    - 6-byte MAC Address
-// 0x10-0x1C    - 4 TX Status Registers
-// 0x20-0x2C    - 4 TX Address Registers (Physical Address of TX Buffers)
-// 0x30         - RX Ring Buffer Physical Address
-// 0x37         - Command Register (Enable TX/RX, Reset)
-// 0x3C/0x3E    - Interrupt Mask and Status
-// 0x40/0x44    - TX and RX Configuration
+// Register offsets
+#define REG_MAC0            0x00    // MAC address bytes 0-3
+#define REG_MAC4            0x04    // MAC address bytes 4-5
+#define REG_TX_STATUS0      0x10    // TX descriptor 0 status
+#define REG_TX_ADDR0        0x20    // TX descriptor 0 address
+#define REG_RX_BUF          0x30    // RX buffer physical address
+#define REG_CMD             0x37    // Command register
+#define REG_CAPR            0x38    // Current address of packet read
+#define REG_CBR             0x3A    // Current buffer address (write pointer)
+#define REG_IMR             0x3C    // Interrupt mask
+#define REG_ISR             0x3E    // Interrupt status
+#define REG_TX_CONFIG       0x40    // TX configuration
+#define REG_RX_CONFIG       0x44    // RX configuration
+#define REG_CONFIG1         0x52    // Configuration register 1
 
-// RTL8139 Register Offsets
-#define REG_MAC0                0x00    // MAC Address bytes 0-3
-#define REG_MAC4                0x04    // MAC Address bytes 4-5
-#define REG_MAR0                0x08    // Multicast filter bits 0-31
-#define REG_MAR4                0x0C    // Multicast filter bits 32-63
+// Command register bits
+#define CMD_RESET           0x10
+#define CMD_RX_ENABLE       0x08
+#define CMD_TX_ENABLE       0x04
+#define CMD_BUF_EMPTY       0x01
 
-#define REG_TXSTATUS0           0x10    // TX Status Descriptor 0
-                                        // 4 in total:
-                                        // - 0x10
-                                        // - 0x14
-                                        // - 0x18
-                                        // - 0x1C
+// Interrupt bits
+#define INT_RX_OK           0x0001
+#define INT_RX_ERR          0x0002
+#define INT_TX_OK           0x0004
+#define INT_TX_ERR          0x0008
+#define INT_RX_OVERFLOW     0x0010
 
-#define REG_TXADDR0             0x20    // TX Buffer Address 0
-                                        // 4 in total:
-                                        // - 0x20
-                                        // - 0x24
-                                        // - 0x28
-                                        // - 0x2C
+// TX status bits
+#define TX_OWN              0x2000
+#define TX_TOK              0x8000
 
-#define REG_RXBUF               0x30    // RX Buffer Physical Address
-#define REG_CMD                 0x37    // Command Register
+// RX status bits
+#define RX_ROK              0x0001
 
-#define REG_CAPR                0x38    // Current Address of Packet Read
-                                        // (RX Read Pointer)
-#define REG_CBR                 0x3A    // Current Buffer Address
-                                        // (RX Write Pointer)
+// RX config bits
+#define RCR_AAP             0x01    // Accept all packets
+#define RCR_APM             0x02    // Accept physical match
+#define RCR_AM              0x04    // Accept multicast
+#define RCR_AB              0x08    // Accept broadcast
+#define RCR_WRAP            0x80    // Wrap mode
+#define RCR_RBLEN_8K        0x0000
+#define RCR_RBLEN_16K       0x0800
+#define RCR_RBLEN_32K       0x1000
+#define RCR_RBLEN_64K       0x1800
 
-#define REG_IMR                 0x3C    // Interrupt Mask Register
-#define REG_ISR                 0x3E    // Interrupt Status Register
-#define REG_TCR                 0x40    // Transmit Configuration Register
-#define REG_RCR                 0x44    // Receive Configuration Register
-#define REG_CONFIG1             0x52    // Configuaration Register 1
-#define REG_BMCR                0x62    // Basic Mode Control Register (Physical)
+// TX config bits
+#define TCR_IFG_NORMAL      0x03000000
+#define TCR_MXDMA_2048      0x00000700
 
-// PCI Configuration
-#define PCI_INTERRUPT_LINE      0x3C    // IRQ Line in PCI Config Space
+// Buffer sizes
+#define RX_BUF_SIZE         8192
+#define RX_BUF_PAD          16
+#define RX_BUF_WRAP         1536
+#define RX_BUF_TOTAL        (RX_BUF_SIZE + RX_BUF_PAD + RX_BUF_WRAP)
+#define TX_BUF_SIZE         1536
+#define TX_DESC_COUNT       4
 
-// Command Register bits (REG_CMD)
-#define CMD_RESET               0x10    // Software Reset
-#define CMD_RX_ENABLE           0x08    // Enable Receiver
-#define CMD_TX_ENABLE           0x04    // Enable Transmitter
-#define CMD_BUF_EMPTY           0x01    // RX Buffer Empty
+// Software RX queue
+#define RX_QUEUE_SIZE       16
 
-
-// Interrupt Status/Mask bits (REG_ISR / REG_IMR)
-#define INT_RX_OK               0x0001  // Packet Received Successfully
-#define INT_RX_ERR              0x0002  // Packet Receive Error
-#define INT_TX_OK               0x0004  // Packet Transmitted Successfully
-#define INT_TX_ERR              0x0008  // Packet Transmit Error
-#define INT_RX_OVERFLOW         0x0010  // RX Buffer Overflow
-#define INT_LINK_CHANGE         0x0020  // Link Status Changed
-#define INT_RX_FIFO_OVER        0x0040  // RX FIFO Overflow
-#define INT_TIMEOUT             0x4000  // Cable Length Change Timeout
-#define INT_SYSTEM_ERROR        0x8000  // PCI Bus Error
-
-
-// Receive Configuration Register bits (REG_RCR)
-#define RCR_AAP                 0x00000001  // Accept All Packets
-#define RCR_APM                 0x00000002  // Accept Physical Match (MAC Address)
-#define RCR_AM                  0x00000004  // Accept Multicast
-#define RCR_AB                  0x00000008  // Accept Broadcast
-#define RCR_WRAP                0x00000080  // Wrap at end of buffer
-                                            // (Disable = Overflow to start)
-#define RCR_RBLEN_8K            0x00000000  // RX Buffer 8K + 16 bytes
-#define RCR_RBLEN_16K           0x00000800  // RX Buffer 16K + 16 bytes
-#define RCR_RBLEN_32K           0x00001000  // RX Buffer 32K + 16 bytes
-#define RCR_RBLEN_64K           0x00001800  // RX Buffer 64K + 16 bytes
-
-
-// Transmit Configuration Register bits (REG_TCR)
-#define TCR_IFG_NORMAL          0x03000000  // Inter-frame Gap Time (Standard)
-#define TCR_MXDMA_2048          0x00000700  // Max DMA Burst Size 2048 bytes
-
-
-// TX Status Register bits
-#define TX_STATUS_OWN           0x00002000  // NIC owns this descriptor
-#define TX_STATUS_TUN           0x00004000  // TX Underrun
-#define TX_STATUS_TOK           0x00008000  // Transmit OK
-#define TX_STATUS_SIZE_MASK     0x00001FFF  // Packet size mask
-
-
-// RX Status bits (in packet header)
-#define RX_STATUS_ROK           0x0001      // Receive OK
-#define RX_STATUS_FAE           0x0002      // Frame Alignment Error
-#define RX_STATUS_CRC           0x0004      // CRC Error
-#define RX_STATUS_LONG          0x0008      // Long Packet (>4KB)
-#define RX_STATUS_RUNT          0x0010      // Runt Packet (<64 bytes)
-#define RX_STATUS_ISE           0x0020      // Invalid Symbol Error
-
-
-// RX uses a ring buffer - NIC writes packets sequentially, wraps to start
-// 8K is smallest option, 16 bytes for header, 1536 for wrap safety
-//
-// RX Buffer: 8K + 16 Bytes + 1500 (Wrap Padding)
-// RTL8139 can write past end during wrap, we need extra space here
-#define RX_BUF_SIZE             (8192+16+1536)
-#define RX_BUF_PAGES            3               // 3 Pages = 12Kb
-
-// TX Buffer: 4 Descriptors, each can hold one maximum size packet
-#define TX_BUF_SIZE             1536            // Max Eternet Frame
-#define TX_BUF_COUNT            4               // 4 TX Descriptors
-#define RX_QUEUE_LEN            32
-
-// RTL8139 will be configured dynamically after reading PCI config
-// Let's start with IRQ11 is usually the first PCI slot.
 __attribute__((section(".ddf_meta"), used))
 volatile unsigned int ddf_irq_number = 0;
 
 static kernel_exports_t *kernel = NULL;
 
-typedef struct rtl8139_device
-{
-    device_t *dev;
-    pci_device_t pci;
-    uint32_t io_base;
-    uint8_t irq;
-
-    // DMA Buffers
-    uint32_t rx_buffer_phys;
-    uint8_t *rx_buffer;
-    uint32_t tx_buffer_phys[TX_BUF_COUNT];
-    uint8_t *tx_buffer[TX_BUF_COUNT];
-
-    int tx_current;
-    uint16_t rx_read_ptr;
-    uint8_t mac_address[6];
-
-    struct
-    {
-        uint16_t length;
-        uint8_t data[TX_BUF_SIZE];
-    } rx_queue[RX_QUEUE_LEN];
-    uint8_t rx_head;
-    uint8_t rx_tail;
-    uint8_t rx_count;
-    uint32_t rx_dropped;
-    uint16_t irqsw_status;
-    uint8_t irqsw_pending;
-
-    struct rtl8139_device *next;
-} rtl8139_device_t;
-
-static rtl8139_device_t *g_devices = 0;
-static rtl8139_device_t g_device_pool[4];
-static int g_device_count = 0;
-
-// RX Packet header that the NIC prepends to each packet
+// RX packet header from hardware
 typedef struct rx_header
 {
     uint16_t status;
-    uint16_t length;    // Includes 4 byte CRC
+    uint16_t length;
 } __attribute__((packed)) rx_header_t;
 
-
-// Allocate DMA Buffers
-static int alloc_dma_buffers(rtl8139_device_t *nic)
+// Queued packet
+typedef struct rx_packet
 {
-    if (!nic)
+    uint16_t length;
+    uint8_t data[TX_BUF_SIZE];
+} rx_packet_t;
+
+// Device state
+typedef struct rtl_device
+{
+    pci_device_t pci;
+    uint32_t io_base;
+    uint8_t irq;
+    uint8_t mac[6];
+
+    // RX state
+    uint32_t rx_phys;
+    uint8_t *rx_buffer;
+    uint32_t rx_offset;
+
+    // TX state
+    uint32_t tx_phys[TX_DESC_COUNT];
+    uint8_t *tx_buffer[TX_DESC_COUNT];
+    int tx_next;
+
+    // Software queue
+    rx_packet_t rx_queue[RX_QUEUE_SIZE];
+    int rx_head;
+    int rx_tail;
+    int rx_count;
+
+    // IRQ handling
+    uint16_t pending_status;
+    int irq_queued;
+
+    device_t *dev;
+} rtl_device_t;
+
+static rtl_device_t g_device;
+static int g_found = 0;
+
+// Wait for reset to complete
+static int rtl_reset(rtl_device_t *rtl)
+{
+    kernel->outb(rtl->io_base + REG_CMD, CMD_RESET);
+
+    for (int i = 0; i < 1000; i++)
     {
-        return -1;
-    }
-
-    // Allocate RX Buffer - contiguous pages needed
-    nic->rx_buffer_phys = kernel->alloc_phys_pages(RX_BUF_PAGES);
-
-    if (nic->rx_buffer_phys == 0)
-    {
-        kernel->printf("[DRIVER] RTL8139 - Failed to allocate %d contiguous RX pages!\n", RX_BUF_PAGES);
-
-        return -1;
-    }
-
-    // Map the contiguous physical pages to virtual address
-    nic->rx_buffer = (uint8_t *)kernel->map_physical(nic->rx_buffer_phys, RX_BUF_PAGES * 4096, 0);
-
-    if (!nic->rx_buffer)
-    {
-        kernel->printf("[DRIVER] RTL8139 - Failed to map RX buffer!\n");
-        kernel->free_phys_pages(nic->rx_buffer_phys, RX_BUF_PAGES);
-
-        return -1;
-    }
-
-    // Allocate TX Buffers (1 Page for each should be fine)
-    int i;
-
-    for (i = 0; i < TX_BUF_COUNT; i++)
-    {
-        nic->tx_buffer_phys[i] = kernel->alloc_phys_page();
-
-        if (nic->tx_buffer_phys[i] == 0)
+        if ((kernel->inb(rtl->io_base + REG_CMD) & CMD_RESET) == 0)
         {
-            kernel->printf("[DRIVER] RTL8139 - Failed to allocate TX buffer %d!\n", i);
-
-            goto fail_tx;
-        }
-
-        nic->tx_buffer[i] = (uint8_t *)kernel->map_physical(nic->tx_buffer_phys[i], 4096, 0);
-
-        if (!nic->tx_buffer[i])
-        {
-            kernel->printf("[DRIVER] RTL8139 - Failed to map TX buffer %d!\n", i);
-            kernel->free_phys_page(nic->tx_buffer_phys[i]);
-
-            goto fail_tx;
+            return 0;
         }
     }
-
-    kernel->printf("[DRIVER] RTL8139 - DMA Buffers Allocated!\n");
-
-    return 0;
-
-fail_tx:
-    // Cleanup buffers
-    for (int j = 0; j < i; j++)
-    {
-        kernel->free_phys_page(nic->tx_buffer_phys[j]);
-        nic->tx_buffer[j] = NULL;
-    }
-
-    kernel->free_phys_pages(nic->rx_buffer_phys, RX_BUF_PAGES);
-    nic->rx_buffer = NULL;
 
     return -1;
 }
 
-// Free DMA Buffers
-static void free_dma_buffers(rtl8139_device_t *nic)
+// Read MAC address from EEPROM
+static void rtl_read_mac(rtl_device_t *rtl)
 {
-    if (!nic)
+    uint32_t mac_low = kernel->inl(rtl->io_base + REG_MAC0);
+    uint16_t mac_high = kernel->inw(rtl->io_base + REG_MAC4);
+
+    rtl->mac[0] = (mac_low >> 0) & 0xFF;
+    rtl->mac[1] = (mac_low >> 8) & 0xFF;
+    rtl->mac[2] = (mac_low >> 16) & 0xFF;
+    rtl->mac[3] = (mac_low >> 24) & 0xFF;
+    rtl->mac[4] = (mac_high >> 0) & 0xFF;
+    rtl->mac[5] = (mac_high >> 8) & 0xFF;
+}
+
+// Allocate DMA buffers
+static int rtl_alloc_buffers(rtl_device_t *rtl)
+{
+    // RX buffer needs 3 contiguous pages
+    int rx_pages = (RX_BUF_TOTAL + 4095) / 4096;
+    rtl->rx_phys = kernel->alloc_phys_pages(rx_pages);
+
+    if (rtl->rx_phys == 0)
     {
-        return;
+        return -1;
     }
 
-    // Free TX buffers
-    for (int i = 0; i < TX_BUF_COUNT; i++)
+    rtl->rx_buffer = kernel->map_physical(rtl->rx_phys, rx_pages * 4096, 0);
+
+    if (!rtl->rx_buffer)
     {
-        if (nic->tx_buffer_phys[i])
+        kernel->free_phys_pages(rtl->rx_phys, rx_pages);
+
+        return -1;
+    }
+
+    // TX buffers - one page each
+    for (int i = 0; i < TX_DESC_COUNT; i++)
+    {
+        rtl->tx_phys[i] = kernel->alloc_phys_page();
+
+        if (rtl->tx_phys[i] == 0)
         {
-            kernel->free_phys_page(nic->tx_buffer_phys[i]);
-            nic->tx_buffer_phys[i] = 0;
-            nic->tx_buffer[i] = NULL;
-        }
-    }
+            // Cleanup on failure
+            for (int j = 0; j < i; j++)
+            {
+                kernel->free_phys_page(rtl->tx_phys[j]);
+            }
 
-    // Free RX buffer
-    if (nic->rx_buffer_phys)
-    {
-        kernel->free_phys_pages(nic->rx_buffer_phys, RX_BUF_PAGES);
-        nic->rx_buffer_phys = 0;
-        nic->rx_buffer = NULL;
-    }
+            kernel->free_phys_pages(rtl->rx_phys, rx_pages);
 
-    kernel->printf("[DRIVER] RTL8139 - DMA Buffers freed!\n");
-}
-
-// Read MAC address from the NIC
-static void read_mac_address(rtl8139_device_t *nic)
-{
-    uint32_t mac0 = kernel->inl(nic->io_base + REG_MAC0);
-    uint16_t mac4 = kernel->inw(nic->io_base + REG_MAC4);
-
-    nic->mac_address[0] = (mac0 >> 0) & 0xFF;
-    nic->mac_address[1] = (mac0 >> 8) & 0xFF;
-    nic->mac_address[2] = (mac0 >> 16) & 0xFF;
-    nic->mac_address[3] = (mac0 >> 24) & 0xFF;
-    nic->mac_address[4] = (mac4 >> 0) & 0xFF;
-    nic->mac_address[5] = (mac4 >> 8) & 0xFF;
-
-    kernel->printf("[DRIVER] RTL8139 - MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
-                   nic->mac_address[0], nic->mac_address[1], nic->mac_address[2],
-                   nic->mac_address[3], nic->mac_address[4], nic->mac_address[5]);
-}
-
-// Init RX
-static void init_rx(rtl8139_device_t *nic)
-{
-    // Zero the RX buffer
-    for (int i = 0; i < RX_BUF_SIZE; i++)
-    {
-        nic->rx_buffer[i] = 0;
-    }
-
-    // Tell NIC where our RX buffer is located
-    kernel->outl(nic->io_base + REG_RXBUF, nic->rx_buffer_phys);
-
-    // Configure receiver - accept our MAC, broadcast, and multicast
-    uint32_t rcr = RCR_APM | RCR_AB | RCR_AM | RCR_RBLEN_8K;
-    kernel->outl(nic->io_base + REG_RCR, rcr);
-
-    // Reset read pointer - hardware quirk requires starting at 0xFFF0
-    nic->rx_read_ptr = 0;
-    kernel->outw(nic->io_base + REG_CAPR, 0xFFF0);
-
-    kernel->printf("[DRIVER] RTL8139 - RX Ready!\n");
-}
-
-// Init TX
-static void init_tx(rtl8139_device_t *nic)
-{
-    // Zero the TX buffers and set their addresses
-    for (int i = 0; i < TX_BUF_COUNT; i++)
-    {
-        for (int j = 0; j < TX_BUF_SIZE; j++)
-        {
-            nic->tx_buffer[i][j] = 0;
+            return -1;
         }
 
-        // Tell NIC each TX buffers physical address
-        kernel->outl(nic->io_base + REG_TXADDR0 + (i * 4), nic->tx_buffer_phys[i]);
-
-        // Clear TX status so the descriptor starts owned by the CPU
-        kernel->outl(nic->io_base + REG_TXSTATUS0 + (i * 4), 0);
+        rtl->tx_buffer[i] = kernel->map_physical(rtl->tx_phys[i], 4096, 0);
     }
 
-    // Configure transmitter - normal inter-frame gap, 2048 byte DMA burst
-    uint32_t tcr = TCR_IFG_NORMAL | TCR_MXDMA_2048;
-    kernel->outl(nic->io_base + REG_TCR, tcr);
-
-    nic->tx_current = 0;
-
-    kernel->printf("[DRIVER] RTL8139 - TX Ready!\n");
+    return 0;
 }
 
-// Enable the NIC (RX and TX)
-static void device_enable(rtl8139_device_t *nic)
+// Initialize hardware
+static void rtl_hw_init(rtl_device_t *rtl)
 {
-    kernel->outb(nic->io_base + REG_CMD, CMD_RX_ENABLE | CMD_TX_ENABLE);
+    // Set RX buffer address
+    kernel->outl(rtl->io_base + REG_RX_BUF, rtl->rx_phys);
 
-    kernel->printf("[DRIVER] RTL8139 - RX/TX Enabled!\n");
-}
+    // Set TX buffer addresses
+    for (int i = 0; i < TX_DESC_COUNT; i++)
+    {
+        kernel->outl(rtl->io_base + REG_TX_ADDR0 + i * 4, rtl->tx_phys[i]);
+    }
 
-// Enable interrupts on the NIC
-static void enable_interrupts(rtl8139_device_t *nic)
-{
-    // Enable the interrupts we care about
+    // Configure RX - accept broadcast, multicast, and our MAC
+    uint32_t rx_config = RCR_APM | RCR_AB | RCR_AM | RCR_RBLEN_8K;
+    kernel->outl(rtl->io_base + REG_RX_CONFIG, rx_config);
+
+    // Configure TX
+    uint32_t tx_config = TCR_IFG_NORMAL | TCR_MXDMA_2048;
+    kernel->outl(rtl->io_base + REG_TX_CONFIG, tx_config);
+
+    // Reset read pointer
+    rtl->rx_offset = 0;
+    kernel->outw(rtl->io_base + REG_CAPR, 0xFFF0);
+
+    // Enable RX and TX
+    kernel->outb(rtl->io_base + REG_CMD, CMD_RX_ENABLE | CMD_TX_ENABLE);
+
+    // Enable interrupts
     uint16_t imr = INT_RX_OK | INT_TX_OK | INT_RX_ERR | INT_TX_ERR | INT_RX_OVERFLOW;
-    kernel->outw(nic->io_base + REG_IMR, imr);
+    kernel->outw(rtl->io_base + REG_IMR, imr);
 
-    // Unmask IRQ at the PIC
-    kernel->pic_clear_mask(nic->irq);
-
-    kernel->printf("[DRIVER] RTL8139 - Interrupts Enabled, IRQ=%d\n", nic->irq);
+    // Unmask IRQ
+    kernel->pic_clear_mask(rtl->irq);
 }
 
-// Handle received packets
-static void handle_rx(rtl8139_device_t *nic)
+// Process received packets from hardware buffer into software queue
+static void rtl_process_rx(rtl_device_t *rtl)
 {
-    // Process all available packets
-    while (!(kernel->inb(nic->io_base + REG_CMD) & CMD_BUF_EMPTY))
+    while ((kernel->inb(rtl->io_base + REG_CMD) & CMD_BUF_EMPTY) == 0)
     {
-        // Get packet header from current position
-        rx_header_t *header = (rx_header_t *)(nic->rx_buffer + nic->rx_read_ptr);
+        uint32_t offset = rtl->rx_offset % RX_BUF_SIZE;
+        rx_header_t *header = (rx_header_t *)(rtl->rx_buffer + offset);
 
         uint16_t status = header->status;
         uint16_t length = header->length;
 
-        if (kernel && kernel->printf)
+        // Check valid packet
+        if ((status & RX_ROK) == 0)
         {
-            kernel->printf("[RTL] RX packet len=%d status=0x%04x\n", length, status);
-        }
-
-        // Check for valid packet
-        if (!(status & RX_STATUS_ROK))
-        {
-            kernel->printf("[DRIVER] RTL8139 - RX bad packet, status=0x%x\n", status);
+            kernel->printf("[RTL] RX error status=0x%04x\n", status);
 
             break;
         }
 
-        // Sanity check the length
-        if (length > 1518 + 4 || length < 8)
+        // Sanity check length
+        if (length < 8 || length > 1522)
         {
-            kernel->printf("[DRIVER] RTL8139 - RX bad length=%d\n", length);
+            kernel->printf("[RTL] RX bad length=%u\n", length);
 
             break;
         }
 
-        // Packet data starts after 4 byte header
-        uint8_t *packet_data = nic->rx_buffer + nic->rx_read_ptr + 4;
-        uint16_t packet_len = length - 4;   // Exclude CRC
+        // Queue packet if space available
+        uint16_t data_len = length - 4;  // Remove CRC
 
-        if (packet_len <= TX_BUF_SIZE)
+        if (rtl->rx_count < RX_QUEUE_SIZE && data_len <= TX_BUF_SIZE)
         {
-            if (nic->rx_count < RX_QUEUE_LEN)
+            rx_packet_t *pkt = &rtl->rx_queue[rtl->rx_tail];
+            pkt->length = data_len;
+
+            // Copy data handling wrap
+            uint32_t data_start = (offset + 4) % RX_BUF_SIZE;
+
+            for (uint16_t i = 0; i < data_len; i++)
             {
-                uint8_t slot = nic->rx_tail;
-                nic->rx_queue[slot].length = packet_len;
-                for (uint16_t i = 0; i < packet_len; i++)
-                {
-                    nic->rx_queue[slot].data[i] = packet_data[i];
-                }
-                nic->rx_tail = (uint8_t)((nic->rx_tail + 1) % RX_QUEUE_LEN);
-                nic->rx_count++;
+                pkt->data[i] = rtl->rx_buffer[(data_start + i) % RX_BUF_SIZE];
             }
-            else
-            {
-                nic->rx_dropped++;
-            }
-        }
-        else
-        {
-            nic->rx_dropped++;
+
+            rtl->rx_tail = (rtl->rx_tail + 1) % RX_QUEUE_SIZE;
+            rtl->rx_count++;
         }
 
-        // Advance read pointer - must be 4 byte aligned
-        nic->rx_read_ptr = (nic->rx_read_ptr + 4 + length + 3) & ~3;
-        nic->rx_read_ptr %= 8192;    // Wrap at 8K buffer size
+        // Advance hardware pointer (4-byte aligned)
+        rtl->rx_offset = (rtl->rx_offset + length + 4 + 3) & ~3;
 
-        // Update CAPR - hardware quirk requires subtracting 16
-        kernel->outw(nic->io_base + REG_CAPR, nic->rx_read_ptr - 16);
+        // Update CAPR (hardware quirk: subtract 16)
+        kernel->outw(rtl->io_base + REG_CAPR, (rtl->rx_offset - 16) & 0xFFFF);
     }
 }
 
-// Handle TX completion
-static void handle_tx(rtl8139_device_t *nic)
+// IRQ handler - runs in interrupt context
+static void rtl_irq_handler(unsigned irq, void *context);
+static void rtl_irq_worker(void *context);
+
+static void rtl_irq_handler(unsigned irq, void *context)
 {
-    // Check all 4 TX descriptors for completion
-    for (int i = 0; i < TX_BUF_COUNT; i++)
+    (void)irq;
+    rtl_device_t *rtl = (rtl_device_t *)context;
+
+    uint16_t status = kernel->inw(rtl->io_base + REG_ISR);
+
+    if (status == 0)
     {
-        uint32_t status = kernel->inl(nic->io_base + REG_TXSTATUS0 + (i * 4));
+        return;
+    }
 
-        if (status & TX_STATUS_TOK)
-        {
-            // Packet sent successfully
-            // Status is cleared when we write a new packet
-        }
+    // Acknowledge interrupts
+    kernel->outw(rtl->io_base + REG_ISR, status);
 
-        if (status & TX_STATUS_TUN)
-        {
-            kernel->printf("[DRIVER] RTL8139 - TX underrun on descriptor %d\n", i);
-        }
+    // Accumulate status for worker
+    rtl->pending_status |= status;
+
+    if (!rtl->irq_queued)
+    {
+        rtl->irq_queued = 1;
+        kernel->irqsw_queue(rtl_irq_worker, rtl);
     }
 }
 
-// Send a packet
-// Returns 0 on success, -1 on failure
-static int rtl8139_send(rtl8139_device_t *nic, const uint8_t *data, uint16_t length)
+// IRQ worker - runs in task context
+static void rtl_irq_worker(void *context)
 {
+    rtl_device_t *rtl = (rtl_device_t *)context;
+
+    uint16_t status = rtl->pending_status;
+    rtl->pending_status = 0;
+    rtl->irq_queued = 0;
+
+    if (status & (INT_RX_OK | INT_RX_ERR | INT_RX_OVERFLOW))
+    {
+        rtl_process_rx(rtl);
+    }
+
+    if (status & INT_RX_OVERFLOW)
+    {
+        kernel->printf("[RTL] RX overflow, resetting\n");
+        kernel->outb(rtl->io_base + REG_CMD, CMD_TX_ENABLE);
+        kernel->outb(rtl->io_base + REG_CMD, CMD_TX_ENABLE | CMD_RX_ENABLE);
+    }
+}
+
+// Network device operations
+static int rtl_get_mac(device_t *dev, uint8_t mac[6])
+{
+    rtl_device_t *rtl = (rtl_device_t *)dev->private_data;
+
+    for (int i = 0; i < 6; i++)
+    {
+        mac[i] = rtl->mac[i];
+    }
+
+    return 0;
+}
+
+static int rtl_send_packet(device_t *dev, const void *data, uint16_t length)
+{
+    rtl_device_t *rtl = (rtl_device_t *)dev->private_data;
+
     if (!data || length == 0 || length > TX_BUF_SIZE)
     {
         return -1;
     }
 
-    int descriptor_index = -1;
+    // Find a free descriptor
+    int desc = rtl->tx_next;
+    uint32_t status = kernel->inl(rtl->io_base + REG_TX_STATUS0 + desc * 4);
 
-    for (int attempt = 0; attempt < TX_BUF_COUNT; attempt++)
+    // If not ready, wait briefly or force
+    if (status & TX_OWN)
     {
-        int candidate = (nic->tx_current + attempt) % TX_BUF_COUNT;
-        uint32_t status = kernel->inl(nic->io_base + REG_TXSTATUS0 + (candidate * 4));
-
-        if ((status & TX_STATUS_OWN) == 0)
+        // Try next descriptor
+        for (int i = 0; i < TX_DESC_COUNT; i++)
         {
-            descriptor_index = candidate;
+            int try_desc = (rtl->tx_next + i) % TX_DESC_COUNT;
+            status = kernel->inl(rtl->io_base + REG_TX_STATUS0 + try_desc * 4);
 
-            break;
+            if ((status & TX_OWN) == 0)
+            {
+                desc = try_desc;
+
+                break;
+            }
         }
     }
 
-    if (descriptor_index < 0)
-    {
-        descriptor_index = nic->tx_current;
-        kernel->outl(nic->io_base + REG_TXSTATUS0 + (descriptor_index * 4), 0);
-    }
+    // Copy packet data
+    uint8_t *buf = rtl->tx_buffer[desc];
 
-    // Copy packet data to TX buffer
     for (uint16_t i = 0; i < length; i++)
     {
-        nic->tx_buffer[descriptor_index][i] = data[i];
+        buf[i] = ((const uint8_t *)data)[i];
     }
 
-    // Tell the NIC to send - write length to status register
-    // Bit 13 (OWN) must be 0, bits 0-12 are the size
-    kernel->outl(nic->io_base + REG_TXSTATUS0 + (descriptor_index * 4), length);
+    // Start transmission - write length to status register
+    kernel->outl(rtl->io_base + REG_TX_STATUS0 + desc * 4, length);
 
-    // Move to next descriptor
-    nic->tx_current = (descriptor_index + 1) % TX_BUF_COUNT;
+    // Advance to next descriptor
+    rtl->tx_next = (desc + 1) % TX_DESC_COUNT;
 
     return 0;
 }
 
-// PCI scan callback
-static void pci_scan_callback(const pci_device_t *dev, void *ctx)
+static int rtl_receive_packet(device_t *dev, void *buffer, uint16_t buf_size)
 {
-    (void)ctx;
+    rtl_device_t *rtl = (rtl_device_t *)dev->private_data;
 
-    if (dev->vendor_id == VENDOR_ID && dev->device_id == DEVICE_ID)
-    {
-        if (g_device_count >= 4)
-        {
-            kernel->printf("[DRIVER] RTL8139 - Max devices reached, skipping %d:%d.%d\n", dev->bus, dev->device, dev->function);
-
-            return;
-        }
-
-        rtl8139_device_t *nic = &g_device_pool[g_device_count++];
-        nic->dev = 0;
-        nic->pci = *dev;
-        nic->io_base = 0;
-        nic->irq = 0;
-        nic->rx_buffer_phys = 0;
-        nic->rx_buffer = 0;
-        for (int i = 0; i < TX_BUF_COUNT; i++)
-        {
-            nic->tx_buffer_phys[i] = 0;
-            nic->tx_buffer[i] = 0;
-        }
-        nic->tx_current = 0;
-        nic->rx_read_ptr = 0;
-        for (int i = 0; i < 6; i++)
-        {
-            nic->mac_address[i] = 0;
-        }
-        nic->rx_head = 0;
-        nic->rx_tail = 0;
-        nic->rx_count = 0;
-        nic->rx_dropped = 0;
-        nic->irqsw_status = 0;
-        nic->irqsw_pending = 0;
-        nic->next = g_devices;
-        g_devices = nic;
-
-        kernel->printf("[DRIVER] RTL8139 Network Card found at PCI %d:%d.%d\n", dev->bus, dev->device, dev->function);
-    }
-}
-
-// Reset Device
-// - Write CMD_RESET to command register
-// - Poll until the chip clears the bit
-// - All registers return to default values
-static void device_reset(rtl8139_device_t *nic)
-{
-    // Send reset command
-    kernel->outb(nic->io_base + REG_CMD, CMD_RESET);
-
-    // Wait for reset to complete, bit should clear itself
-    int timeout = 1000;
-
-    while ((kernel->inb(nic->io_base + REG_CMD) & CMD_RESET) && timeout > 0)
-    {
-        timeout--;
-    }
-
-    if (timeout == 0)
-    {
-        kernel->printf("[DRIVER] RTL8139 Reset Timeout!\n");
-    }
-    else
-    {
-        kernel->printf("[DRIVER] RTL8139 Reset Completed!\n");
-    }
-}
-
-// Device operations
-static int nic_dev_get_mac(device_t *dev, uint8_t mac[6])
-{
-    rtl8139_device_t *nic = (rtl8139_device_t *)dev->private_data;
-
-    if (!nic)
-    {
-        return -1;
-    }
-
-    for (int i = 0; i < 6; i++)
-    {
-        mac[i] = nic->mac_address[i];
-    }
-
-    return 0;
-}
-
-static int nic_dev_send_packet(device_t *dev, const void *data, uint16_t length)
-{
-    rtl8139_device_t *nic = (rtl8139_device_t *)dev->private_data;
-
-    return rtl8139_send(nic, (const uint8_t *)data, length);
-}
-
-static int nic_dev_receive_packet(device_t *dev, void *buffer, uint16_t buf_size)
-{
-    rtl8139_device_t *nic = (rtl8139_device_t *)dev->private_data;
-
-    if (!nic || !buffer || buf_size == 0)
-    {
-        return -1;
-    }
-
-    if (nic->rx_count == 0)
+    if (rtl->rx_count == 0)
     {
         return 0;
     }
 
-    uint8_t slot = nic->rx_head;
-    uint16_t length = nic->rx_queue[slot].length;
+    rx_packet_t *pkt = &rtl->rx_queue[rtl->rx_head];
 
-    if (length > buf_size)
+    if (pkt->length > buf_size)
     {
         return -1;
     }
 
-    for (uint16_t i = 0; i < length; i++)
+    for (uint16_t i = 0; i < pkt->length; i++)
     {
-        ((uint8_t *)buffer)[i] = nic->rx_queue[slot].data[i];
+        ((uint8_t *)buffer)[i] = pkt->data[i];
     }
 
-    nic->rx_head = (uint8_t)((nic->rx_head + 1) % RX_QUEUE_LEN);
-    nic->rx_count--;
+    int length = pkt->length;
 
-    return (int)length;
+    rtl->rx_head = (rtl->rx_head + 1) % RX_QUEUE_SIZE;
+    rtl->rx_count--;
+
+    return length;
 }
 
-static int nic_dev_packets_available(device_t *dev)
+static int rtl_packets_available(device_t *dev)
 {
-    rtl8139_device_t *nic = (rtl8139_device_t *)dev->private_data;
+    rtl_device_t *rtl = (rtl_device_t *)dev->private_data;
 
-    if (!nic)
+    // Try to receive more packets before reporting count
+    if (rtl->rx_count == 0)
     {
-        return 0;
+        rtl_process_rx(rtl);
     }
 
-    return nic->rx_count;
+    return rtl->rx_count;
 }
 
-static int nic_dev_set_promiscuous(device_t *dev, int enabled)
+static int rtl_get_link_status(device_t *dev)
 {
-    rtl8139_device_t *nic = (rtl8139_device_t *)dev->private_data;
+    (void)dev;
 
-    if (!nic)
-    {
-        return -1;
-    }
+    return 1;
+}
 
-    uint32_t rcr = kernel->inl(nic->io_base + REG_RCR);
+static uint32_t rtl_get_speed(device_t *dev)
+{
+    (void)dev;
+
+    return 100;
+}
+
+static int rtl_set_promiscuous(device_t *dev, int enabled)
+{
+    rtl_device_t *rtl = (rtl_device_t *)dev->private_data;
+
+    uint32_t rcr = kernel->inl(rtl->io_base + REG_RX_CONFIG);
 
     if (enabled)
     {
@@ -665,259 +474,151 @@ static int nic_dev_set_promiscuous(device_t *dev, int enabled)
         rcr &= ~RCR_AAP;
     }
 
-    kernel->outl(nic->io_base + REG_RCR, rcr);
+    kernel->outl(rtl->io_base + REG_RX_CONFIG, rcr);
 
     return 0;
 }
 
-static int nic_dev_get_link_status(device_t *dev)
+static network_device_t g_rtl_ops =
 {
-    (void)dev;
-
-    return 1;
-}
-
-static uint32_t nic_dev_get_speed(device_t *dev)
-{
-    (void)dev;
-
-    return 100;  // RTL8139 is 100 Mbps
-}
-
-static network_device_t g_nic_ops =
-{
-    .get_mac = nic_dev_get_mac,
-    .send_packet = nic_dev_send_packet,
-    .receive_packet = nic_dev_receive_packet,
-    .packets_available = nic_dev_packets_available,
-    .get_link_status = nic_dev_get_link_status,
-    .get_speed = nic_dev_get_speed,
-    .set_promiscuous = nic_dev_set_promiscuous,
-    .set_multicast = 0,
+    .get_mac = rtl_get_mac,
+    .send_packet = rtl_send_packet,
+    .receive_packet = rtl_receive_packet,
+    .packets_available = rtl_packets_available,
+    .get_link_status = rtl_get_link_status,
+    .get_speed = rtl_get_speed,
+    .set_promiscuous = rtl_set_promiscuous,
+    .set_multicast = NULL
 };
 
-static void rtl8139_irq_handler(unsigned irq, void *context);
-static void rtl8139_irqsw_handler(void *context);
-
-static int rtl8139_stop(device_t *dev)
+// PCI scan callback
+static void rtl_pci_callback(const pci_device_t *dev, void *ctx)
 {
-    rtl8139_device_t *nic = (rtl8139_device_t *)dev->private_data;
+    (void)ctx;
 
-    if (!nic)
+    if (dev->vendor_id == RTL_VENDOR_ID && dev->device_id == RTL_DEVICE_ID)
     {
-        return -1;
+        if (!g_found)
+        {
+            g_device.pci = *dev;
+            g_found = 1;
+            kernel->printf("[RTL] Found RTL8139 at PCI %d:%d.%d\n",
+                dev->bus, dev->device, dev->function);
+        }
     }
+}
 
-    // Disable interrupts and RX/TX
-    kernel->outw(nic->io_base + REG_IMR, 0);
-    kernel->outb(nic->io_base + REG_CMD, 0);
+static int rtl_stop(device_t *dev)
+{
+    rtl_device_t *rtl = (rtl_device_t *)dev->private_data;
+
+    kernel->outw(rtl->io_base + REG_IMR, 0);
+    kernel->outb(rtl->io_base + REG_CMD, 0);
 
     return 0;
 }
 
-static void rtl8139_cleanup(device_t *dev)
+static void rtl_cleanup(device_t *dev)
 {
-    rtl8139_device_t *nic = (rtl8139_device_t *)dev->private_data;
+    rtl_device_t *rtl = (rtl_device_t *)dev->private_data;
 
-    if (!nic)
-    {
-        return;
-    }
-
-    kernel->irq_unregister_handler(nic->irq, rtl8139_irq_handler, nic);
-    free_dma_buffers(nic);
-    nic->dev = 0;
-}
-
-static void rtl8139_irq_handler(unsigned irq, void *context)
-{
-    (void)irq;
-
-    rtl8139_device_t *nic = (rtl8139_device_t *)context;
-
-    if (!nic)
-    {
-        return;
-    }
-
-    // Read interrupt status
-    uint16_t status = kernel->inw(nic->io_base + REG_ISR);
-
-    if (status == 0)
-    {
-        return;     // Not our interrupt
-    }
-
-    if (kernel && kernel->printf)
-    {
-        kernel->printf("[RTL] IRQ status=0x%04x\n", status);
-    }
-
-    nic->irqsw_status |= status;
-
-    if (!nic->irqsw_pending && kernel->irqsw_queue)
-    {
-        nic->irqsw_pending = 1;
-        kernel->irqsw_queue(rtl8139_irqsw_handler, nic);
-    }
-
-    kernel->outw(nic->io_base + REG_ISR, status);
-}
-
-static void rtl8139_irqsw_handler(void *context)
-{
-    rtl8139_device_t *nic = (rtl8139_device_t *)context;
-
-    if (!nic)
-    {
-        return;
-    }
-
-    for (;;)
-    {
-        uint16_t status = nic->irqsw_status;
-        nic->irqsw_status = 0;
-
-        if (status == 0)
-        {
-            break;
-        }
-
-        if (status & INT_RX_OK)
-        {
-            handle_rx(nic);
-        }
-
-        if (status & INT_TX_OK)
-        {
-            handle_tx(nic);
-        }
-
-        if (status & INT_RX_ERR)
-        {
-            kernel->printf("[DRIVER] RTL8139 - RX error\n");
-        }
-
-        if (status & INT_TX_ERR)
-        {
-            kernel->printf("[DRIVER] RTL8139 - TX error\n");
-        }
-
-        if (status & INT_RX_OVERFLOW)
-        {
-            kernel->printf("[DRIVER] RTL8139 - RX overflow, resetting RX\n");
-
-            kernel->outb(nic->io_base + REG_CMD, CMD_TX_ENABLE);
-            kernel->outb(nic->io_base + REG_CMD, CMD_TX_ENABLE | CMD_RX_ENABLE);
-        }
-    }
-
-    nic->irqsw_pending = 0;
-
-    if (nic->irqsw_status != 0 && kernel->irqsw_queue)
-    {
-        nic->irqsw_pending = 1;
-        kernel->irqsw_queue(rtl8139_irqsw_handler, nic);
-    }
+    kernel->irq_unregister_handler(rtl->irq, rtl_irq_handler, rtl);
 }
 
 void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
 
-    // Scan for RTL8139 Network Card
-    kernel->pci_enum_devices(pci_scan_callback, NULL);
+    // Find RTL8139
+    kernel->pci_enum_devices(rtl_pci_callback, NULL);
 
-    if (!g_devices)
+    if (!g_found)
     {
-        kernel->printf("[DRIVER] Could not find a RTL8139 device!\n");
+        kernel->printf("[RTL] No RTL8139 found\n");
 
         return;
     }
 
-    for (rtl8139_device_t *nic = g_devices; nic; nic = nic->next)
+    rtl_device_t *rtl = &g_device;
+
+    // Enable PCI device
+    kernel->pci_enable_device(&rtl->pci);
+
+    // Get I/O base
+    uint32_t bar_size;
+    int is_mmio;
+
+    if (kernel->pci_get_bar(&rtl->pci, 0, &rtl->io_base, &bar_size, &is_mmio) < 0)
     {
-        // Enable device
-        kernel->pci_enable_device(&nic->pci);
+        kernel->printf("[RTL] Failed to get BAR0\n");
 
-        uint32_t bar_size;
-        int is_mmio;
-
-        // Get I/O base from BAR0
-        if (kernel->pci_get_bar(&nic->pci, 0, &nic->io_base, &bar_size, &is_mmio) < 0)
-        {
-            kernel->printf("[DRIVER] Could not find BAR0 for RTL8139 device!\n");
-
-            continue;
-        }
-
-        // Read IRQ from PCI config
-        uint32_t irq_reg = kernel->pci_config_read32(nic->pci.bus, nic->pci.device, nic->pci.function, PCI_INTERRUPT_LINE);
-        nic->irq = (uint8_t)(irq_reg & 0xFF);
-
-        kernel->printf("[DRIVER] RTL8139 - I/O base=0x%x, IRQ=%d\n", nic->io_base, nic->irq);
-
-        // Allocate DMA buffers
-        if (alloc_dma_buffers(nic) < 0)
-        {
-            continue;
-        }
-
-        // Reset the chip
-        device_reset(nic);
-
-        // Read MAC address
-        read_mac_address(nic);
-
-        // Initialize RX and TX
-        init_rx(nic);
-        init_tx(nic);
-
-        // Enable RX/TX
-        device_enable(nic);
-
-        // Enable interrupts
-        enable_interrupts(nic);
-
-        // Register device first - this notifies ethernet driver which registers its IRQ
-        nic->dev = kernel->device_register(DEVICE_CLASS_NETWORK, "rtl8139", &g_nic_ops);
-        if (nic->dev)
-        {
-            nic->dev->bus_type = BUS_TYPE_PCI;
-            nic->dev->vendor_id = VENDOR_ID;
-            nic->dev->device_id = DEVICE_ID;
-            nic->dev->irq = nic->irq;
-            nic->dev->io_base = nic->io_base;
-            nic->dev->private_data = nic;
-            nic->dev->stop = rtl8139_stop;
-            nic->dev->cleanup = rtl8139_cleanup;
-            kernel->strlcpy(nic->dev->description, "Realtek RTL8139 Fast Ethernet", sizeof(nic->dev->description));
-        }
-
-        // Register IRQ handler AFTER device_register so RTL8139's handler
-        // is at head of hook list and runs first (processes packets before
-        // ethernet driver polls)
-        kernel->irq_register_handler(nic->irq, rtl8139_irq_handler, nic);
+        return;
     }
 
-    kernel->printf("[DRIVER] RTL8139 Network Driver Installed!\n");
+    // Get IRQ
+    uint32_t irq_reg = kernel->pci_config_read32(rtl->pci.bus, rtl->pci.device,
+        rtl->pci.function, 0x3C);
+    rtl->irq = irq_reg & 0xFF;
+
+    kernel->printf("[RTL] I/O base=0x%x IRQ=%d\n", rtl->io_base, rtl->irq);
+
+    // Allocate DMA buffers
+    if (rtl_alloc_buffers(rtl) < 0)
+    {
+        kernel->printf("[RTL] Failed to allocate buffers\n");
+
+        return;
+    }
+
+    // Reset chip
+    if (rtl_reset(rtl) < 0)
+    {
+        kernel->printf("[RTL] Reset timeout\n");
+
+        return;
+    }
+
+    // Read MAC
+    rtl_read_mac(rtl);
+    kernel->printf("[RTL] MAC=%02x:%02x:%02x:%02x:%02x:%02x\n",
+        rtl->mac[0], rtl->mac[1], rtl->mac[2],
+        rtl->mac[3], rtl->mac[4], rtl->mac[5]);
+
+    // Initialize hardware
+    rtl_hw_init(rtl);
+
+    // Register IRQ handler
+    kernel->irq_register_handler(rtl->irq, rtl_irq_handler, rtl);
+
+    // Register device
+    rtl->dev = kernel->device_register(DEVICE_CLASS_NETWORK, "rtl8139", &g_rtl_ops);
+
+    if (rtl->dev)
+    {
+        rtl->dev->bus_type = BUS_TYPE_PCI;
+        rtl->dev->vendor_id = RTL_VENDOR_ID;
+        rtl->dev->device_id = RTL_DEVICE_ID;
+        rtl->dev->irq = rtl->irq;
+        rtl->dev->io_base = rtl->io_base;
+        rtl->dev->private_data = rtl;
+        rtl->dev->stop = rtl_stop;
+        rtl->dev->cleanup = rtl_cleanup;
+        kernel->strlcpy(rtl->dev->description, "Realtek RTL8139 NIC",
+            sizeof(rtl->dev->description));
+    }
+
+    kernel->printf("[RTL] Driver loaded\n");
 }
 
 void ddf_driver_exit(void)
 {
-    for (rtl8139_device_t *nic = g_devices; nic; nic = nic->next)
+    if (g_device.dev)
     {
-        if (nic->dev)
-        {
-            kernel->device_unregister(nic->dev);
-            nic->dev = 0;
-        }
+        kernel->device_unregister(g_device.dev);
+        g_device.dev = NULL;
     }
 
-    g_devices = 0;
-    g_device_count = 0;
-
-    kernel->printf("[DRIVER] RTL8139 Network Driver Uninstalled!\n");
+    kernel->printf("[RTL] Driver unloaded\n");
 }
 
 void ddf_driver_irq(unsigned irq, void *context)

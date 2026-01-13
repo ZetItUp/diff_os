@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <diffgfx/draw.h>
 
 // Icon selection tint color (light ocean blue)
 // Applied when desktop icons are selected
@@ -18,3 +19,6 @@
 #define GFX_CLOSE               "/system/graphics/close.tga"
 #define GFX_CLOSE_HOVER         "/system/graphics/close_hover.tga"
 #define GFX_CLOSE_PRESSED       "/system/graphics/close_pressed.tga"
+
+#define desktop_background_color color_rgb(7, 0, 63)
+// #define desktop_background_color color_rgb(69, 67, 117)

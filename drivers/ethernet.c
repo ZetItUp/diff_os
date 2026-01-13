@@ -25,6 +25,7 @@ typedef struct ethernet_adapter
     uint8_t receive_buffer[ETHERNET_FRAME_MAX];
     uint8_t irqsw_pending;
     uint8_t irq_number;
+    uint8_t poll_retry;
     int active;
 } ethernet_adapter_t;
 
@@ -171,7 +172,7 @@ static network_interface_ops_t g_interface_ops =
     .get_speed = ethernet_get_speed
 };
 
-static void ethernet_poll_device(ethernet_adapter_t *adapter)
+static int ethernet_poll_device(ethernet_adapter_t *adapter)
 {
     if (!adapter || !adapter->active || !adapter->operations)
     {
@@ -180,7 +181,7 @@ static void ethernet_poll_device(ethernet_adapter_t *adapter)
             kernel->printf("[ETH] poll: adapter not ready\n");
         }
 
-        return;
+        return 0;
     }
 
     if (!adapter->operations->packets_available || !adapter->operations->receive_packet)
@@ -190,7 +191,7 @@ static void ethernet_poll_device(ethernet_adapter_t *adapter)
             kernel->printf("[ETH] poll: no ops\n");
         }
 
-        return;
+        return 0;
     }
 
     int first_check = adapter->operations->packets_available(adapter->device);
@@ -199,6 +200,8 @@ static void ethernet_poll_device(ethernet_adapter_t *adapter)
     {
         kernel->printf("[ETH] poll: initial check=%d\n", first_check);
     }
+
+    int processed_packets = 0;
 
     for (;;)
     {
@@ -221,6 +224,8 @@ static void ethernet_poll_device(ethernet_adapter_t *adapter)
         {
             break;
         }
+
+        processed_packets = 1;
 
         if (kernel && kernel->printf)
         {
@@ -262,6 +267,8 @@ static void ethernet_poll_device(ethernet_adapter_t *adapter)
             kernel->packet_buffer_release(packet);
         }
     }
+
+    return processed_packets;
 }
 
 static void ethernet_irqsw_worker(void *context)
@@ -278,9 +285,18 @@ static void ethernet_irqsw_worker(void *context)
         kernel->printf("[ETH] irqsw_worker running\n");
     }
 
-    adapter->irqsw_pending = 0;
+    int processed = ethernet_poll_device(adapter);
 
-    ethernet_poll_device(adapter);
+    if (!processed && adapter->poll_retry == 0 && kernel && kernel->irqsw_queue)
+    {
+        adapter->poll_retry = 1;
+        kernel->irqsw_queue(ethernet_irqsw_worker, adapter);
+
+        return;
+    }
+
+    adapter->poll_retry = 0;
+    adapter->irqsw_pending = 0;
 }
 
 static void ethernet_irq_handler(unsigned irq, void *context)
@@ -302,6 +318,7 @@ static void ethernet_irq_handler(unsigned irq, void *context)
     if (!adapter->irqsw_pending)
     {
         adapter->irqsw_pending = 1;
+        adapter->poll_retry = 0;
         kernel->irqsw_queue(ethernet_irqsw_worker, adapter);
     }
 }
@@ -346,6 +363,7 @@ static void ethernet_device_notify(device_t *device, int added)
         adapter->active = 1;
         adapter->irqsw_pending = 0;
         adapter->irq_number = device->irq;
+        adapter->poll_retry = 0;
 
         operations->get_mac(device, adapter->mac_address);
 
@@ -401,6 +419,7 @@ static void ethernet_device_notify(device_t *device, int added)
         adapter->interface = NULL;
         adapter->irqsw_pending = 0;
         adapter->irq_number = 0;
+        adapter->poll_retry = 0;
 
         for (int index = 0; index < ETHERNET_ADDRESS_SIZE; index++)
         {
@@ -426,6 +445,7 @@ void ddf_driver_init(kernel_exports_t *exports)
         g_adapters[index].interface = NULL;
         g_adapters[index].irqsw_pending = 0;
         g_adapters[index].irq_number = 0;
+        g_adapters[index].poll_retry = 0;
 
         for (int mac_index = 0; mac_index < ETHERNET_ADDRESS_SIZE; mac_index++)
         {
@@ -467,6 +487,7 @@ void ddf_driver_exit(void)
         adapter->interface = NULL;
         adapter->irqsw_pending = 0;
         adapter->irq_number = 0;
+        adapter->poll_retry = 0;
     }
 }
 
