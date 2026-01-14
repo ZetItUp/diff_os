@@ -475,22 +475,7 @@ static int run_external(int argc, char **argv, int *dirty_flag)
         return -1;
     }
 
-    int user_argc = argc - 1;
-
-    int pid;
-    if (user_argc <= 0)
-    {
-        pid = process_spawn(resolved_path, 0, NULL);
-    }
-    else
-    {
-        char *user_argv[16];
-        for (int i = 0; i < user_argc; i++)
-        {
-            user_argv[i] = argv[i + 1];
-        }
-        pid = process_spawn(resolved_path, user_argc, user_argv);
-    }
+    int pid = process_spawn(resolved_path, argc, argv);
 
     if (pid < 0)
     {

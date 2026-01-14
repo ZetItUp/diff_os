@@ -36,6 +36,8 @@ STT_SECTION = 3
 STT_FILE = 4
 STT_TLS = 6
 
+SHN_COMMON = 0xFFF2  # 65522 - common symbols (uninitialized globals with -fcommon)
+
 FILE_ALIGN = 4
 HDR_SIZE = 0x100
 MAX_IMP = 4096
@@ -333,27 +335,64 @@ def build_dex(dumpfile, elffile, outfile, default_exl, import_map_path=None, for
     data_off = align_up(ro_off + len(ro_buf), FILE_ALIGN)
     bss_off = data_off + len(dat_buf)
 
+    # Collect and allocate common symbols (SHN_COMMON = 0xFFF2)
+    # These are uninitialized globals that need space in BSS
+    common_symbols = {}  # symidx -> (offset_in_bss, size)
+    common_offset = bss_total  # Start after regular BSS
+    for si, sym in enumerate(symbols):
+        if sym.get("shndx") == SHN_COMMON:
+            # Align to symbol's alignment (stored in value field for common symbols)
+            align = sym.get("value", 4) or 4
+            if align > 1:
+                common_offset = align_up(common_offset, align)
+            size = sym.get("size", 0)
+            common_symbols[si] = (common_offset, size)
+            common_offset += size
+
+    # Update total BSS size to include common symbols
+    bss_total = common_offset
+
+    if common_symbols:
+        print(f"[COMMON] Allocated {len(common_symbols)} common symbols, total BSS now {bss_total}")
+
     def base_for_secidx(secidx):
         inf = secinfo.get(secidx)
-        
+
         if not inf:
             return None, None, 0
-        
+
         g, rel = inf["group"], inf["rel"]
-        
+
         if g == "text":
             return text_off + rel, text_buf, rel
-        
+
         if g == "ro":
             return ro_off + rel, ro_buf, rel
-        
+
         if g == "data":
             return data_off + rel, dat_buf, rel
-        
+
         if g == "bss":
             return bss_off + rel, None, 0
-        
+
         return None, None, 0
+
+    def get_symbol_base(symidx, sym):
+        """Get base address for a symbol, handling common symbols specially."""
+        if sym is None:
+            return None
+        shndx = sym.get("shndx", 0)
+        if shndx == SHN_COMMON:
+            # Common symbol - get its allocated BSS address
+            if symidx in common_symbols:
+                common_off, _ = common_symbols[symidx]
+                return bss_off + common_off
+            return None
+        if shndx == 0:
+            return None  # Undefined symbol
+        # Regular section symbol
+        src_base, _, _ = base_for_secidx(shndx)
+        return src_base
 
     strtab = StrTab()
     import_map = load_import_map(import_map_path)
@@ -615,24 +654,30 @@ def build_dex(dumpfile, elffile, outfile, default_exl, import_map_path=None, for
                             
                             continue
 
-            src_base, _, _ = base_for_secidx(sym["shndx"])
-            
+            # Check for common symbol first
+            src_base = get_symbol_base(si, sym)
+
             if src_base is None:
                 skipped.append((etype, name, r["offset"], "unknown shndx"))
                 continue
-            
+
             if etype == R_386_GOT32X:
                 init = (src_base + sym["value"]) & 0xFFFFFFFF
             else:
-                A = struct.unpack_from("<I", tgt_buf, buf_pos)[0]
-                init = (src_base + sym["value"] + A) & 0xFFFFFFFF
-            
+                # For common symbols, value is alignment, not offset - offset is in common_symbols
+                if sym.get("shndx") == SHN_COMMON:
+                    A = struct.unpack_from("<I", tgt_buf, buf_pos)[0]
+                    init = (src_base + A) & 0xFFFFFFFF
+                else:
+                    A = struct.unpack_from("<I", tgt_buf, buf_pos)[0]
+                    init = (src_base + sym["value"] + A) & 0xFFFFFFFF
+
             struct.pack_into("<I", tgt_buf, buf_pos, init & 0xFFFFFFFF)
             reloc_table.append((img_off, 0, DEX_REL, 0))
-            
+
             if etype == R_386_GOT32X:
                 got32x_processed += 1
-            
+
             continue
 
         # Symbol undefined or none.

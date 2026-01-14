@@ -184,21 +184,8 @@ static int run_external(int argc, char **argv)
         return -1;
     }
 
-    // Bygg user-argv UTAN kommandonamnet.
-    // tokenize() i din kod begränsar till 16 tokens, alltså max 15 "riktiga" argument.
-    int user_argc = argc - 1;
-
-    int pid;
-    if (user_argc <= 0) {
-        // Inga argument -> exakt det här vill de flesta program ha.
-        pid = process_spawn(path, 0, NULL);
-    } else {
-        char *user_argv[16]; // räcker pga tokenize-begränsningen ovan
-        for (int i = 0; i < user_argc; i++) {
-            user_argv[i] = argv[i + 1]; // skifta bort kommandonamnet
-        }
-        pid = process_spawn(path, user_argc, user_argv);
-    }
+    // Skicka argv som det är: argv[0] är kommandonamnet.
+    int pid = process_spawn(path, argc, argv);
 
     if (pid < 0) {
         printf("[SYSTEM] Could not start %s\n", path);

@@ -502,8 +502,20 @@ void fault_handler(struct stack_frame *frame)
 
         if (is_user_mode)
         {
-            signal_send_to_process(process_current(), SIGSEGV);
-            signal_maybe_deliver_frame(process_current(), frame);
+            process_t *proc = process_current();
+            panic_serial_init();
+            panic_puts("[PF-USER] PID=");
+            panic_putu32(proc ? (uint32_t)proc->pid : 0);
+            panic_puts(" CR2=");
+            panic_puthex32(cr2);
+            panic_puts(" EIP=");
+            panic_puthex32(frame->eip);
+            panic_puts(" ERR=");
+            panic_puthex32(error_code);
+            panic_puts("\n");
+
+            signal_send_to_process(proc, SIGSEGV);
+            signal_maybe_deliver_frame(proc, frame);
 
             return;
         }

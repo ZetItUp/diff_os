@@ -252,6 +252,8 @@ static int signal_handle(process_t *p, int sig)
 
     if (handler == SIG_DFL || handler == NULL)
     {
+        printf("[SIGNAL] Process %d killed by signal %d (default handler)\n",
+               p ? p->pid : -1, sig);
         process_exit_current(128 + sig);
     }
 

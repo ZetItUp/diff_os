@@ -87,7 +87,18 @@ int main(int argc, char *argv[])
     }
 
     uint8_t destination_ip[4];
-    if (parse_ipv4(argv[0], destination_ip) != 0)
+    int ip_index = -1;
+
+    if (parse_ipv4(argv[0], destination_ip) == 0)
+    {
+        ip_index = 0;
+    }
+    else if (argc >= 2 && parse_ipv4(argv[1], destination_ip) == 0)
+    {
+        ip_index = 1;
+    }
+
+    if (ip_index < 0)
     {
         printf("ping: invalid ip %s\n", argv[0]);
 
@@ -95,9 +106,10 @@ int main(int argc, char *argv[])
     }
 
     int count = 4;
-    if (argc >= 2)
+    int count_index = ip_index + 1;
+    if (argc > count_index)
     {
-        int parsed_count = atoi(argv[1]);
+        int parsed_count = atoi(argv[count_index]);
         if (parsed_count > 0)
         {
             count = parsed_count;

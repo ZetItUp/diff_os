@@ -16,11 +16,14 @@ VERBOSE   = 1
 IMPORT_EXL ?=
 IMPORTS_MAP ?=
 
-# --- Rekursiv wildcard för alla .c under source/
+# --- Rekursiv wildcard för alla .c och .s under source/
 rwildcard = $(foreach d,$(wildcard $(1)/*),$(call rwildcard,$(d),$(2))) $(wildcard $(1)/$(2))
-SRCS      := $(call rwildcard,$(SRCDIR),*.c)
+C_SRCS    := $(call rwildcard,$(SRCDIR),*.c)
+S_SRCS    := $(call rwildcard,$(SRCDIR),*.s)
 
-OBJS      := $(SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+C_OBJS    := $(C_SRCS:$(SRCDIR)/%.c=$(OBJDIR)/%.o)
+S_OBJS    := $(S_SRCS:$(SRCDIR)/%.s=$(OBJDIR)/%.o)
+OBJS      := $(C_OBJS) $(S_OBJS)
 
 .PHONY: all clean exldir image_exl
 
@@ -30,8 +33,13 @@ print:
 	@echo SRCS=$(SRCS)
 	@echo OBJS=$(OBJS)
 
-# Byggregel som funkar för undermappar
+# Byggregel för C-filer
 $(OBJDIR)/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Byggregel för assembly-filer
+$(OBJDIR)/%.o: $(SRCDIR)/%.s
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

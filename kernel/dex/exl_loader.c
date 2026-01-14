@@ -12,6 +12,8 @@
 #include "debug.h"
 
 #define EXL_DBG(...) DDBG_IF(DEBUG_AREA_EXL, __VA_ARGS__)
+#define EXL_IMPORT_DEBUG 0
+#define EXL_REL_DEBUG 0
 
 #ifndef PAGE_ALIGN_UP
 #define PAGE_ALIGN_UP(x) (((uint32_t)(x) + 0xFFFu) & ~0xFFFu)
@@ -476,7 +478,9 @@ static int do_relocate_exl(
         memset(import_pointers, 0, bytes);
     }
 
+    #if EXL_IMPORT_DEBUG
     EXL_DBG("--- IMPORTS DEBUG ---\n");
+    #endif
 
     for (uint32_t import_index = 0; import_index < header->import_table_count; ++import_index)
     {
@@ -490,7 +494,9 @@ static int do_relocate_exl(
 
             if (resolved)
             {
+                #if EXL_IMPORT_DEBUG
                 EXL_DBG("[EXL] resolved locally %s:%s -> %p\n", exl_name, symbol_name, resolved);
+                #endif
             }
         }
 
@@ -546,10 +552,14 @@ static int do_relocate_exl(
         }
 
         import_pointers[import_index] = resolved;
+        #if EXL_IMPORT_DEBUG
         EXL_DBG("[%u] %s:%s -> %p\n", import_index, exl_name, symbol_name, resolved);
+        #endif
     }
 
+    #if EXL_IMPORT_DEBUG
     EXL_DBG("----------------------\n");
+    #endif
 
     for (uint32_t reloc_index = 0; reloc_index < header->reloc_table_count; ++reloc_index)
     {
@@ -609,8 +619,11 @@ static int do_relocate_exl(
 
             case DEX_RELATIVE:
                 *(uint32_t *)target = old_value + (uint32_t)image;
+
+#if EXL_REL_DEBUG
                 EXL_DBG("[REL]   @%08x: %08x -> %08x (base=%08x)\n", site_address, old_value, *(uint32_t *)target, (uint32_t)image);
-                
+#endif
+
                 break;
 
             default:
@@ -623,7 +636,9 @@ static int do_relocate_exl(
                 return -13;
         }
 
+        #if EXL_REL_DEBUG
         EXL_DBG("new=0x%08x\n", *(uint32_t *)target);
+        #endif
     }
 
     if (import_pointers)

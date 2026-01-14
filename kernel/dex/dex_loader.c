@@ -15,6 +15,7 @@
 #include "debug.h"
 
 #define DEX_DBG(...) DDBG_IF(DEBUG_AREA_EXL, __VA_ARGS__)
+#define DEX_REL_DEBUG 0
 
 extern void enter_user_mode(uint32_t entry, uint32_t user_stack_top);
 extern FileTable *file_table;
@@ -142,8 +143,8 @@ static uint32_t build_user_stack(
 {
     // Place the user stack high to avoid collisions
     // The user heap grows up from USER_MIN
-    // Use a fixed 512 KB stack with a 4 KB guard page
-    const uint32_t STACK_SIZE = 512 * 1024;
+    // Use a fixed 1 MB stack with a 4 KB guard page
+    const uint32_t STACK_SIZE = 1024 * 1024;
     const uint32_t GUARD_SIZE = PAGE_SIZE_4KB;
     const uint32_t stack_limit = USER_MAX - GUARD_SIZE; // leave guard page unmapped
     uint32_t stack_top = stack_limit;
@@ -179,18 +180,15 @@ static uint32_t build_user_stack(
     // Reserve the entire stack range so demand faults can grow it
     paging_reserve_range(stack_base, STACK_SIZE);
 
-    // Map the top 32 KB to cover initial args
-    const uint32_t PREFAULT_SIZE = 32 * 1024;
-    uint32_t prefault_base_address = (stack_top > PREFAULT_SIZE) ? (stack_top - PREFAULT_SIZE) : stack_base;
-
-    if (paging_map_user_range(prefault_base_address, stack_top - prefault_base_address, 1) != 0)
+    // Map the full stack range so argv strings are always accessible
+    if (paging_map_user_range(stack_base, stack_top - stack_base, 1) != 0)
     {
-        DEX_DBG("[DEX] Stack map failed base=%08x sz=%u\n", prefault_base_address, (unsigned)(stack_top - prefault_base_address));
+        DEX_DBG("[DEX] Stack map failed base=%08x sz=%u\n", stack_base, (unsigned)(stack_top - stack_base));
 
         return 0;
     }
 
-    memset((void *)prefault_base_address, 0, stack_top - prefault_base_address);
+    memset((void *)stack_base, 0, stack_top - stack_base);
 
     int argument_count = (argument_count_in > 0 && argument_values_in) ? argument_count_in : 1;
 
@@ -273,6 +271,15 @@ static uint32_t build_user_stack(
     kfree(argument_pointers);
 
     DEX_DBG("[DEX] stack built base=%08x top=%08x size=%u\n", base_address, stack_pointer, STACK_SIZE);
+    DEX_DBG("[DEX] argc=%d argv_ptr=%08x envp_ptr=%08x\n", argument_count, argv_ptr, envp_ptr);
+    DEX_DBG("[DEX] stack[0] (argc)=%u stack[4] (argv)=%08x stack[8] (envp)=%08x\n",
+            *(uint32_t *)stack_pointer,
+            *(uint32_t *)(stack_pointer + 4),
+            *(uint32_t *)(stack_pointer + 8));
+    for (int i = 0; i < argument_count && i < 4; ++i)
+    {
+        DEX_DBG("[DEX] argv[%d]=%08x -> \"%s\"\n", i, ((uint32_t *)argv_ptr)[i], (const char *)((uint32_t *)argv_ptr)[i]);
+    }
 
     return stack_pointer;
 }
@@ -437,9 +444,12 @@ static int relocate_image(
 
                 *(uint32_t *)target = (uint32_t)import_pointers[symbol_index];
 
+#if DEX_REL_DEBUG
                 DEX_DBG("[REL] ABS32 @%08x %08x -> %08x S=%08x\n",
                      (uint32_t)(uintptr_t)target, old_value, *(uint32_t *)target,
                      (uint32_t)import_pointers[symbol_index]);
+#endif
+
         
                 break;
             }
@@ -485,10 +495,12 @@ static int relocate_image(
                            library_name, symbol_name);
                 }
 
+#if DEX_REL_DEBUG
                 DEX_DBG("[REL] PC32  @%08x P=%08x S=%08x disp=%d old=%08x new=%08x\n",
                      (uint32_t)(uintptr_t)target,
                      (uint32_t)(uintptr_t)target + 4,
                      symbol_address, displacement, old_value, *(uint32_t *)target);
+#endif
 
                 break;
             }
@@ -530,7 +542,9 @@ static int relocate_image(
 
                 if (offset >= header->entry_offset && offset < header->entry_offset + 0x200)
                 {
+#if DEX_REL_DEBUG
                     DEX_DBG("[DEX][REL] off=0x%08x old=0x%08x base=0x%08x -> 0x%08x\n", offset, old_value, (uint32_t)image, value);
+#endif
                 }
 
                 *(uint32_t *)target = value;
@@ -545,7 +559,9 @@ static int relocate_image(
                     DEX_DBG("[DEX][DEBUG-0x4044] *target_after=0x%08x\n", *(uint32_t *)target);
                 }
 
+#if DEX_REL_DEBUG
                 DEX_DBG("[REL] REL   @%08x %08x -> %08x base=%08x\n", (uint32_t)(uintptr_t)target, old_value, value, (uint32_t)image);
+#endif
 
                 break;
             }
@@ -563,7 +579,9 @@ static int relocate_image(
             }
         }
 
+        #if DEX_REL_DEBUG
         DEX_DBG("new=0x%08x\n", *(uint32_t *)target);
+        #endif
     }
 
     DEX_DBG("[DEX] Applied %u relocations successfully\n", header->reloc_table_count);
@@ -891,10 +909,24 @@ int dex_run(const FileTable *file_table_ref, const char *path, int argument_coun
     uint32_t user_stack_base_address = 0;
     uint32_t user_stack_size = 0;
     uint8_t *exit_stub;
+    char **kargv = NULL;
+    int owns_kargv = 0;
 
     if (!file_table_ref || !path || !path[0])
     {
         return -1;
+    }
+
+    if (argument_count > 0 && argument_values && is_user_va((uint32_t)argument_values))
+    {
+        if (copy_user_argv(argument_count, argument_values, &kargv) != 0)
+        {
+
+            return -1;
+        }
+
+        argument_values = kargv;
+        owns_kargv = 1;
     }
 
     // Locate file
@@ -931,6 +963,12 @@ int dex_run(const FileTable *file_table_ref, const char *path, int argument_coun
         DEX_DBG("[DEX] ERROR: Failed to read file: %s\n", path);
         kfree(file_buffer);
 
+        if (owns_kargv)
+        {
+            free_kargv(kargv);
+        }
+
+
         return -4;
     }
 
@@ -941,6 +979,12 @@ int dex_run(const FileTable *file_table_ref, const char *path, int argument_coun
     {
         kfree(file_buffer);
 
+        if (owns_kargv)
+        {
+            free_kargv(kargv);
+        }
+
+
         return return_code;
     }
 
@@ -950,6 +994,12 @@ int dex_run(const FileTable *file_table_ref, const char *path, int argument_coun
     if (!user_stack_pointer)
     {
         kfree(file_buffer);
+
+        if (owns_kargv)
+        {
+            free_kargv(kargv);
+        }
+
 
         return -5;
     }
@@ -962,7 +1012,18 @@ int dex_run(const FileTable *file_table_ref, const char *path, int argument_coun
         DEX_DBG("[DEX] ERROR: No stub found\n");
         kfree(file_buffer);
 
+        if (owns_kargv)
+        {
+            free_kargv(kargv);
+        }
+
+
         return -6;
+    }
+
+    if (owns_kargv)
+    {
+        free_kargv(kargv);
     }
 
     // Ensure stub is user present and writable while patching

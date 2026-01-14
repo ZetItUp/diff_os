@@ -596,6 +596,16 @@ int vsprintf(char *str, const char *fmt, va_list ap)
     return vsnprintf(str, (size_t)-1, fmt, ap);
 }
 
+int sprintf(char *str, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = vsprintf(str, fmt, ap);
+    va_end(ap);
+
+    return ret;
+}
+
 int snprintf(char *buf, size_t size, const char *fmt, ...)
 {
     va_list ap;
@@ -671,6 +681,11 @@ int fgetc(FILE *file)
     
     unsigned char c;
     return (fread(&c, 1, 1, file) == 1) ? c : -1;
+}
+
+int getc(FILE *file)
+{
+    return fgetc(file);
 }
 
 int ungetc(int c, FILE *file)

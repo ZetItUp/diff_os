@@ -41,7 +41,7 @@ IMAGE = $(TARGET)
 EXLS_DIR = exls
 EXL_SUBDIRS := $(patsubst %/,%,$(dir $(wildcard $(EXLS_DIR)/*/Makefile)))
 
-DEBUG ?=1
+DEBUG ?=0
 ifeq ($(DEBUG),1)
 CFLAGS += -DDIFF_DEBUG
 endif
