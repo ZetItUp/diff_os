@@ -22,6 +22,7 @@
 #include "drivers/ipv4_config.h"
 #include "network/socket.h"
 #include "heap.h"
+#include "system/path.h"
 
 struct dirent;
 
@@ -51,6 +52,9 @@ int resolve_exec_path(char *out, size_t out_sz, const char *name)
         return -1;
     }
 
+    char candidate[256];
+
+    // Absolute path - check directly
     if (name[0] == '/')
     {
         if (find_entry_by_path(file_table, name) >= 0)
@@ -63,6 +67,26 @@ int resolve_exec_path(char *out, size_t out_sz, const char *name)
         return -1;
     }
 
+    // Relative path (starts with ./ or ../ or contains /) - resolve against cwd
+    if (name[0] == '.' || strchr(name, '/') != NULL)
+    {
+        process_t *proc = process_current();
+        const char *cwd = process_cwd_path(proc);
+
+        if (path_normalize(cwd, name, candidate, sizeof(candidate)) == 0)
+        {
+            if (find_entry_by_path(file_table, candidate) >= 0)
+            {
+                snprintf(out, out_sz, "%s", candidate);
+
+                return 0;
+            }
+        }
+
+        return -1;
+    }
+
+    // Plain name - search standard locations
     const char *patterns[] =
     {
         "/programs/%s/%s.dex",
@@ -70,8 +94,6 @@ int resolve_exec_path(char *out, size_t out_sz, const char *name)
         "/system/%s.dex",
         "/%s.dex"
     };
-
-    char candidate[256];
 
     for (int i = 0; i < (int)(sizeof(patterns) / sizeof(patterns[0])); i++)
     {

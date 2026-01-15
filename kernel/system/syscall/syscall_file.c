@@ -84,13 +84,26 @@ int system_file_open(const char *abs_path, int oflags, int mode)
         return -1;
 
     process_t *proc = process_current();
-    const char *base = process_cwd_path(proc);
+    const char *cwd = process_cwd_path(proc);
+    const char *exec_root = process_exec_root(proc);
     char norm[KERNEL_MAX_PATH];
-    if (path_normalize(base, upath, norm, sizeof(norm)) != 0)
+
+    // First try resolving against cwd
+    if (path_normalize(cwd, upath, norm, sizeof(norm)) != 0)
         return -1;
 
     // Try to open the file
     int fsfd = filesystem_open(norm);
+
+    // If failed and path is relative, try resolving against exec_root as fallback
+    // This handles programs that expect data files relative to their executable
+    if (fsfd < 0 && upath[0] != '/' && exec_root && exec_root[0])
+    {
+        if (path_normalize(exec_root, upath, norm, sizeof(norm)) == 0)
+        {
+            fsfd = filesystem_open(norm);
+        }
+    }
 
     // If file doesn't exist and O_CREAT is set, create it
     if (fsfd < 0 && (oflags & O_CREAT))
@@ -385,13 +398,27 @@ int system_file_stat(const char *abs_path, filesystem_stat_t *user_st)
         return -1;
 
     process_t *proc = process_current();
-    const char *base = process_cwd_path(proc);
+    const char *cwd = process_cwd_path(proc);
+    const char *exec_root = process_exec_root(proc);
     char norm[KERNEL_MAX_PATH];
-    if (path_normalize(base, upath, norm, sizeof(norm)) != 0)
+
+    // First try resolving against cwd
+    if (path_normalize(cwd, upath, norm, sizeof(norm)) != 0)
         return -1;
 
     filesystem_stat_t st;
-    if (filesystem_stat(norm, &st) != 0)
+    int result = filesystem_stat(norm, &st);
+
+    // If failed and path is relative, try resolving against exec_root
+    if (result != 0 && upath[0] != '/' && exec_root && exec_root[0])
+    {
+        if (path_normalize(exec_root, upath, norm, sizeof(norm)) == 0)
+        {
+            result = filesystem_stat(norm, &st);
+        }
+    }
+
+    if (result != 0)
         return -1;
 
     if (copy_to_user(user_st, &st, sizeof(st)) != 0)

@@ -905,7 +905,8 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
         *slash = '\0';
     }
 
-    int pid = dex_spawn_process(file_table, norm_path, argc, kargv, exec_dir, 1);
+    // Inherit cwd from parent (set_cwd=0), exec_root is still set to executable dir
+    int pid = dex_spawn_process(file_table, norm_path, argc, kargv, exec_dir, 0);
 
     // Free temporary buffers
     free_kargv(kargv);

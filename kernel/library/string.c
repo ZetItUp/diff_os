@@ -158,6 +158,53 @@ int strncmp(const char *a, const char *b, size_t n)
     return 0;
 }
 
+char *strchr(const char *s, int c)
+{
+    char ch = (char)c;
+
+    while (*s != '\0')
+    {
+        if (*s == ch)
+        {
+            return (char *)s;
+        }
+
+        s++;
+    }
+
+    // Also match if searching for NUL terminator
+    if (ch == '\0')
+    {
+        return (char *)s;
+    }
+
+    return NULL;
+}
+
+char *strrchr(const char *s, int c)
+{
+    char ch = (char)c;
+    const char *last = NULL;
+
+    while (*s != '\0')
+    {
+        if (*s == ch)
+        {
+            last = s;
+        }
+
+        s++;
+    }
+
+    // Also match if searching for NUL terminator
+    if (ch == '\0')
+    {
+        return (char *)s;
+    }
+
+    return (char *)last;
+}
+
 /* Safer copy/concat with capacity. Prefer these over strcpy/strcat. */
 size_t strlcpy(char *dst, const char *src, size_t size)
 {
