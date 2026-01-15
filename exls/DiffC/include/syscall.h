@@ -116,12 +116,7 @@ static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
 
 static inline __attribute__((always_inline)) int do_sys(int n, int a0, int a1, int a2, int a3)
 {
-    register int r_eax asm("eax") = n;
-    register int r_ebx asm("ebx") = a0;
-    register int r_ecx asm("ecx") = a1;
-    register int r_edx asm("edx") = a2;
-    register int r_esi asm("esi") = a3;
-    register int r_edi asm("edi");
+    int r_edi = 0;
 
     asm volatile(
         "push %%ebx\n\t"
@@ -131,12 +126,12 @@ static inline __attribute__((always_inline)) int do_sys(int n, int a0, int a1, i
         "pop %%edi\n\t"
         "pop %%esi\n\t"
         "pop %%ebx\n\t"
-        : "+a"(r_eax), "+b"(r_ebx), "+c"(r_ecx), "+d"(r_edx), "+S"(r_esi), "+D"(r_edi)
+        : "+a"(n), "+b"(a0), "+c"(a1), "+d"(a2), "+S"(a3), "+D"(r_edi)
         :
         : "memory", "cc"
     );
 
-    return r_eax;
+    return n;
 }
 
 static inline int system_tty_set_output_enabled(int enabled)

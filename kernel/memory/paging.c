@@ -1632,25 +1632,71 @@ int paging_handle_cow_fault(uintptr_t fault_va)
     uint32_t fva = (uint32_t)fault_va;
     uint32_t pde = 0, pte = 0;
 
-    if (paging_probe_pde_pte(fva, &pde, &pte) != 0) return -1;
-    if (!(pte & PAGE_PRESENT)) return -2;
-    if (pte & PAGE_RW) return -3;
+    if (paging_probe_pde_pte(fva, &pde, &pte) != 0)
+    {
+        return -1;
+    }
+
+    if (!(pte & PAGE_PRESENT))
+    {
+        return -2;
+    }
+
+    if (pte & PAGE_RW)
+    {
+        return -3;
+    }
 
     uint32_t page_va = ALIGN_DOWN(fva, PAGE_SIZE_4KB);
     uint32_t old_pa  = pte & 0xFFFFF000u;
     int old_idx = phys_idx_from_pa(old_pa);
-    if (old_idx < 0) return -4;
+    if (old_idx < 0)
+    {
+        return -4;
+    }
+
+    uint32_t pt_phys = pde & 0xFFFFF000u;
+    uint32_t kpt_start = (uint32_t)kernel_page_tables;
+    uint32_t kpt_end   = kpt_start + sizeof(kernel_page_tables);
+    uint32_t *pt = NULL;
+    int need_kunmap = 0;
+
+    if (pt_phys >= kpt_start && pt_phys < kpt_end)
+    {
+        pt = (uint32_t*)pt_phys;
+    }
+    else
+    {
+        pt = (uint32_t*)kmap_phys(pt_phys, 1);
+        if (!pt)
+        {
+            return -4;
+        }
+        need_kunmap = 1;
+    }
 
     if (phys_page_refcnt[old_idx] <= 1)
     {
-        uint32_t *pt = (uint32_t*)(pde & 0xFFFFF000u);
         pt[(page_va >> 12) & 0x3FFu] = (pte | PAGE_RW);
         invlpg(page_va);
+        if (need_kunmap)
+        {
+            kunmap_phys(1);
+        }
+
         return 0;
     }
 
     uint32_t new_pa = alloc_phys_page();
-    if (!new_pa) return -5;
+    if (!new_pa)
+    {
+        if (need_kunmap)
+        {
+            kunmap_phys(1);
+        }
+
+        return -5;
+    }
 
     uint32_t cur_heap_next = get_heap_alloc_next();
     uint32_t temp_va = ALIGN_UP(cur_heap_next, PAGE_SIZE_4KB);
@@ -1660,17 +1706,27 @@ int paging_handle_cow_fault(uintptr_t fault_va)
     {
         unmap_page(temp_va);
         free_phys_page(new_pa);
+        if (need_kunmap)
+        {
+            kunmap_phys(0);
+        }
+
         return -6;
     }
 
     memcpy((void*)temp_va, (void*)page_va, PAGE_SIZE_4KB);
 
-    uint32_t *pt = (uint32_t*)(pde & 0xFFFFF000u);
     pt[(page_va >> 12) & 0x3FFu] = (new_pa & 0xFFFFF000u) | PAGE_PRESENT | PAGE_RW | (pte & PAGE_USER);
 
     invlpg(page_va);
     unmap_page(temp_va);
+    if (need_kunmap)
+    {
+        kunmap_phys(1);
+    }
+
     phys_ref_dec_idx(old_idx);
+
     return 0;
 }
 
