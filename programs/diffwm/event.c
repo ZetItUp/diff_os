@@ -8,6 +8,7 @@
 #include <syscall.h>
 #include <time.h>
 #include <system/messaging.h>
+#include <system/process.h>
 
 // Screen dimensions (set via event context)
 static int g_screen_width = 0;
@@ -488,6 +489,11 @@ int event_process_keyboard(event_context_t *ctx)
         {
             event_send_key(ctx->focused, kev.key, kev.pressed, kev.modifiers);
             consumed = EVENT_CONSUMED;
+        }
+
+        if (kev.pressed && (kev.key == 'x' || kev.key == 'X'))
+        {
+            process_exit(0);
         }
     }
 

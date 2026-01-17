@@ -303,15 +303,15 @@ long system_file_write(int file, const void *buf, unsigned long count)
             if (copy_from_user(kbuf, (const uint8_t*)buf + written, chunk) != 0)
                 return (long)written;
 
+            // Always push into the TTY buffer (GUI terminals may read it)
+            (void)tty_write(kbuf, (unsigned)chunk);
+
             if (tty_enabled)
             {
-                // Route through TTY - this stores in output buffer for terminal readers
-                (void)tty_write(kbuf, (unsigned)chunk);
-            }
-
-            for (unsigned long i = 0; i < chunk; i++)
-            {
-                putch(kbuf[i]);
+                for (unsigned long i = 0; i < chunk; i++)
+                {
+                    putch(kbuf[i]);
+                }
             }
 
             written += chunk;

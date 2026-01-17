@@ -73,6 +73,7 @@ typedef struct process
     signal_state_t sig;
 
     uint8_t tty_output_enabled;
+    int tty_id;
 } process_t;
 
 typedef struct user_boot_args

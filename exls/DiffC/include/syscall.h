@@ -98,6 +98,10 @@ enum
     SYSTEM_PROFILER_STOP = 86,
     SYSTEM_PROFILER_DUMP = 87,
     SYSTEM_PROFILER_LOAD_SYMBOLS = 88,
+    SYSTEM_TTY_DEVICE_COUNT = 89,
+    SYSTEM_TTY_SET_DEVICE = 90,
+    SYSTEM_TTY_GET_DEVICE = 91,
+    SYSTEM_TTY_ALLOCATE = 92,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -533,6 +537,26 @@ static inline int system_tty_write(const char *buf, uint32_t count)
 static inline int system_tty_read_output(char *buf, uint32_t count)
 {
     return do_sys(SYSTEM_TTY_READ_OUTPUT, (int)(uintptr_t)buf, (int)count, 0, 0);
+}
+
+static inline int system_tty_device_count(void)
+{
+    return do_sys(SYSTEM_TTY_DEVICE_COUNT, 0, 0, 0, 0);
+}
+
+static inline int system_tty_set_device(int device)
+{
+    return do_sys(SYSTEM_TTY_SET_DEVICE, device, 0, 0, 0);
+}
+
+static inline int system_tty_get_device(void)
+{
+    return do_sys(SYSTEM_TTY_GET_DEVICE, 0, 0, 0, 0);
+}
+
+static inline int system_tty_allocate_device(void)
+{
+    return do_sys(SYSTEM_TTY_ALLOCATE, 0, 0, 0, 0);
 }
 
 // Mouse button flags

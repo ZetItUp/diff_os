@@ -15,6 +15,7 @@
 #include <system/process.h>
 #include <stdbool.h>
 #include <dirent.h>
+#include <tty.h>
 
 #define WIN_W 640
 #define WIN_H 600
@@ -78,6 +79,16 @@ static bool g_logo_enabled = true;
 static tga_image_t *g_logo_img = NULL;
 static picture_component_t g_logo_picture;
 static int g_logo_dirty = 0;
+
+static void claim_gdterm_tty(void)
+{
+    int tty_id = tty_allocate_device();
+
+    if (tty_id >= 0)
+    {
+        (void)tty_set_device(tty_id);
+    }
+}
 
 #define MAX_CHILDREN 32
 static int g_children[MAX_CHILDREN];
@@ -500,6 +511,8 @@ static int run_external(int argc, char **argv, int *dirty_flag)
 
 int main(void)
 {
+    claim_gdterm_tty();
+
     window_t *win = window_create(80, 80, WIN_W, WIN_H, WINDOW_FLAG_NO_BACKGROUND,
                                   "Different Terminal");
     if (!win)

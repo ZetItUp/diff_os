@@ -12,6 +12,7 @@
 #include "network/socket.h"
 #include "system/irqsw.h"
 
+struct process;
 // Mouse packet (relative movement + buttons)
 typedef struct mouse_packet
 {
@@ -48,13 +49,14 @@ typedef struct kernel_exports
     int (*pci_get_bar)(const pci_device_t *dev, uint8_t bar_index, uint32_t *out_base, uint32_t *out_size, int *is_mmio);
     uint64_t (*timer_now_ms)(void);
     void (*mouse_register)(int (*read_fn)(mouse_packet_t*), int (*read_block_fn)(mouse_packet_t*)); // Plug mouse backend
-    void (*tty_register)(int (*read_fn)(char*, unsigned),
-                         int (*write_fn)(const char*, unsigned),
-                         void (*input_fn)(char),
-                         void (*set_canonical_fn)(int),
-                         void (*set_echo_fn)(int),
-                         int (*available_fn)(void),
-                         int (*read_output_fn)(char*, unsigned)); // Plug TTY backend
+    void (*tty_register)(int (*read_fn)(int, char*, unsigned),
+                         int (*write_fn)(int, const char*, unsigned),
+                         void (*input_fn)(int, char),
+                         void (*set_canonical_fn)(int, int),
+                         void (*set_echo_fn)(int, int),
+                         int (*available_fn)(int),
+                         int (*read_output_fn)(int, char*, unsigned),
+                         int (*device_count_fn)(void)); // Plug TTY backend
     int (*irq_register_handler)(uint8_t irq, irq_handler_t handler, void *context);
     int (*irq_unregister_handler)(uint8_t irq, irq_handler_t handler, void *context);
     int (*irqsw_queue)(irqsw_handler_t handler, void *context);
@@ -157,24 +159,26 @@ int mouse_get_packet(mouse_packet_t *packet);
 // TTY-facing exports
 typedef struct tty_exports
 {
-    int (*tty_read)(char *buf, unsigned count);
-    int (*tty_write)(const char *buf, unsigned count);
-    void (*tty_input_char)(char c);
-    void (*tty_set_canonical)(int enabled);
-    void (*tty_set_echo)(int enabled);
-    int (*tty_input_available)(void);
-    int (*tty_read_output)(char *buf, unsigned count);
+    int (*tty_read)(int tty_id, char *buf, unsigned count);
+    int (*tty_write)(int tty_id, const char *buf, unsigned count);
+    void (*tty_input_char)(int tty_id, char c);
+    void (*tty_set_canonical)(int tty_id, int enabled);
+    void (*tty_set_echo)(int tty_id, int enabled);
+    int (*tty_input_available)(int tty_id);
+    int (*tty_read_output)(int tty_id, char *buf, unsigned count);
+    int (*tty_device_count)(void);
 } __attribute__((packed)) tty_exports_t;
 
 extern tty_exports_t g_tty;
 void tty_register(
-    int (*read_fn)(char*, unsigned),
-    int (*write_fn)(const char*, unsigned),
-    void (*input_fn)(char),
-    void (*set_canonical_fn)(int),
-    void (*set_echo_fn)(int),
-    int (*available_fn)(void),
-    int (*read_output_fn)(char*, unsigned)
+    int (*read_fn)(int, char*, unsigned),
+    int (*write_fn)(int, const char*, unsigned),
+    void (*input_fn)(int, char),
+    void (*set_canonical_fn)(int, int),
+    void (*set_echo_fn)(int, int),
+    int (*available_fn)(int),
+    int (*read_output_fn)(int, char*, unsigned),
+    int (*device_count_fn)(void)
 );
 int tty_read(char *buf, unsigned count);
 int tty_write(const char *buf, unsigned count);
@@ -183,6 +187,12 @@ void tty_set_canonical(int enabled);
 void tty_set_echo(int enabled);
 int tty_input_available(void);
 int tty_read_output(char *buf, unsigned count);
+int tty_get_device_count(void);
+int tty_set_current_device(int id);
+int tty_get_current_device(void);
+int tty_allocate_for_current(void);
+int tty_claim_for_current(int id);
+void tty_release_for_process(struct process *proc);
 
 // Mouse state tracking
 void mouse_update_state(void);

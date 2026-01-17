@@ -158,6 +158,8 @@ static void process_cleanup_resources(process_t *p)
         return;
     }
 
+    tty_release_for_process(p);
+
     p->resources_cleaned = 1;
 
     // Tear down IPC and shared memory owned by the process so other tasks
@@ -312,6 +314,7 @@ void process_init(void)
     k->heap_alloc_next = 0;
     k->reservation_count = 0;
     k->tty_output_enabled = 1;
+    k->tty_id = 0;
     process_assign_default_cwd(k);
     process_set_exec_root(k, "/");
 
@@ -350,6 +353,7 @@ process_t *process_create_kernel(void (*entry)(void *),
     p->main_thread = NULL;
     p->waiter = NULL;
     p->tty_output_enabled = parent ? parent->tty_output_enabled : 1;
+    p->tty_id = parent ? parent->tty_id : 0;
     process_inherit_cwd_from_parent(p, p->parent);
     process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 
@@ -397,6 +401,7 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
     p->main_thread = NULL;
     p->waiter = NULL;
     p->tty_output_enabled = parent ? parent->tty_output_enabled : 1;
+    p->tty_id = parent ? parent->tty_id : 0;
     process_inherit_cwd_from_parent(p, p->parent);
     process_set_exec_root(p, p->parent ? process_exec_root(p->parent) : "/");
 

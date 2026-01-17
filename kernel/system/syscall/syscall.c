@@ -1145,6 +1145,30 @@ int system_call_dispatch(struct syscall_frame *f)
             ret = 0;
             break;
         }
+        case SYSTEM_TTY_DEVICE_COUNT:
+        {
+            ret = tty_get_device_count();
+
+            break;
+        }
+        case SYSTEM_TTY_SET_DEVICE:
+        {
+            ret = tty_set_current_device((int)arg0);
+
+            break;
+        }
+        case SYSTEM_TTY_GET_DEVICE:
+        {
+            ret = tty_get_current_device();
+
+            break;
+        }
+        case SYSTEM_TTY_ALLOCATE:
+        {
+            ret = tty_allocate_for_current();
+
+            break;
+        }
         case SYSTEM_CONSOLE_DISABLE:
         {
             console_disable();

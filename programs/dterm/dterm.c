@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <syscall.h>
 #include <console.h>
+#include <tty.h>
 
 static const char *g_shell_name   = "Different Terminal";
 static const unsigned g_ver_major = 1;
@@ -16,6 +17,16 @@ static const unsigned g_ver_minor = 0;
 
 static int g_last_status = 0;
 static char g_cwd[256] = "/";
+
+static void claim_dterm_tty(void)
+{
+    int tty_id = tty_allocate_device();
+
+    if (tty_id >= 0)
+    {
+        (void)tty_set_device(tty_id);
+    }
+}
 
 static int bi_help(int argc, char **argv)
 {
@@ -214,6 +225,8 @@ int main(void)
         /* Om kommandoregistret inte finns är det meningslöst att fortsätta. */
         return 127;
     }
+
+    claim_dterm_tty();
 
     if (!getcwd(g_cwd, sizeof(g_cwd)))
     {

@@ -4,6 +4,7 @@
 #include "stdint.h"
 #include "stddef.h"
 
+#define TTY_DEVICE_COUNT 5
 #define TTY_LINE_SIZE    256
 #define TTY_INPUT_SIZE   1024
 #define TTY_OUTPUT_SIZE  4096
@@ -32,8 +33,83 @@ typedef struct tty_device_state
 } tty_device_state_t;
 
 // Device registration
-static tty_device_state_t g_tty_devices[1];
+static tty_device_state_t g_tty_devices[TTY_DEVICE_COUNT];
 static tty_device_state_t *g_tty_primary = 0;
+
+static inline tty_device_state_t *tty_state_by_id(int id)
+{
+    if (id < 0 || id >= TTY_DEVICE_COUNT)
+    {
+        return NULL;
+    }
+
+    return &g_tty_devices[id];
+}
+
+static void tty_zero_state(tty_device_state_t *tty)
+{
+    if (!tty)
+    {
+        return;
+    }
+
+    unsigned char *bytes = (unsigned char *)tty;
+    for (size_t idx = 0; idx < sizeof(*tty); idx++)
+    {
+        bytes[idx] = 0;
+    }
+}
+
+static void tty_format_name(char *name, size_t size, int index)
+{
+    if (!name || size == 0)
+    {
+        return;
+    }
+
+    size_t prefix_len = 3;
+
+    if (size < prefix_len + 2)
+    {
+        // Not enough space even for "tty0"
+        if (size >= 1)
+        {
+            name[0] = '\0';
+        }
+
+        return;
+    }
+
+    name[0] = 't';
+    name[1] = 't';
+    name[2] = 'y';
+
+    if (index == 0)
+    {
+        name[3] = '0';
+        name[4] = '\0';
+        return;
+    }
+
+    int value = index;
+    char digits[16];
+    int digit_count = 0;
+
+    while (value > 0 && digit_count < (int)sizeof(digits))
+    {
+        digits[digit_count++] = '0' + (value % 10);
+        value /= 10;
+    }
+
+    size_t write_pos = prefix_len;
+
+    for (int i = digit_count - 1; i >= 0 && write_pos + 1 < size; i--)
+    {
+        name[write_pos++] = digits[i];
+    }
+
+    name[write_pos] = '\0';
+}
 
 static inline int input_empty(tty_device_state_t *tty)
 {
@@ -363,39 +439,69 @@ static int tty_input_available_device(tty_device_state_t *tty)
 }
 
 // Kernel-level TTY hooks
-static void drv_tty_input_char(char character)
+static void drv_tty_input_char(int tty_id, char character)
 {
-    tty_input_char_device(g_tty_primary, character);
+    tty_device_state_t *tty = tty_state_by_id(tty_id);
+
+    if (!tty)
+    {
+        return;
+    }
+
+    tty_input_char_device(tty, character);
 }
 
-static int drv_tty_read(char *buffer, unsigned count)
+static int drv_tty_read(int tty_id, char *buffer, unsigned count)
 {
-    return tty_read_device(g_tty_primary, buffer, count);
+    tty_device_state_t *tty = tty_state_by_id(tty_id);
+
+    return tty ? tty_read_device(tty, buffer, count) : -1;
 }
 
-static int drv_tty_write(const char *buffer, unsigned count)
+static int drv_tty_write(int tty_id, const char *buffer, unsigned count)
 {
-    return tty_write_device(g_tty_primary, buffer, count);
+    tty_device_state_t *tty = tty_state_by_id(tty_id);
+
+    return tty ? tty_write_device(tty, buffer, count) : -1;
 }
 
-static int drv_tty_read_output(char *buffer, unsigned count)
+static int drv_tty_read_output(int tty_id, char *buffer, unsigned count)
 {
-    return tty_read_output_device(g_tty_primary, buffer, count);
+    tty_device_state_t *tty = tty_state_by_id(tty_id);
+
+    return tty ? tty_read_output_device(tty, buffer, count) : 0;
 }
 
-static void drv_tty_set_canonical(int enabled)
+static int drv_tty_device_count(void)
 {
-    tty_set_canonical_device(g_tty_primary, enabled);
+    return TTY_DEVICE_COUNT;
 }
 
-static void drv_tty_set_echo(int enabled)
+static void drv_tty_set_canonical(int tty_id, int enabled)
 {
-    tty_set_echo_device(g_tty_primary, enabled);
+    tty_device_state_t *tty = tty_state_by_id(tty_id);
+
+    if (tty)
+    {
+        tty_set_canonical_device(tty, enabled);
+    }
 }
 
-static int drv_tty_input_available(void)
+static void drv_tty_set_echo(int tty_id, int enabled)
 {
-    return tty_input_available_device(g_tty_primary);
+    tty_device_state_t *tty = tty_state_by_id(tty_id);
+
+    if (tty)
+    {
+        tty_set_echo_device(tty, enabled);
+    }
+}
+
+static int drv_tty_input_available(int tty_id)
+{
+    tty_device_state_t *tty = tty_state_by_id(tty_id);
+
+    return tty ? tty_input_available_device(tty) : 0;
 }
 
 // Device operations
@@ -484,35 +590,45 @@ void ddf_driver_init(kernel_exports_t *exports)
 {
     kernel = exports;
 
-    // Reset state.
-    g_tty_primary = &g_tty_devices[0];
-    g_tty_primary->dev = 0;
-    g_tty_primary->line_position = 0;
-    g_tty_primary->line_ready = 0;
-    g_tty_primary->input_head = 0;
-    g_tty_primary->input_tail = 0;
-    g_tty_primary->output_head = 0;
-    g_tty_primary->output_tail = 0;
-    g_tty_primary->echo_enabled = 1;
-    g_tty_primary->canonical_mode = 1;
+    // Reset state for each TTY instance.
+    for (int index = 0; index < TTY_DEVICE_COUNT; index++)
+    {
+        tty_device_state_t *tty = &g_tty_devices[index];
+
+        tty_zero_state(tty);
+        tty->dev = NULL;
+        tty->echo_enabled = 1;
+        tty->canonical_mode = 1;
+    }
 
     // Register the TTY driver in the kernel.
     if (kernel->tty_register)
     {
         kernel->tty_register(drv_tty_read, drv_tty_write, drv_tty_input_char,
                              drv_tty_set_canonical, drv_tty_set_echo,
-                             drv_tty_input_available, drv_tty_read_output);
+                             drv_tty_input_available, drv_tty_read_output,
+                             drv_tty_device_count);
     }
 
-    // Register device
-    g_tty_primary->dev = kernel->device_register(DEVICE_CLASS_TTY, "tty0", &g_tty_ops);
-
-    if (g_tty_primary->dev)
+    // Register each TTY device.
+    for (int index = 0; index < TTY_DEVICE_COUNT; index++)
     {
-        g_tty_primary->dev->bus_type = BUS_TYPE_VIRTUAL;
-        g_tty_primary->dev->private_data = g_tty_primary;
-        kernel->strlcpy(g_tty_primary->dev->description, "Virtual TTY", sizeof(g_tty_primary->dev->description));
+        tty_device_state_t *tty = &g_tty_devices[index];
+        char name[16];
+
+        tty_format_name(name, sizeof(name), index);
+
+        tty->dev = kernel->device_register(DEVICE_CLASS_TTY, name, &g_tty_ops);
+
+        if (tty->dev)
+        {
+            tty->dev->bus_type = BUS_TYPE_VIRTUAL;
+            tty->dev->private_data = tty;
+            kernel->strlcpy(tty->dev->description, "Virtual TTY", sizeof(tty->dev->description));
+        }
     }
+
+    g_tty_primary = &g_tty_devices[0];
 
     kernel->printf("[DRIVER] TTY Driver Installed\n");
 }
@@ -521,13 +637,18 @@ void ddf_driver_init(kernel_exports_t *exports)
 __attribute__((section(".text")))
 void ddf_driver_exit(void)
 {
-    if (g_tty_primary && g_tty_primary->dev)
+    for (int index = 0; index < TTY_DEVICE_COUNT; index++)
     {
-        kernel->device_unregister(g_tty_primary->dev);
-        g_tty_primary->dev = 0;
+        tty_device_state_t *tty = &g_tty_devices[index];
+
+        if (tty->dev)
+        {
+            kernel->device_unregister(tty->dev);
+            tty->dev = 0;
+        }
     }
 
-    g_tty_primary = 0;
+    g_tty_primary = NULL;
     kernel->printf("[DRIVER] TTY Driver Uninstalled\n");
 }
 

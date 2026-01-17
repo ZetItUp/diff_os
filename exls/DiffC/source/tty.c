@@ -52,3 +52,23 @@ int tty_puts(const char *str)
 
     return tty_write(str, len);
 }
+
+int tty_device_count(void)
+{
+    return system_tty_device_count();
+}
+
+int tty_set_device(int id)
+{
+    return system_tty_set_device(id);
+}
+
+int tty_get_device(void)
+{
+    return system_tty_get_device();
+}
+
+int tty_allocate_device(void)
+{
+    return system_tty_allocate_device();
+}
