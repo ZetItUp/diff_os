@@ -18,7 +18,7 @@
 
 // Assembly thunks
 extern void thread_entry_thunk(void);
-extern void context_switch(cpu_context_t *save, cpu_context_t *load);
+extern void context_switch(thread_t *old_thread, thread_t *new_thread);
 
 // -----------------------------------------------------------------------------
 // Scheduler state
@@ -315,7 +315,7 @@ void scheduler_start(void)
          next->context.eip, next->context.esp);
 
     g_current = next;
-    context_switch(&bootstrap.context, &next->context);
+    context_switch(&bootstrap, next);
 
     irq_restore(f);
 }
@@ -356,7 +356,7 @@ void thread_yield(void)
          next->owner_process ? next->owner_process->pid : -1);
 
     g_current = next;
-    context_switch(&self->context, &next->context);
+    context_switch(self, next);
 
     irq_restore(f);
 }
@@ -395,7 +395,7 @@ void scheduler_block_current_until_wakeup(void)
          esp_val, (uint32_t)&self->context, (uint32_t)&next->context);
 
     g_current = next;
-    context_switch(&self->context, &next->context);
+    context_switch(self, next);
 
     // --- Här återupptas 'self' efter wake_owner() ---
     // Viktigt: säkerställ att rätt CR3 är laddad för den återupptagna tråden,
@@ -466,7 +466,7 @@ void thread_exit(void)
     tss_set_esp0(thread_kstack_top(next));
 
     g_current = next;
-    context_switch(&self->context, &next->context);
+    context_switch(self, next);
 
     for (;;)
         ; // ska aldrig återvända

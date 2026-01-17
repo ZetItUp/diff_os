@@ -18,4 +18,4 @@ void scheduler_reap_all_zombies(void);
 void scheduler_tick_from_timer(void);
 void scheduler_handle_irq_exit(void);
 /* Arch interface */
-void context_switch(cpu_context_t *save_context, cpu_context_t *load_context);
+void context_switch(thread_t *old_thread, thread_t *new_thread);

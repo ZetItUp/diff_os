@@ -25,18 +25,26 @@ typedef struct cpu_context
     uint32_t esp;
 } cpu_context_t;
 
+// FPU/SSE state buffer for fxsave/fxrstor (512 bytes, 16-byte aligned)
+typedef struct fpu_state
+{
+    uint8_t data[512];
+} __attribute__((aligned(16))) fpu_state_t;
+
 typedef struct thread
 {
     int thread_id;
     thread_state_t state;
     cpu_context_t context;
-    
+    fpu_state_t fpu_state;        // FPU/SSE state for context switching
+    int fpu_initialized;          // Whether FPU state has been initialized
+
     uint32_t kernel_stack_base;
     uint32_t kernel_stack_top;
-    
+
     struct thread* next;
     struct process *owner_process;
-} thread_t;
+} __attribute__((aligned(16))) thread_t;
 
 int thread_create(void (*entry)(void*), void* argument, size_t kernel_stack_bytes);
 thread_t* current_thread(void);

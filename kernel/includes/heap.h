@@ -14,7 +14,7 @@ typedef struct block_header
 } block_header_t;
 
 #ifndef HEAP_ALIGN
-#define HEAP_ALIGN 8
+#define HEAP_ALIGN 16  // 16-byte alignment required for fxsave/fxrstor (SSE)
 #endif
 
 #define HEAP_ALIGN_UP(n)   (((n) + (HEAP_ALIGN - 1)) & ~(HEAP_ALIGN - 1))
