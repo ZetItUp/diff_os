@@ -9,6 +9,15 @@
 
 #define WM_TITLE_BUFFER_SIZE 64
 #define WM_TITLE_DEFAULT "Window"
+#define WM_WINDOW_DAMAGE_MAX 8
+
+typedef struct wm_damage_rect
+{
+    int x;
+    int y;
+    int w;
+    int h;
+} wm_damage_rect_t;
 
 typedef struct wm_window
 {
@@ -21,6 +30,9 @@ typedef struct wm_window
     int cached_title_channel;
     uint8_t cached_title[WM_TITLE_BUFFER_SIZE];
     int cached_title_valid;
+    wm_damage_rect_t damage_rects[WM_WINDOW_DAMAGE_MAX];
+    int damage_count;
+    int needs_full_redraw;
 
     int x;
     int y;

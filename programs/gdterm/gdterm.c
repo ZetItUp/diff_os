@@ -68,6 +68,7 @@ static term_color_t vga_attr_to_color(uint8_t attr)
 // Terminal component
 static terminal_component_t g_terminal;
 static int g_terminal_font_height = 0;
+static int g_terminal_font_ascent = 0;
 
 static const char *g_shell_name = "Different Terminal";
 static const unsigned g_ver_major = 0;
@@ -186,9 +187,21 @@ static void window_damage_terminal_line(window_t *window, int line_index)
     }
 
     int x_position = g_terminal.base.x + TERMINAL_PADDING_LEFT;
-    int y_position = g_terminal.base.y + TERMINAL_PADDING_TOP + line_index * g_terminal_font_height;
+    int ascent = g_terminal_font_ascent;
+    if (ascent < 0) ascent = 0;
+
+    int y_position = g_terminal.base.y + TERMINAL_PADDING_TOP + line_index * g_terminal_font_height - ascent;
+    if (y_position < g_terminal.base.y)
+    {
+        y_position = g_terminal.base.y;
+    }
+
     int width = g_terminal.base.width - TERMINAL_PADDING_LEFT;
-    int height = g_terminal_font_height;
+    int height = g_terminal_font_height + ascent;
+    if (y_position + height > g_terminal.base.y + g_terminal.base.height)
+    {
+        height = g_terminal.base.y + g_terminal.base.height - y_position;
+    }
 
     window_damage(window, x_position, y_position, width, height);
 }
@@ -527,6 +540,7 @@ int main(void)
         return -2;
     }
     g_terminal_font_height = font_height(font);
+    g_terminal_font_ascent = font_ascent(font);
 
     // Initialize terminal component
     terminal_component_init(&g_terminal, 0, 0, WIN_W, WIN_H, font);

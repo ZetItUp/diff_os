@@ -278,6 +278,215 @@ static const uint8_t *rs_get_blob(const uint8_t *blob, size_t sz, const char *ke
     return blob + e->data_off;
 }
 
+static void wm_copy_window_rect(wm_window_t *window, int rel_x, int rel_y, int width, int height)
+{
+    if (!window || !g_backbuffer)
+    {
+        return;
+    }
+
+    if (width <= 0 || height <= 0)
+    {
+        return;
+    }
+
+    int avail_width = (int)window->width;
+    int avail_height = (int)window->height;
+
+    if (rel_x >= avail_width || rel_y >= avail_height)
+    {
+        return;
+    }
+
+    if (rel_x < 0)
+    {
+        width += rel_x;
+        rel_x = 0;
+    }
+
+    if (rel_y < 0)
+    {
+        height += rel_y;
+        rel_y = 0;
+    }
+
+    if (width <= 0 || height <= 0)
+    {
+        return;
+    }
+
+    if (rel_x + width > avail_width)
+    {
+        width = avail_width - rel_x;
+    }
+
+    if (rel_y + height > avail_height)
+    {
+        height = avail_height - rel_y;
+    }
+
+    if (width <= 0 || height <= 0)
+    {
+        return;
+    }
+
+    int dst_x = window->x + rel_x;
+    int dst_y = window->y + rel_y;
+
+    if (dst_x >= (int)g_mode.width || dst_y >= (int)g_mode.height)
+    {
+        return;
+    }
+
+    if (dst_x < 0)
+    {
+        width += dst_x;
+        rel_x -= dst_x;
+        dst_x = 0;
+    }
+
+    if (dst_y < 0)
+    {
+        height += dst_y;
+        rel_y -= dst_y;
+        dst_y = 0;
+    }
+
+    if (width <= 0 || height <= 0)
+    {
+        return;
+    }
+
+    if (dst_x + width > (int)g_mode.width)
+    {
+        width = (int)g_mode.width - dst_x;
+    }
+
+    if (dst_y + height > (int)g_mode.height)
+    {
+        height = (int)g_mode.height - dst_y;
+    }
+
+    if (width <= 0 || height <= 0)
+    {
+        return;
+    }
+
+    size_t row_bytes = (size_t)width * sizeof(uint32_t);
+    uint8_t *src_row = (uint8_t *)window->pixels + (size_t)rel_y * window->pitch + (size_t)rel_x * 4;
+    uint32_t *dst_row = g_backbuffer + (size_t)dst_y * g_backbuffer_stride + (size_t)dst_x;
+
+    for (int row = 0; row < height; ++row)
+    {
+        memcpy(dst_row, src_row, row_bytes);
+        src_row += window->pitch;
+        dst_row += g_backbuffer_stride;
+    }
+}
+
+static void wm_window_mark_damage(wm_window_t *window, int rel_x, int rel_y, int width, int height)
+{
+    if (!window)
+    {
+        return;
+    }
+
+    if (rel_x < 0)
+    {
+        width += rel_x;
+        rel_x = 0;
+    }
+
+    if (rel_y < 0)
+    {
+        height += rel_y;
+        rel_y = 0;
+    }
+
+    if (width <= 0 || height <= 0)
+    {
+        return;
+    }
+
+    if (rel_x + width >= (int)window->width && rel_y + height >= (int)window->height &&
+        rel_x == 0 && rel_y == 0 &&
+        width >= (int)window->width && height >= (int)window->height)
+    {
+        window->needs_full_redraw = 1;
+        window->damage_count = 0;
+        return;
+    }
+
+    if (rel_x + width > (int)window->width)
+    {
+        width = (int)window->width - rel_x;
+    }
+
+    if (rel_y + height > (int)window->height)
+    {
+        height = (int)window->height - rel_y;
+    }
+
+    if (width <= 0 || height <= 0)
+    {
+        return;
+    }
+
+    if (window->damage_count >= WM_WINDOW_DAMAGE_MAX)
+    {
+        window->needs_full_redraw = 1;
+        window->damage_count = 0;
+        return;
+    }
+
+    wm_damage_rect_t *rect = &window->damage_rects[window->damage_count++];
+    rect->x = rel_x;
+    rect->y = rel_y;
+    rect->w = width;
+    rect->h = height;
+}
+
+static void wm_damage_window_area(int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0)
+    {
+        return;
+    }
+
+    for (wm_window_t *win = g_windows; win; win = win->next)
+    {
+        int win_x = win->x;
+        int win_y = win->y;
+        int win_w = (int)win->width;
+        int win_h = (int)win->height;
+
+        int overlap_x0 = x > win_x ? x : win_x;
+        int overlap_y0 = y > win_y ? y : win_y;
+        int overlap_x1 = (x + w) < (win_x + win_w) ? (x + w) : (win_x + win_w);
+        int overlap_y1 = (y + h) < (win_y + win_h) ? (y + h) : (win_y + win_h);
+
+        if (overlap_x0 < overlap_x1 && overlap_y0 < overlap_y1)
+        {
+            wm_window_mark_damage(win,
+                                  overlap_x0 - win_x,
+                                  overlap_y0 - win_y,
+                                  overlap_x1 - overlap_x0,
+                                  overlap_y1 - overlap_y0);
+        }
+    }
+}
+
+static void wm_schedule_full_redraw(wm_window_t *window)
+{
+    if (!window)
+    {
+        return;
+    }
+
+    window->needs_full_redraw = 1;
+    window->damage_count = 0;
+}
+
 static size_t wm_strlen_limited(const char *str, size_t max)
 {
     if (!str || max == 0)
@@ -1293,7 +1502,6 @@ static void wm_repaint_dirty_region(void)
     // Temporarily suppress dirty marking during repaint
     g_disable_dirty_mark = 1;
 
-    wm_fill_bg_region(min_x, min_y, dirty_w, dirty_h);
     wm_draw_desktop_icons(min_x, min_y, dirty_w, dirty_h);
 
     // Collect windows so we can paint bottom-to-top (oldest first).
@@ -1317,6 +1525,10 @@ static void wm_repaint_dirty_region(void)
 
         if (rects_intersect(min_x, min_y, dirty_w, dirty_h, wx, wy, ww, wh))
         {
+            if (!win->needs_full_redraw && win->damage_count == 0)
+            {
+                wm_schedule_full_redraw(win);
+            }
             dwm_msg_t msg = {0};
             msg.window_id = win->id;
             wm_draw_window(&msg);
@@ -1330,12 +1542,16 @@ static void wm_repaint_dirty_region(void)
         int wx, wy, ww, wh;
         wm_get_decor_bounds(fwin, &wx, &wy, &ww, &wh);
 
-        if (rects_intersect(min_x, min_y, dirty_w, dirty_h, wx, wy, ww, wh))
+    if (rects_intersect(min_x, min_y, dirty_w, dirty_h, wx, wy, ww, wh))
+    {
+        if (!fwin->needs_full_redraw && fwin->damage_count == 0)
         {
-            dwm_msg_t msg = {0};
-            msg.window_id = fwin->id;
-            wm_draw_window(&msg);
+            wm_schedule_full_redraw(fwin);
         }
+        dwm_msg_t msg = {0};
+        msg.window_id = fwin->id;
+        wm_draw_window(&msg);
+    }
     }
 
     g_disable_dirty_mark = 0;
@@ -1542,6 +1758,7 @@ void wm_clear_region(int x, int y, int w, int h)
         wm_memset32(dst, bg, (size_t)row_width);
     }
 
+    wm_damage_window_area(x0, y0, row_width, row_height);
     // Mark cleared region as dirty
     wm_add_dirty_rect(x0, y0, row_width, row_height);
 }
@@ -1654,38 +1871,40 @@ static void wm_redraw_focus_dirty(void)
     }
 
     // Clear and redraw the previously focused window (now unfocused)
-    if (g_prev_focus)
-    {
-        int dx, dy, dw, dh;
-        wm_get_decor_bounds(g_prev_focus, &dx, &dy, &dw, &dh);
+        if (g_prev_focus)
+        {
+            int dx, dy, dw, dh;
+            wm_get_decor_bounds(g_prev_focus, &dx, &dy, &dw, &dh);
 
-        // Clear the decoration area to background
-        wm_fill_bg_region(dx, dy, dw, dh);
+            // Clear the decoration area to background
+            wm_fill_bg_region(dx, dy, dw, dh);
 
-        // Redraw the window with unfocused decorations
-        dwm_msg_t msg = {0};
-        msg.window_id = g_prev_focus->id;
-        wm_draw_window(&msg);
+            // Redraw the window with unfocused decorations
+            dwm_msg_t msg = {0};
+            msg.window_id = g_prev_focus->id;
+            wm_schedule_full_redraw(g_prev_focus);
+            wm_draw_window(&msg);
 
-        wm_add_dirty_rect(dx, dy, dw, dh);
-    }
+            wm_add_dirty_rect(dx, dy, dw, dh);
+        }
 
     // Clear and redraw the newly focused window
-    if (g_focused)
-    {
-        int dx, dy, dw, dh;
-        wm_get_decor_bounds(g_focused, &dx, &dy, &dw, &dh);
+        if (g_focused)
+        {
+            int dx, dy, dw, dh;
+            wm_get_decor_bounds(g_focused, &dx, &dy, &dw, &dh);
 
-        // Clear the decoration area to background
-        wm_fill_bg_region(dx, dy, dw, dh);
+            // Clear the decoration area to background
+            wm_fill_bg_region(dx, dy, dw, dh);
 
-        // Redraw the window with focused decorations
-        dwm_msg_t msg = {0};
-        msg.window_id = g_focused->id;
-        wm_draw_window(&msg);
+            // Redraw the window with focused decorations
+            dwm_msg_t msg = {0};
+            msg.window_id = g_focused->id;
+            wm_schedule_full_redraw(g_focused);
+            wm_draw_window(&msg);
 
-        wm_add_dirty_rect(dx, dy, dw, dh);
-    }
+            wm_add_dirty_rect(dx, dy, dw, dh);
+        }
 
     g_focus_dirty = 0;
 }
@@ -1784,6 +2003,8 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     window->title_overridden = 0;
     window->cached_title_channel = -1;
     window->cached_title_valid = 0;
+    window->damage_count = 0;
+    window->needs_full_redraw = 1;
     window->titlebar_hover_button = 0;
     window->titlebar_pressed_button = 0;
 
@@ -1815,24 +2036,26 @@ static void wm_draw_window(const dwm_msg_t *msg)
         return;
     }
 
-    uint32_t *src = (uint32_t*)window->pixels;
-    uint32_t src_stride = (uint32_t)(window->pitch / 4);
-    uint32_t *dst = g_backbuffer + (size_t)y0 * g_backbuffer_stride + (size_t)x0;
+    int has_update = window->needs_full_redraw || window->damage_count > 0;
 
-    // Copy window pixels to backbuffer
-    size_t row_bytes = (size_t)max_x * sizeof(uint32_t);
-    if(src_stride == (uint32_t)max_x && g_backbuffer_stride == (uint32_t)max_x)
+    if (has_update)
     {
-        memcpy(dst, src, row_bytes * (size_t)max_y);
-    }
-    else
-    {
-        for(int y = 0; y < max_y; ++y)
+        if (window->needs_full_redraw)
         {
-            memcpy(dst, src, row_bytes);
-            src += src_stride;
-            dst += g_backbuffer_stride;
+            wm_copy_window_rect(window, 0, 0, (int)window->width, (int)window->height);
         }
+        else
+        {
+            for (int i = 0; i < window->damage_count; ++i)
+            {
+                wm_damage_rect_t *rect = &window->damage_rects[i];
+                wm_copy_window_rect(window, rect->x, rect->y, rect->w, rect->h);
+            }
+        }
+
+        window->damage_count = 0;
+        window->needs_full_redraw = 0;
+        window->drew_once = 1;
     }
 
     // Draw titlebar and window frame decorations
@@ -1942,6 +2165,11 @@ static void wm_handle_message(const dwm_msg_t *msg)
                                   decor_y_position,
                                   decor_width,
                                   decor_height);
+                wm_window_mark_damage(window,
+                                      msg->damage.x_position,
+                                      msg->damage.y_position,
+                                      msg->damage.width,
+                                      msg->damage.height);
                 if (first_client_draw)
                 {
                     wm_repaint_dirty_region();
