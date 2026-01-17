@@ -132,6 +132,8 @@ static int diffos_to_ansi_bg(uint8_t color)
 
 // Special value for resetting to terminal default
 #define CONSOLE_COLOR_DEFAULT 0xFF
+#define CONSOLE_DEFAULT_FG     FG_GRAY
+#define CONSOLE_DEFAULT_BG     BG_BLACK
 
 // Set console colors from user values
 static int system_console_set_color(uint32_t fg, uint32_t bg)
@@ -157,13 +159,13 @@ static int system_console_set_color(uint32_t fg, uint32_t bg)
         tty_write(ansi_buf, (unsigned)len);
     }
 
-    // Don't change kernel console color for DEFAULT
-    if (fg != CONSOLE_COLOR_DEFAULT && bg != CONSOLE_COLOR_DEFAULT)
+    // Reset kernel console color when using default value
+    if (fg == CONSOLE_COLOR_DEFAULT || bg == CONSOLE_COLOR_DEFAULT)
     {
-        return console_set_colors_kernel((uint8_t)fg, (uint8_t)bg);
+        return console_set_colors_kernel(CONSOLE_DEFAULT_FG, CONSOLE_DEFAULT_BG);
     }
 
-    return 0;
+    return console_set_colors_kernel((uint8_t)fg, (uint8_t)bg);
 }
 
 // Read current console colors

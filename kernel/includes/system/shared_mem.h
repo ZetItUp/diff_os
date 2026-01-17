@@ -40,3 +40,4 @@ int shared_memory_unmap(int handle);
 int shared_memory_release(int handle);
 void shared_memory_cleanup_process(int pid);
 int shared_memory_handle_fault(uintptr_t fault_va);
+int shared_memory_find_mapping(uintptr_t va, shared_memory_object_t **out_obj, uintptr_t *out_base);

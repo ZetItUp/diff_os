@@ -601,3 +601,63 @@ int shared_memory_handle_fault(uintptr_t fault_va)
 
     return 0;
 }
+
+int shared_memory_find_mapping(uintptr_t va, shared_memory_object_t **out_obj, uintptr_t *out_base)
+{
+    shared_memory_lazy_init();
+
+    if (va < SHARED_MEMORY_BASE || va >= SHARED_MEMORY_LIMIT)
+    {
+        return -1;
+    }
+
+    int pid = process_pid(process_current());
+    if (pid < 0)
+    {
+        return -1;
+    }
+
+    for (int i = 0; i < SHARED_MEMORY_MAX_OBJECTS; i++)
+    {
+        shared_memory_object_t *obj = &g_shared_memory[i];
+
+        if (!obj->used)
+        {
+            continue;
+        }
+
+        uint32_t flags;
+        spin_lock_irqsave(&obj->lock, &flags);
+
+        for (int m = 0; m < SHARED_MEMORY_MAX_ALLOWED_PIDS; m++)
+        {
+            if (!obj->mappings[m].active || obj->mappings[m].pid != pid)
+            {
+                continue;
+            }
+
+            uintptr_t base = obj->mappings[m].va;
+            uintptr_t end = base + obj->page_count * PAGE_SIZE_4KB;
+
+            if (va >= base && va < end)
+            {
+                if (out_obj)
+                {
+                    *out_obj = obj;
+                }
+
+                if (out_base)
+                {
+                    *out_base = base;
+                }
+
+                spin_unlock_irqrestore(&obj->lock, flags);
+                return 0;
+            }
+        }
+
+        spin_unlock_irqrestore(&obj->lock, flags);
+    }
+
+    return -1;
+}

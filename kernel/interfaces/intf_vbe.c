@@ -1,5 +1,6 @@
 #include "graphics/vbe_graphics.h"
 #include "graphics/vbe_text.h"
+#include "system/shared_mem.h"
 #include "system/usercopy.h"
 #include "system/syscall.h"
 #include "interfaces.h"
@@ -74,6 +75,133 @@ static inline void vbe_enable(uint16_t flags)
     vbe_write_reg(VBE_DISPI_INDEX_ENABLE, flags);
 }
 
+static int vbe_copy_shared_region(shared_memory_object_t *obj,
+                                  uintptr_t base_va,
+                                  const void *user_ptr,
+                                  int pitch_bytes,
+                                  uint32_t dest_x,
+                                  uint32_t dest_y,
+                                  uint32_t width,
+                                  uint32_t height);
+
+static int vbe_try_shared_copy(const void *user_ptr,
+                               int pitch_bytes,
+                               uint32_t dest_x,
+                               uint32_t dest_y,
+                               uint32_t width,
+                               uint32_t height)
+{
+    shared_memory_object_t *obj = NULL;
+    uintptr_t base = 0;
+
+    if (!user_ptr)
+    {
+        return -1;
+    }
+
+    if (shared_memory_find_mapping((uintptr_t)user_ptr, &obj, &base) != 0)
+    {
+        return -1;
+    }
+
+    return vbe_copy_shared_region(obj, base, user_ptr, pitch_bytes, dest_x, dest_y, width, height);
+}
+
+static int vbe_copy_shared_region(shared_memory_object_t *obj,
+                                  uintptr_t base_va,
+                                  const void *user_ptr,
+                                  int pitch_bytes,
+                                  uint32_t dest_x,
+                                  uint32_t dest_y,
+                                  uint32_t width,
+                                  uint32_t height)
+{
+    if (!obj || !user_ptr || height == 0 || width == 0 || pitch_bytes <= 0)
+    {
+        return -1;
+    }
+
+    size_t bytes_per_pixel = (size_t)g_vbe.bpp / 8;
+    size_t row_bytes = (size_t)width * bytes_per_pixel;
+    size_t total_needed = (size_t)pitch_bytes * (size_t)height;
+    size_t backing_size = (size_t)obj->page_count * PAGE_SIZE_4KB;
+    uintptr_t start_offset = (uintptr_t)user_ptr - base_va;
+
+    if (start_offset + total_needed > backing_size)
+    {
+        return -1;
+    }
+
+    uint8_t *dest_base = (uint8_t*)g_vbe.frame_buffer
+        + (size_t)dest_y * g_vbe.pitch
+        + (size_t)dest_x * bytes_per_pixel;
+
+    void *mapped = NULL;
+    uint32_t mapped_phys = 0;
+
+    for (uint32_t row = 0; row < height; row++)
+    {
+        uint8_t *dest = dest_base + (size_t)row * g_vbe.pitch;
+        uintptr_t src_row = (uintptr_t)user_ptr + (size_t)row * (size_t)pitch_bytes;
+        uintptr_t end_va = src_row + row_bytes;
+
+        uintptr_t cursor = src_row;
+
+        while (cursor < end_va)
+        {
+            uintptr_t page_base = PAGE_ALIGN_DOWN(cursor);
+            uint32_t page_index = (uint32_t)((page_base - base_va) / PAGE_SIZE_4KB);
+
+            if (page_index >= obj->page_count)
+            {
+                if (mapped)
+                {
+                    paging_kunmap_phys(0);
+                }
+                return -1;
+            }
+
+            uint32_t phys = obj->phys_pages[page_index];
+
+            if (mapped_phys != phys)
+            {
+                if (mapped)
+                {
+                    paging_kunmap_phys(0);
+                }
+
+                mapped = paging_kmap_phys(phys, 0);
+                if (!mapped)
+                {
+                    return -1;
+                }
+
+                mapped_phys = phys;
+            }
+
+            size_t offset = cursor - page_base;
+            size_t chunk = PAGE_SIZE_4KB - offset;
+
+            if (chunk > (size_t)(end_va - cursor))
+            {
+                chunk = (size_t)(end_va - cursor);
+            }
+
+            memcpy(dest, (const uint8_t*)mapped + offset, chunk);
+
+            dest += chunk;
+            cursor += chunk;
+        }
+    }
+
+    if (mapped)
+    {
+        paging_kunmap_phys(0);
+    }
+
+    return 0;
+}
+
 int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_wh)
 {
     if (g_vbe.frame_buffer == NULL || g_vbe.bpp != 32)
@@ -108,6 +236,11 @@ int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_
     if (row_bytes > g_vbe.pitch)
     {
         row_bytes = g_vbe.pitch;
+    }
+
+    if (vbe_try_shared_copy(user_ptr, pitch_bytes, 0, 0, max_w, max_h) == 0)
+    {
+        return 0;
     }
 
     uint8_t *dst_base = (uint8_t*)g_vbe.frame_buffer;
@@ -166,6 +299,10 @@ int system_video_present_region_user(const void *user_ptr, int pitch_bytes,
     if (w <= 0 || h <= 0) return 0;
 
     uint32_t row_bytes = (uint32_t)w * 4u;
+    if (vbe_try_shared_copy(user_ptr, pitch_bytes, (uint32_t)dest_x, (uint32_t)dest_y, (uint32_t)w, (uint32_t)h) == 0)
+    {
+        return 0;
+    }
     uint8_t *dst_base = (uint8_t*)g_vbe.frame_buffer + (uint32_t)dest_y * g_vbe.pitch + (uint32_t)dest_x * 4;
     const uint8_t *src_user = (const uint8_t*)user_ptr;
 
