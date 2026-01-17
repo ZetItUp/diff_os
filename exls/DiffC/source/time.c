@@ -3,6 +3,42 @@
 #include <time.h>
 #include <syscall.h>
 
+// Shared kernel data page mapped by the kernel at process startup
+// This allows reading time without a syscall
+#define SHARED_KERNEL_DATA_VA 0x7FFE0000u
+
+typedef struct shared_kernel_data
+{
+    volatile uint64_t time_ms;
+    volatile uint32_t tick_count;
+    volatile uint32_t timer_frequency;
+} shared_kernel_data_t;
+
+static volatile shared_kernel_data_t *kernel_data =
+    (volatile shared_kernel_data_t *)SHARED_KERNEL_DATA_VA;
+
+// Read time directly from shared page, no syscall needed
+static inline uint64_t fast_time_ms(void)
+{
+    return kernel_data->time_ms;
+}
+
+// Fast conversion from ms to sec+usec using 32-bit division
+// Works for ~49 days of uptime before overflow
+static inline void ms_to_timeval(uint64_t ms, time_t *sec, suseconds_t *usec)
+{
+    uint32_t ms32 = (uint32_t)ms;
+    *sec = (time_t)(ms32 / 1000u);
+    *usec = (suseconds_t)((ms32 % 1000u) * 1000u);
+}
+
+static inline void ms_to_timespec(uint64_t ms, time_t *sec, long *nsec)
+{
+    uint32_t ms32 = (uint32_t)ms;
+    *sec = (time_t)(ms32 / 1000u);
+    *nsec = (long)((ms32 % 1000u) * 1000000u);
+}
+
 static inline void split_sleep_ms(uint64_t ms)
 {
     while (ms > 0)
@@ -29,9 +65,7 @@ int clock_gettime(clockid_t clock_id, struct timespec* tp)
         return -1;
     }
 
-    uint64_t ms = system_time_ms();
-    tp->tv_sec = (time_t)(ms / 1000ull);
-    tp->tv_nsec = (long)((ms % 1000ull) * 1000000ull);
+    ms_to_timespec(fast_time_ms(), &tp->tv_sec, &tp->tv_nsec);
     return 0;
 }
 
@@ -81,15 +115,13 @@ int gettimeofday(struct timeval* tv)
         return -1;
     }
 
-    uint64_t ms = system_time_ms();
-    tv->tv_sec = (time_t)(ms / 1000ull);
-    tv->tv_usec = (suseconds_t)((ms % 1000ull) * 1000ull);
+    ms_to_timeval(fast_time_ms(), &tv->tv_sec, &tv->tv_usec);
     return 0;
 }
 
 uint64_t monotonic_ms(void)
 {
-    return system_time_ms();
+    return fast_time_ms();
 }
 
 int msleep(uint32_t ms)

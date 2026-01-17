@@ -18,6 +18,7 @@
 #include "timer.h"
 #include "system/shared_mem.h"
 #include "system/signal.h"
+#include "system/profiler.h"
 #include "drivers/device.h"
 #include "drivers/ipv4_config.h"
 #include "network/socket.h"
@@ -1264,6 +1265,50 @@ int system_call_dispatch(struct syscall_frame *f)
         {
             ret = system_network_socket_recv((int)arg0,
                 (network_socket_packet_t *)(uintptr_t)arg1);
+            break;
+        }
+        case SYSTEM_PROFILER_START:
+        {
+            ret = profiler_start(arg0);
+            break;
+        }
+        case SYSTEM_PROFILER_STOP:
+        {
+            ret = profiler_stop();
+            break;
+        }
+        case SYSTEM_PROFILER_DUMP:
+        {
+            ret = profiler_dump_csv();
+            break;
+        }
+        case SYSTEM_PROFILER_LOAD_SYMBOLS:
+        {
+            // arg0 = dex_data, arg1 = dex_size, arg2 = image_base, arg3 = library_name
+            const void *dex_data = (const void *)(uintptr_t)arg0;
+            size_t dex_size = (size_t)arg1;
+            uint32_t image_base = (uint32_t)arg2;
+            const char *library_name = (const char *)(uintptr_t)arg3;
+
+            // Validate user pointers
+            if (paging_check_user_range((uint32_t)dex_data, dex_size) != 0)
+            {
+                ret = -1;
+                break;
+            }
+
+            char lib_name_buf[64] = {0};
+            if (library_name)
+            {
+                if (copy_string_from_user(lib_name_buf, library_name, sizeof(lib_name_buf)) < 0)
+                {
+                    ret = -1;
+                    break;
+                }
+            }
+
+            ret = profiler_load_symbols(dex_data, dex_size, image_base,
+                                        library_name ? lib_name_buf : NULL);
             break;
         }
         default:

@@ -9,6 +9,8 @@
 #include "system/scheduler.h"
 #include "system/signal.h"
 #include "system/spinlock.h"
+#include "system/profiler.h"
+#include "system/process.h"
 #include "heap.h"
 
 irq_handler_t irq_handlers[NUM_IRQS];
@@ -63,6 +65,17 @@ void irq_handler_c(unsigned irq_number, void *context)
 
     uint32_t real_irq = irq - 32;
     uint32_t idx = (irq >= 32) ? real_irq : irq;
+
+    // Sample user EIP on timer interrupt for profiling
+    if (idx == 0 && profiler_is_active())
+    {
+        struct stack_frame *frame = (struct stack_frame *)context;
+        process_t *proc = process_current();
+        if (proc && frame)
+        {
+            profiler_record_sample(frame->eip, proc->pid);
+        }
+    }
 
     int have_hooks = 0;
 

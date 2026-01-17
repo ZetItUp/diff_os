@@ -95,8 +95,10 @@ KERNEL_SRC = \
 	kernel/system/spinlock.c \
 	kernel/system/messaging.c \
 	kernel/system/shared_mem.c \
+	kernel/system/shared_kernel_data.c \
 	kernel/system/signal.c \
 	kernel/system/pci.c \
+	kernel/system/profiler/profiler.c \
 	kernel/dex/dex_loader.c \
 	kernel/dex/exl_loader.c \
 	kernel/kernel.c \
@@ -287,6 +289,11 @@ $(OBJ)/%.o: kernel/system/syscall/%.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 $(OBJ)/%.o: kernel/system/%.c
+	@mkdir -p $(OBJ)
+	@echo "[CC] Compiling $<"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJ)/%.o: kernel/system/profiler/%.c
 	@mkdir -p $(OBJ)
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@

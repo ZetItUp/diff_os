@@ -9,21 +9,23 @@ static volatile uint32_t *g_apic_base = NULL;
 static volatile uint32_t *g_ioapic_base = NULL;
 static uint32_t g_apic_timer_ticks_per_ms = 0;
 
-// Read MSR for model specific register
-static inline uint64_t rdmsr(uint32_t msr)
+// Read model specific register
+static inline uint64_t read_model_specific_register(uint32_t msr)
 {
     uint32_t eax;
     uint32_t edx;
+
     __asm__ __volatile__("rdmsr" : "=a"(eax), "=d"(edx) : "c"(msr));
 
     return ((uint64_t)edx << 32) | eax;
 }
 
-// Write MSR for model specific register
-static inline void wrmsr(uint32_t msr, uint64_t value)
+// Write model specific register
+static inline void write_model_specific_register(uint32_t msr, uint64_t value)
 {
     uint32_t eax = (uint32_t)value;
     uint32_t edx = (uint32_t)(value >> 32);
+
     __asm__ __volatile__("wrmsr" : : "c"(msr), "a"(eax), "d"(edx));
 }
 
@@ -92,18 +94,19 @@ bool apic_is_supported(void)
 
 uint32_t apic_get_base(void)
 {
-    uint64_t msr = rdmsr(MSR_APIC_BASE);
+    uint64_t msr = read_model_specific_register(MSR_APIC_BASE);
 
     return (uint32_t)(msr & 0xFFFFF000);
 }
 
 void apic_set_base(uint32_t base)
 {
-    uint64_t msr = rdmsr(MSR_APIC_BASE);
+    uint64_t msr = read_model_specific_register(MSR_APIC_BASE);
+
     msr &= 0x0FFF;
     msr |= (base & 0xFFFFF000);
     msr |= APIC_BASE_ENABLE;
-    wrmsr(MSR_APIC_BASE, msr);
+    write_model_specific_register(MSR_APIC_BASE, msr);
 }
 
 void apic_send_eoi(void)

@@ -13,6 +13,7 @@
 #include "heap.h"
 #include "system/usercopy.h"
 #include "debug.h"
+#include "shared_kernel_data.h"
 
 #define DEX_DBG(...) DDBG_IF(DEBUG_AREA_EXL, __VA_ARGS__)
 #define DEX_REL_DEBUG 0
@@ -1310,6 +1311,12 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
     process->heap_max = heap_max_address;
     process->heap_alloc_next = heap_base_aligned;
     paging_adopt_pending_reservations(child_cr3, process);
+
+    // Map shared kernel data page so userspace can read time without syscall
+    if (shared_kernel_data_map_to_process(child_cr3) != 0)
+    {
+        DEX_DBG("[DEX] Warning: failed to map shared kernel data\n");
+    }
 
     DEX_DBG("[DEX] PID=%d heap_base=%p heap_end=%p heap_max=%p\n",
            process_id, (void *)process->heap_base, (void *)process->heap_end, (void *)process->heap_max);

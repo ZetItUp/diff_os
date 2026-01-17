@@ -1,0 +1,21 @@
+# System Drivers Configuration File
+# Do not edit unless you know what you are doing.
+
+[DRIVERS]
+path=/system/drivers
+vbe_qemu.ddf
+keyboard.ddf
+ps2mouse.ddf
+tty.ddf
+#rtl8139.ddf
+
+# Modules
+#ethernet.ddf
+#arp.ddf
+#ipv4.ddf
+#icmp.ddf
+
+[SHELL]
+#path=/programs/dterm/dterm.dex
+path=/programs/diffwm/diffwm.dex
+

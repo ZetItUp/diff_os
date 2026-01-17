@@ -9,6 +9,7 @@
 #include "stdint.h"
 #include "stddef.h"
 #include "stdbool.h"
+#include "shared_kernel_data.h"
 
 #define PIT_CH0_PORT 0x40
 #define PIT_CMD_PORT 0x43
@@ -287,6 +288,8 @@ void ktimer_tick_isr(void)
 
     g_millisecond_fraction_accum = fraction_accum;
 
+    // Update shared page so userspace can read time without syscall
+    shared_kernel_data_update_time(g_milliseconds, (uint32_t)g_tick_count);
 
     // Drain keyboard scan codes and process them
     keyboard_drain();

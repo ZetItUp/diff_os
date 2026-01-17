@@ -6,6 +6,7 @@ ls=/programs/ls/ls.dex
 gdterm=/programs/gdterm/gdterm.dex
 launcher=/programs/launcher/launcher.dex
 devmgr=/programs/devmgr/devmgr.dex
+prof=/programs/profiler/profiler.dex
 
 # Test Programs
 helloc=programs/helloc++/helloc++.dex

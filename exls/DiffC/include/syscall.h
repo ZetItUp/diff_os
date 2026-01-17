@@ -94,6 +94,10 @@ enum
     SYSTEM_NET_SOCKET_CLOSE = 82,
     SYSTEM_NET_SOCKET_SEND = 83,
     SYSTEM_NET_SOCKET_RECV = 84,
+    SYSTEM_PROFILER_START = 85,
+    SYSTEM_PROFILER_STOP = 86,
+    SYSTEM_PROFILER_DUMP = 87,
+    SYSTEM_PROFILER_LOAD_SYMBOLS = 88,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -640,4 +644,30 @@ static inline __attribute__((always_inline)) int system_signal_setmask(uint32_t 
 static inline __attribute__((always_inline)) int system_signal_getmask(uint32_t *mask)
 {
     return do_sys(SYSTEM_SIGNAL_GETMASK, (int)(uintptr_t)mask, 0, 0, 0);
+}
+
+// Profiler syscalls
+static inline int system_profiler_start(int pid)
+{
+    return do_sys(SYSTEM_PROFILER_START, pid, 0, 0, 0);
+}
+
+static inline int system_profiler_stop(void)
+{
+    return do_sys(SYSTEM_PROFILER_STOP, 0, 0, 0, 0);
+}
+
+static inline int system_profiler_dump(void)
+{
+    return do_sys(SYSTEM_PROFILER_DUMP, 0, 0, 0, 0);
+}
+
+static inline int system_profiler_load_symbols(const void *dex_data, size_t dex_size,
+                                                uint32_t image_base, const char *library_name)
+{
+    return do_sys(SYSTEM_PROFILER_LOAD_SYMBOLS,
+                  (int)(uintptr_t)dex_data,
+                  (int)dex_size,
+                  (int)image_base,
+                  (int)(uintptr_t)library_name);
 }
