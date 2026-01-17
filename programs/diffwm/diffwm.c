@@ -240,18 +240,25 @@ static char *rs_get_string(const uint8_t *blob, size_t sz, const char *key)
     if (!e || e->type != RS_TYPE_STRING) return NULL;
     if (e->data_off + e->data_size > sz) return NULL;
     size_t len = e->data_size;
-    char *s = malloc(len + 1);
-    if (!s) return NULL;
-    memcpy(s, blob + e->data_off, len);
-    s[len] = '\0';
+    const char *src = (const char *)(blob + e->data_off);
 
-    // Strip surrounding quotes if present
-    if (len >= 2 && s[0] == '\"' && s[len - 1] == '\"')
+    size_t start = 0;
+    size_t trimmed_len = len;
+    if (len >= 2 && src[0] == '\"' && src[len - 1] == '\"')
     {
-        memmove(s, s + 1, len - 2);
-        s[len - 2] = '\0';
+        start = 1;
+        trimmed_len = len - 2;
     }
 
+    char *s = malloc(trimmed_len + 1);
+    if (!s) return NULL;
+
+    if (trimmed_len > 0)
+    {
+        memcpy(s, src + start, trimmed_len);
+    }
+
+    s[trimmed_len] = '\0';
     return s;
 }
 
@@ -269,6 +276,109 @@ static const uint8_t *rs_get_blob(const uint8_t *blob, size_t sz, const char *ke
     if (e->data_off + e->data_size > sz) return NULL;
     if (out_sz) *out_sz = e->data_size;
     return blob + e->data_off;
+}
+
+static size_t wm_strlen_limited(const char *str, size_t max)
+{
+    if (!str || max == 0)
+    {
+        return 0;
+    }
+
+    size_t len = 0;
+    while (len < max && str[len])
+    {
+        ++len;
+    }
+
+    return len;
+}
+
+static int wm_titles_equal(const char *left, const char *right, size_t max_len)
+{
+    size_t l_len = wm_strlen_limited(left, max_len);
+    size_t r_len = wm_strlen_limited(right, max_len);
+
+    if (l_len != r_len)
+    {
+        return 0;
+    }
+
+    for (size_t i = 0; i < l_len; ++i)
+    {
+        if (left[i] != right[i])
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static void wm_copy_title(char *dst, const char *src, size_t dst_size)
+{
+    if (!dst || dst_size == 0)
+    {
+        return;
+    }
+
+    if (!src)
+    {
+        dst[0] = '\0';
+        return;
+    }
+
+    size_t copy_len = wm_strlen_limited(src, dst_size - 1);
+    memcpy(dst, src, copy_len);
+    dst[copy_len] = '\0';
+}
+
+static void wm_copy_title_if_changed(char *dst, const char *src, size_t dst_size)
+{
+    if (!dst || dst_size == 0)
+    {
+        return;
+    }
+
+    if (wm_titles_equal(dst, src, dst_size - 1))
+    {
+        return;
+    }
+
+    wm_copy_title(dst, src, dst_size);
+}
+
+static void wm_cache_window_title(wm_window_t *window, int channel, const char *title)
+{
+    if (!window)
+    {
+        return;
+    }
+
+    const char *resolved = title ? title : WM_TITLE_DEFAULT;
+    size_t max_cmp = WM_TITLE_BUFFER_SIZE - 1;
+
+    if (window->cached_title_valid &&
+        wm_titles_equal((const char *)window->cached_title, resolved, max_cmp))
+    {
+        window->cached_title_channel = channel;
+
+        if (!window->title_overridden)
+        {
+            wm_copy_title_if_changed(window->title, (const char *)window->cached_title, WM_TITLE_BUFFER_SIZE);
+        }
+
+        return;
+    }
+
+    wm_copy_title((char *)window->cached_title, resolved, WM_TITLE_BUFFER_SIZE);
+    window->cached_title_valid = 1;
+    window->cached_title_channel = channel;
+
+    if (!window->title_overridden)
+    {
+        wm_copy_title_if_changed(window->title, (const char *)window->cached_title, WM_TITLE_BUFFER_SIZE);
+    }
 }
 
 static uint8_t *wm_fetch_process_resources(int pid, uint32_t *out_sz)
@@ -314,15 +424,10 @@ static void wm_apply_window_resources(wm_window_t *window, int client_mailbox_ch
         title = rs_get_string(rblob, rsz, "APPLICATION_TITLE");
     }
 
+    wm_cache_window_title(window, client_mailbox_channel, title);
     if (title)
     {
-        strncpy(window->title, title, sizeof(window->title) - 1);
-        window->title[sizeof(window->title) - 1] = '\0';
         free(title);
-    }
-    else
-    {
-        strncpy(window->title, "Window", sizeof(window->title) - 1);
     }
 
     free(rblob);
@@ -1677,9 +1782,10 @@ static int wm_create_window(const dwm_window_desc_t *desc, uint32_t *out_id)
     window->focus_notified = 0;
     window->client_drawn = 0;
     window->title_overridden = 0;
+    window->cached_title_channel = -1;
+    window->cached_title_valid = 0;
     window->titlebar_hover_button = 0;
     window->titlebar_pressed_button = 0;
-    strncpy(window->title, "Window", sizeof(window->title) - 1);
 
     // Try to get window title from client's resources
     wm_apply_window_resources(window, client_channel);
@@ -1864,9 +1970,10 @@ static void wm_handle_message(const dwm_msg_t *msg)
                 wm_window_t *window = wm_find(msg->window_id);
                 if (window)
                 {
-                    strncpy(window->title, msg->set_title.title, sizeof(window->title) - 1);
-                    window->title[sizeof(window->title) - 1] = '\0';
                     window->title_overridden = 1;
+                    window->cached_title_valid = 0;
+                    window->cached_title_channel = -1;
+                    wm_copy_title_if_changed(window->title, msg->set_title.title, WM_TITLE_BUFFER_SIZE);
 
                     int dx, dy, dw, dh;
                     wm_get_decor_bounds(window, &dx, &dy, &dw, &dh);

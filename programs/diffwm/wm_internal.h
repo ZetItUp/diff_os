@@ -6,14 +6,21 @@
 //
 // This structure is used by the window manager to track client windows.
 // It's separate from the client-side window_t which has polymorphic components.
+
+#define WM_TITLE_BUFFER_SIZE 64
+#define WM_TITLE_DEFAULT "Window"
+
 typedef struct wm_window
 {
     uint32_t id;
     int handle;
     void *pixels;
     int drew_once;
-    char title[64];
+    char title[WM_TITLE_BUFFER_SIZE];
     int title_overridden;
+    int cached_title_channel;
+    uint8_t cached_title[WM_TITLE_BUFFER_SIZE];
+    int cached_title_valid;
 
     int x;
     int y;

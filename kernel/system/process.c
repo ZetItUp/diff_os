@@ -21,6 +21,227 @@
 #include "system/shared_mem.h"
 #include "interfaces.h"
 
+// Embedded resource format that lives inside DEX files
+#define PROCESS_RESOURCE_RS_MAGIC   0x53525845u
+#define PROCESS_RESOURCE_RS_VERSION 1u
+#define PROCESS_RESOURCE_RS_TYPE_STRING 1u
+
+typedef struct __attribute__((packed))
+{
+    uint32_t magic;
+    uint32_t version;
+    uint32_t entry_count;
+    uint32_t strtab_off;
+    uint32_t strtab_size;
+    uint32_t data_off;
+} rs_header_t;
+
+typedef struct __attribute__((packed))
+{
+    uint32_t name_hash;
+    uint32_t type;
+    uint32_t name_off;
+    uint32_t data_off;
+    uint32_t data_size;
+} rs_entry_t;
+
+static uint32_t rs_fnv1a(const char *s)
+{
+    uint32_t hash = 0x811C9DC5u;
+
+    if (!s)
+    {
+        return hash;
+    }
+
+    while (*s)
+    {
+        hash ^= (uint8_t)*s++;
+        hash *= 0x01000193u;
+    }
+
+    return hash;
+}
+
+static const rs_entry_t *process_find_resource_entry(const process_t *p, uint32_t hash)
+{
+    if (!p || !p->resources_kernel || p->resources_kernel_size < sizeof(rs_header_t))
+    {
+        return NULL;
+    }
+
+    const rs_header_t *header = (const rs_header_t *)p->resources_kernel;
+
+    if (header->magic != PROCESS_RESOURCE_RS_MAGIC || header->version != PROCESS_RESOURCE_RS_VERSION)
+    {
+        return NULL;
+    }
+
+    size_t table_size = (size_t)header->entry_count * sizeof(rs_entry_t);
+    size_t needed = sizeof(rs_header_t) + table_size;
+
+    if (needed > p->resources_kernel_size)
+    {
+        return NULL;
+    }
+
+    const uint8_t *table = (const uint8_t *)header + sizeof(rs_header_t);
+
+    for (uint32_t i = 0; i < header->entry_count; ++i)
+    {
+        const rs_entry_t *entry = (const rs_entry_t *)(table + i * sizeof(rs_entry_t));
+
+        if (entry->name_hash == hash &&
+            entry->type == PROCESS_RESOURCE_RS_TYPE_STRING &&
+            (size_t)entry->data_off + entry->data_size <= p->resources_kernel_size)
+        {
+            return entry;
+        }
+    }
+
+    return NULL;
+}
+
+static void process_copy_resource_entry(process_t *p, const rs_entry_t *entry)
+{
+    if (!p || !entry)
+    {
+        return;
+    }
+
+    const size_t target_size = sizeof(p->name);
+    size_t copy_len = entry->data_size;
+    const uint8_t *src = p->resources_kernel + entry->data_off;
+
+    if (copy_len >= target_size)
+    {
+        copy_len = target_size - 1;
+    }
+
+    if (copy_len > 0)
+    {
+        memcpy(p->name, src, copy_len);
+    }
+
+    p->name[copy_len] = '\0';
+}
+
+static void process_set_default_name(process_t *p, const char *path)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    const char *base = path;
+
+    if (base)
+    {
+        for (const char *it = base; *it; ++it)
+        {
+            if (*it == '/')
+            {
+                base = it + 1;
+            }
+        }
+    }
+
+    if (!base || *base == '\0')
+    {
+        base = "process";
+    }
+
+    strlcpy(p->name, base, sizeof(p->name));
+}
+
+void process_set_name(process_t *p, const char *name)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    if (!name)
+    {
+        p->name[0] = '\0';
+        return;
+    }
+
+    strlcpy(p->name, name, sizeof(p->name));
+}
+
+void process_assign_name_from_resources(process_t *p, const char *exec_path)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    static const char *const keys[] =
+    {
+        "APPLICATION_TITLE",
+        "WINDOW_TITLE"
+    };
+
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i)
+    {
+        const rs_entry_t *entry = process_find_resource_entry(p, rs_fnv1a(keys[i]));
+
+        if (entry)
+        {
+            process_copy_resource_entry(p, entry);
+            return;
+        }
+    }
+
+    process_set_default_name(p, exec_path);
+}
+
+const char *process_name(const process_t *p)
+{
+    static const char empty_name[] = "";
+
+    if (!p)
+    {
+        return empty_name;
+    }
+
+    return p->name;
+}
+
+int process_get_name(int pid, char *buf, size_t buf_sz)
+{
+    if (!buf || buf_sz == 0)
+    {
+        return -1;
+    }
+
+    process_t *target = process_find_by_pid(pid);
+
+    if (!target)
+    {
+        return -1;
+    }
+
+    char temp[NAME_MAX];
+    strlcpy(temp, process_name(target), sizeof(temp));
+
+    size_t copy_len = strlen(temp) + 1;
+
+    if (copy_len > buf_sz)
+    {
+        copy_len = buf_sz;
+        temp[copy_len - 1] = '\0';
+    }
+
+    if (copy_to_user(buf, temp, copy_len) != 0)
+    {
+        return -1;
+    }
+
+    return (int)(copy_len - 1);
+}
+
 extern void enter_user_mode(uint32_t entry_eip, uint32_t user_stack_top) __attribute__((noreturn));
 
 // Read CR3 of current CPU
@@ -317,6 +538,7 @@ void process_init(void)
     k->tty_id = 0;
     process_assign_default_cwd(k);
     process_set_exec_root(k, "/");
+    process_set_name(k, "kernel");
 
     // Link and set as current
     process_link(k);
@@ -604,6 +826,34 @@ int system_process_get_resources(int pid, void *user_buf, uint32_t buf_len)
     }
 
     return (int)sz;
+}
+
+int system_process_get_name(int pid, char *user_buf, size_t buf_len)
+{
+    process_t *p = process_find_by_pid(pid);
+
+    if (!p || !user_buf || buf_len == 0)
+    {
+        return -1;
+    }
+
+    char temp[NAME_MAX];
+    strlcpy(temp, process_name(p), sizeof(temp));
+
+    size_t needed = strlen(temp) + 1;
+    size_t copy_len = needed;
+    if (copy_len > buf_len)
+    {
+        copy_len = buf_len;
+        temp[copy_len - 1] = '\0';
+    }
+
+    if (copy_to_user(user_buf, temp, copy_len) != 0)
+    {
+        return -1;
+    }
+
+    return (int)(needed - 1);
 }
 
 // Get CR3 of a process

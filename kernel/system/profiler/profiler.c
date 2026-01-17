@@ -56,12 +56,14 @@ int profiler_start(int pid)
     s_profiler.total_samples = 0;
     s_profiler.sample_count = 0;
     memset(s_profiler.samples, 0, sizeof(s_profiler.samples));
+    strlcpy(s_profiler.target_name, process_name(target), sizeof(s_profiler.target_name));
 
     serial_write("[PROFILER] Started profiling PID ");
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "%d", s_profiler.target_pid);
     serial_write(buffer);
-    snprintf(buffer, sizeof(buffer), " (image_base=0x%08x, symbols=%d)\n",
+    snprintf(buffer, sizeof(buffer), " (name=%s image_base=0x%08x, symbols=%d)\n",
+             s_profiler.target_name[0] ? s_profiler.target_name : "-",
              s_profiler.image_base, s_profiler.symbol_count);
     serial_write(buffer);
 
@@ -199,7 +201,7 @@ int profiler_dump_csv(void)
 
     // Output CSV header
     serial_write("\n===PROFILE_CSV_START===\n");
-    serial_write("address,count,percent,library,function\n");
+    serial_write("address,count,percent,pid,name,library,function\n");
 
     char line[256];
 
@@ -211,10 +213,13 @@ int profiler_dump_csv(void)
 
         const char *lib_name = NULL;
         const char *func_name = find_symbol_name(addr, &lib_name);
+        const char *target_name = s_profiler.target_name[0] ? s_profiler.target_name : "-";
 
-        snprintf(line, sizeof(line), "0x%08x,%u,%u.%02u,%s,%s\n",
+        snprintf(line, sizeof(line), "0x%08x,%u,%u.%02u,%d,%s,%s,%s\n",
                  addr, count,
                  percent_x100 / 100, percent_x100 % 100,
+                 s_profiler.target_pid,
+                 target_name,
                  lib_name ? lib_name : "-",
                  func_name);
 
@@ -225,7 +230,7 @@ int profiler_dump_csv(void)
 
     // Also output a summary grouped by library:function
     serial_write("===PROFILE_SUMMARY_START===\n");
-    serial_write("library,function,total_count,percent\n");
+    serial_write("library,function,pid,name,total_count,percent\n");
 
     // Aggregate by library:function
     typedef struct
@@ -286,9 +291,14 @@ int profiler_dump_csv(void)
     {
         uint32_t percent_x100 = (summaries[i].count * 10000) / s_profiler.total_samples;
 
-        snprintf(line, sizeof(line), "%s,%s,%u,%u.%02u\n",
+        const char *target_name = s_profiler.target_name[0] ? s_profiler.target_name : "-";
+
+        snprintf(line, sizeof(line), "%s,%s,%d,%s,%u,%u.%02u\n",
                  summaries[i].library ? summaries[i].library : "-",
-                 summaries[i].name, summaries[i].count,
+                 summaries[i].name,
+                 s_profiler.target_pid,
+                 target_name,
+                 summaries[i].count,
                  percent_x100 / 100, percent_x100 % 100);
 
         serial_write(line);

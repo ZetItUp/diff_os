@@ -19,3 +19,8 @@ int process_get_resources(int pid, void *buffer, unsigned int buffer_len)
 {
     return system_process_get_resources(pid, buffer, buffer_len);
 }
+
+int process_get_name(int pid, char *buffer, unsigned int buffer_len)
+{
+    return system_process_get_name(pid, buffer, buffer_len);
+}

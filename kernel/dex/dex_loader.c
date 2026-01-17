@@ -37,6 +37,51 @@ static inline int is_user_va(uint32_t address)
     return (address >= USER_MIN) && (address < USER_MAX);
 }
 
+static void dex_assign_process_resources(process_t *process,
+                                         const dex_executable_t *loaded,
+                                         const FileEntry *file_entry,
+                                         const uint8_t *file_buffer,
+                                         const char *exec_path)
+{
+    if (!process)
+    {
+        return;
+    }
+
+    if (process->resources_kernel)
+    {
+        kfree(process->resources_kernel);
+        process->resources_kernel = NULL;
+        process->resources_kernel_size = 0;
+    }
+
+    if (!loaded || !loaded->header || !file_entry || !file_buffer)
+    {
+        process_assign_name_from_resources(process, exec_path);
+        return;
+    }
+
+    uint32_t file_size = fe_file_size_bytes(file_entry);
+    uint32_t resource_size = loaded->header->resources_size;
+    uint32_t resource_offset = loaded->header->resources_offset;
+
+    if (resource_size && resource_offset + resource_size <= file_size)
+    {
+        uint8_t *resource_copy = (uint8_t *)kmalloc(resource_size);
+
+        if (resource_copy)
+        {
+            memcpy(resource_copy,
+                   file_buffer + resource_offset,
+                   resource_size);
+            process->resources_kernel = resource_copy;
+            process->resources_kernel_size = resource_size;
+        }
+    }
+
+    process_assign_name_from_resources(process, exec_path);
+}
+
 // Safe range check for file sections
 static inline int in_range(uint32_t offset, uint32_t size, uint32_t maximum)
 {
@@ -1090,6 +1135,11 @@ int dex_run(const FileTable *file_table_ref, const char *path, int argument_coun
                (void *)process->heap_max);
     }
 
+    if (process)
+    {
+        dex_assign_process_resources(process, &loaded_executable, file_entry, file_buffer, path);
+    }
+
     // Load symbols for profiler
     profiler_load_symbols(file_buffer, fe_file_size_bytes(file_entry),
                           (uint32_t)loaded_executable.image_base, NULL);
@@ -1331,20 +1381,7 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
     process->resources_size = loaded_executable.resources_size;
 
     // Keep a kernel copy of the resources for cross process queries
-    if (loaded_executable.header && loaded_executable.header->resources_size &&
-        loaded_executable.header->resources_offset + loaded_executable.header->resources_size <=
-        fe_file_size_bytes(file_entry))
-    {
-        uint32_t resource_size = loaded_executable.header->resources_size;
-        uint8_t *resource_copy = (uint8_t *)kmalloc(resource_size);
-
-        if (resource_copy)
-        {
-            memcpy(resource_copy, file_buffer + loaded_executable.header->resources_offset, resource_size);
-            process->resources_kernel = resource_copy;
-            process->resources_kernel_size = resource_size;
-        }
-    }
+    dex_assign_process_resources(process, &loaded_executable, file_entry, file_buffer, path);
 
     // Load symbols for profiler
     profiler_load_symbols(file_buffer, fe_file_size_bytes(file_entry),

@@ -491,10 +491,6 @@ int event_process_keyboard(event_context_t *ctx)
             consumed = EVENT_CONSUMED;
         }
 
-        if (kev.pressed && (kev.key == 'x' || kev.key == 'X'))
-        {
-            process_exit(0);
-        }
     }
 
     return consumed;

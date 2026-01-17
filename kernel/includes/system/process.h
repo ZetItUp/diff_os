@@ -6,6 +6,7 @@
 #include "system/spinlock.h"
 #include "system/signal.h"
 #include "system/signal.h"
+#include "dirent.h"
 
 typedef enum process_state
 {
@@ -59,6 +60,7 @@ typedef struct process
     // re-root child processes when resolving relative paths while still
     // allowing the caller's cwd to remain intact.
     char exec_root[256];
+    char name[NAME_MAX];
 
     signal_state_t signal;
 
@@ -109,6 +111,10 @@ process_t *process_create_user_with_cr3(uint32_t user_eip,
                                         uintptr_t heap_end,
                                         uintptr_t heap_max);
 process_t *process_find_by_pid(int pid);
+void process_set_name(process_t *p, const char *name);
+void process_assign_name_from_resources(process_t *p, const char *exec_path);
+const char *process_name(const process_t *p);
+int process_get_name(int pid, char *buf, size_t buf_sz);
 int system_wait_pid(int pid, int *u_status);
 int system_wait_pid_nohang(int pid, int *u_status);
 uint32_t read_cr3_local(void);
@@ -121,3 +127,4 @@ void process_set_user_stack(process_t *p, uintptr_t base, uintptr_t top, size_t 
 void process_set_kernel_stack(process_t *p, uintptr_t base, uintptr_t top, size_t size);
 int system_thread_create_user(uintptr_t user_eip, uintptr_t user_esp, size_t kstack_bytes);
 int system_process_get_resources(int pid, void *user_buf, uint32_t buf_len);
+int system_process_get_name(int pid, char *user_buf, size_t buf_len);

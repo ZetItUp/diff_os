@@ -2,6 +2,7 @@
 
 #include "stdint.h"
 #include "stddef.h"
+#include "dirent.h"
 
 // Maximum number of unique sample addresses to track
 #define PROFILER_MAX_SAMPLES 4096
@@ -37,6 +38,7 @@ typedef struct
     int target_pid;
     uint32_t image_base;
     uint32_t total_samples;
+    char target_name[NAME_MAX];
 
     // Sample histogram
     profiler_sample_t samples[PROFILER_MAX_SAMPLES];
