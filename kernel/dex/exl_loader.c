@@ -9,6 +9,7 @@
 #include "paging.h"
 #include "heap.h"
 #include "system/usercopy.h"
+#include "system/profiler.h"
 #include "debug.h"
 
 #define EXL_DBG(...) DDBG_IF(DEBUG_AREA_EXL, __VA_ARGS__)
@@ -1160,6 +1161,9 @@ const exl_t *load_exl(const FileTable *file_table_ref, const char *exl_name)
 
     exl_cr3s[exl_count] = current_cr3;
     exl_count++;
+
+    // Load symbols for profiler
+    profiler_load_symbols(file_buffer, file_size, (uint32_t)image, normalized_name);
 
     // Free file buffer
     ufree(file_buffer, file_size);

@@ -3,6 +3,7 @@
 #include "system/process.h"
 #include "system/syscall.h"
 #include "system/path.h"
+#include "system/profiler.h"
 #include "diff.h"
 #include "string.h"
 #include "stdint.h"
@@ -1088,7 +1089,11 @@ int dex_run(const FileTable *file_table_ref, const char *path, int argument_coun
                process->pid, (void *)process->heap_base, (void *)process->heap_end,
                (void *)process->heap_max);
     }
-    
+
+    // Load symbols for profiler
+    profiler_load_symbols(file_buffer, fe_file_size_bytes(file_entry),
+                          (uint32_t)loaded_executable.image_base, NULL);
+
     // Jump to user mode
     enter_user_mode((uint32_t)exit_stub, user_stack_pointer);
 
@@ -1340,6 +1345,10 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
             process->resources_kernel_size = resource_size;
         }
     }
+
+    // Load symbols for profiler
+    profiler_load_symbols(file_buffer, fe_file_size_bytes(file_entry),
+                          (uint32_t)loaded_executable.image_base, NULL);
 
     kfree(file_buffer);
 
