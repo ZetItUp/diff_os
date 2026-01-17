@@ -9,6 +9,7 @@ devmgr=/programs/devmgr/devmgr.dex
 prof=/programs/profiler/profiler.dex
 
 # Test Programs
+floattest=/programs/floattest/floattest.dex
 helloc=programs/helloc++/helloc++.dex
 ptest=/programs/ptest/ptest.dex
 ttest=/programs/ttest/ttest.dex

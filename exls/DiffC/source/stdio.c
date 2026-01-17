@@ -547,6 +547,218 @@ static int vcbprintf(void (*sink)(int, void*), void *ctx, const char *fmt, va_li
                 break;
             }
 
+            case 'f':
+            case 'F':
+            case 'e':
+            case 'E':
+            case 'g':
+            case 'G':
+            {
+                double val = va_arg(ap, double);
+                char buf[64];
+                int buf_len = 0;
+                int prec = (precision < 0) ? 6 : precision;
+
+                // Handle special values
+                int is_neg = 0;
+                if (val < 0.0)
+                {
+                    is_neg = 1;
+                    val = -val;
+                }
+
+                // Check for NaN and Inf using bit patterns
+                union { double d; uint64_t u; } fpbits;
+                fpbits.d = val;
+                uint64_t exp_mask = 0x7FF0000000000000ULL;
+                uint64_t mant_mask = 0x000FFFFFFFFFFFFFULL;
+                int is_inf = ((fpbits.u & exp_mask) == exp_mask) && ((fpbits.u & mant_mask) == 0);
+                int is_nan = ((fpbits.u & exp_mask) == exp_mask) && ((fpbits.u & mant_mask) != 0);
+
+                if (is_nan)
+                {
+                    const char *s = (spec == 'F' || spec == 'E' || spec == 'G') ? "NAN" : "nan";
+                    while (*s) { buf[buf_len++] = *s++; }
+                }
+                else if (is_inf)
+                {
+                    if (is_neg) { buf[buf_len++] = '-'; is_neg = 0; }
+                    const char *s = (spec == 'F' || spec == 'E' || spec == 'G') ? "INF" : "inf";
+                    while (*s) { buf[buf_len++] = *s++; }
+                }
+                else if (spec == 'e' || spec == 'E')
+                {
+                    // Scientific notation
+                    int exp10 = 0;
+                    if (val != 0.0)
+                    {
+                        while (val >= 10.0) { val /= 10.0; exp10++; }
+                        while (val < 1.0 && val > 0.0) { val *= 10.0; exp10--; }
+                    }
+
+                    // Round
+                    double rnd = 0.5;
+                    for (int r = 0; r < prec; r++) rnd /= 10.0;
+                    val += rnd;
+                    if (val >= 10.0) { val /= 10.0; exp10++; }
+
+                    // Integer part (single digit)
+                    int ipart = (int)val;
+                    buf[buf_len++] = '0' + ipart;
+
+                    // Decimal point and fraction
+                    if (prec > 0)
+                    {
+                        buf[buf_len++] = '.';
+                        val -= ipart;
+                        for (int d = 0; d < prec; d++)
+                        {
+                            val *= 10.0;
+                            int digit = (int)val;
+                            buf[buf_len++] = '0' + digit;
+                            val -= digit;
+                        }
+                    }
+
+                    // Exponent
+                    buf[buf_len++] = (spec == 'E') ? 'E' : 'e';
+                    buf[buf_len++] = (exp10 >= 0) ? '+' : '-';
+                    if (exp10 < 0) exp10 = -exp10;
+                    if (exp10 >= 100)
+                    {
+                        buf[buf_len++] = '0' + (exp10 / 100);
+                        exp10 %= 100;
+                    }
+                    buf[buf_len++] = '0' + (exp10 / 10);
+                    buf[buf_len++] = '0' + (exp10 % 10);
+                }
+                else // 'f', 'F', 'g', 'G'
+                {
+                    // For %g/%G, choose between %f and %e based on magnitude
+                    int use_exp = 0;
+                    int exp10 = 0;
+                    double orig_val = val;
+
+                    if ((spec == 'g' || spec == 'G') && val != 0.0)
+                    {
+                        double tv = val;
+                        while (tv >= 10.0) { tv /= 10.0; exp10++; }
+                        while (tv < 1.0 && tv > 0.0) { tv *= 10.0; exp10--; }
+                        // Use %e if exponent < -4 or >= precision
+                        int gprec = (prec == 0) ? 1 : prec;
+                        if (exp10 < -4 || exp10 >= gprec) use_exp = 1;
+                    }
+
+                    if (use_exp)
+                    {
+                        // Use scientific notation for %g/%G
+                        val = orig_val;
+                        exp10 = 0;
+                        while (val >= 10.0) { val /= 10.0; exp10++; }
+                        while (val < 1.0 && val > 0.0) { val *= 10.0; exp10--; }
+
+                        double rnd = 0.5;
+                        int gprec = (prec == 0) ? 0 : prec - 1;
+                        for (int r = 0; r < gprec; r++) rnd /= 10.0;
+                        val += rnd;
+                        if (val >= 10.0) { val /= 10.0; exp10++; }
+
+                        int ipart = (int)val;
+                        buf[buf_len++] = '0' + ipart;
+                        if (gprec > 0)
+                        {
+                            buf[buf_len++] = '.';
+                            val -= ipart;
+                            for (int d = 0; d < gprec; d++)
+                            {
+                                val *= 10.0;
+                                int digit = (int)val;
+                                buf[buf_len++] = '0' + digit;
+                                val -= digit;
+                            }
+                        }
+                        buf[buf_len++] = (spec == 'G') ? 'E' : 'e';
+                        buf[buf_len++] = (exp10 >= 0) ? '+' : '-';
+                        if (exp10 < 0) exp10 = -exp10;
+                        if (exp10 >= 100)
+                        {
+                            buf[buf_len++] = '0' + (exp10 / 100);
+                            exp10 %= 100;
+                        }
+                        buf[buf_len++] = '0' + (exp10 / 10);
+                        buf[buf_len++] = '0' + (exp10 % 10);
+                    }
+                    else
+                    {
+                        // Fixed-point notation
+                        // Round the value
+                        double rnd = 0.5;
+                        for (int r = 0; r < prec; r++) rnd /= 10.0;
+                        val += rnd;
+
+                        // Extract integer part
+                        uint64_t ipart = (uint64_t)val;
+                        double fpart = val - (double)ipart;
+
+                        // Convert integer part
+                        char ibuf[24];
+                        int ilen = 0;
+                        if (ipart == 0)
+                        {
+                            ibuf[ilen++] = '0';
+                        }
+                        else
+                        {
+                            while (ipart > 0)
+                            {
+                                ibuf[ilen++] = '0' + (ipart % 10);
+                                ipart /= 10;
+                            }
+                        }
+
+                        // Copy integer part reversed
+                        while (--ilen >= 0)
+                        {
+                            buf[buf_len++] = ibuf[ilen];
+                        }
+
+                        // Decimal point and fraction
+                        if (prec > 0)
+                        {
+                            buf[buf_len++] = '.';
+                            for (int d = 0; d < prec; d++)
+                            {
+                                fpart *= 10.0;
+                                int digit = (int)fpart;
+                                buf[buf_len++] = '0' + digit;
+                                fpart -= digit;
+                            }
+                        }
+                    }
+                }
+
+                // Calculate padding
+                int need = buf_len + (is_neg ? 1 : 0);
+                int pad = (width > need) ? (width - need) : 0;
+
+                // Output with padding
+                if (!left)
+                {
+                    if (!pad0) { while (pad--) { sink(' ', ctx); out++; } }
+                    if (is_neg) { sink('-', ctx); out++; }
+                    if (pad0) { while (pad--) { sink('0', ctx); out++; } }
+                    for (int j = 0; j < buf_len; j++) { sink(buf[j], ctx); out++; }
+                }
+                else
+                {
+                    if (is_neg) { sink('-', ctx); out++; }
+                    for (int j = 0; j < buf_len; j++) { sink(buf[j], ctx); out++; }
+                    while (pad--) { sink(' ', ctx); out++; }
+                }
+
+                break;
+            }
+
             default:
             {
                 /* unknown specifier: print it verbatim */
