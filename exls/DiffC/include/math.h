@@ -1,5 +1,8 @@
 #pragma once
 
+#define M_PI 3.14159265358979323846
+#define M_E  2.71828182845904523536
+
 double atan(double x);
 double atan2(double y, double x);
 double ceil(double x);

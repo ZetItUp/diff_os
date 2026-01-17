@@ -138,7 +138,12 @@ static double wrap_pi(double x)
 static double sin_poly(double x)
 {
     double x2 = x * x;
-    double poly = ((((-1.0 / 5040.0) * x2 + (1.0 / 120.0)) * x2 - (1.0 / 6.0)) * x2 + 1.0);
+    double poly = 1.0 + x2 * (-(1.0 / 6.0)
+        + x2 * ((1.0 / 120.0)
+        + x2 * (-(1.0 / 5040.0)
+        + x2 * ((1.0 / 362880.0)
+        + x2 * (-(1.0 / 39916800.0)
+        + x2 * (1.0 / 6227020800.0))))));
 
     return x * poly;
 }
@@ -146,7 +151,12 @@ static double sin_poly(double x)
 static double cos_poly(double x)
 {
     double x2 = x * x;
-    double poly = (((-1.0 / 720.0) * x2 + (1.0 / 24.0)) * x2 - (1.0 / 2.0)) * x2 + 1.0;
+    double poly = 1.0 + x2 * (-(1.0 / 2.0)
+        + x2 * ((1.0 / 24.0)
+        + x2 * (-(1.0 / 720.0)
+        + x2 * ((1.0 / 40320.0)
+        + x2 * (-(1.0 / 3628800.0)
+        + x2 * (1.0 / 479001600.0))))));
 
     return poly;
 }

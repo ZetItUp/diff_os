@@ -10,6 +10,7 @@ prof=/programs/profiler/profiler.dex
 
 # Test Programs
 floattest=/programs/floattest/floattest.dex
+mathtest=/programs/mathtest/mathtest.dex
 helloc=programs/helloc++/helloc++.dex
 ptest=/programs/ptest/ptest.dex
 ttest=/programs/ttest/ttest.dex
