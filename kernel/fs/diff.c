@@ -28,6 +28,9 @@
 // Upper bound for how many sectors we move per I/O batch
 #define MAX_SECTORS_PER_OP 32u
 
+// Per-file read cache for small repeated reads
+#define FILE_READ_CACHE_BYTES (64u * 1024u)
+
 // Local helpers without locks
 static int find_entry_by_path_nolock(const FileTable* table, const char* path);
 static int path_next_token(char** it, char* out, size_t out_sz);
@@ -364,6 +367,85 @@ static int read_at_entry(const FileEntry* fe, uint32_t offset, void* buffer, uin
     return read_bytes;
 }
 
+static void file_cache_reset(FileHandle* handle)
+{
+    if (!handle)
+    {
+
+        return;
+    }
+
+    handle->cache_start = 0;
+    handle->cache_valid = 0;
+}
+
+static int file_cache_ensure(FileHandle* handle)
+{
+    if (!handle)
+    {
+
+        return -1;
+    }
+
+    if (!handle->cache_buf)
+    {
+        handle->cache_buf = (uint8_t*)kmalloc(FILE_READ_CACHE_BYTES);
+        if (!handle->cache_buf)
+        {
+
+            return -1;
+        }
+    }
+
+
+    return 0;
+}
+
+static int file_cache_fill(const FileEntry* fe, FileHandle* handle, uint32_t offset)
+{
+    if (!fe || !handle)
+    {
+
+        return -1;
+    }
+
+    if (file_cache_ensure(handle) != 0)
+    {
+
+        return -1;
+    }
+
+    uint32_t file_size = fe_file_size_bytes(fe);
+    if (offset >= file_size)
+    {
+        handle->cache_start = offset;
+        handle->cache_valid = 0;
+
+
+        return 0;
+    }
+
+    uint32_t remain = file_size - offset;
+    uint32_t want = FILE_READ_CACHE_BYTES;
+    if (want > remain)
+    {
+        want = remain;
+    }
+
+    int r = read_at_entry(fe, offset, handle->cache_buf, want);
+    if (r < 0)
+    {
+
+        return -1;
+    }
+
+    handle->cache_start = offset;
+    handle->cache_valid = (uint32_t)r;
+
+
+    return r;
+}
+
 // Initializes file descriptor table
 static void filesystem_fd_init(void)
 {
@@ -372,6 +454,9 @@ static void filesystem_fd_init(void)
         s_fd_table[i].entry_index = 0;
         s_fd_table[i].offset = 0;
         s_fd_table[i].in_use = 0;
+        s_fd_table[i].cache_buf = NULL;
+        s_fd_table[i].cache_start = 0;
+        s_fd_table[i].cache_valid = 0;
     }
 }
 
@@ -1476,6 +1561,9 @@ int filesystem_open(const char* path)
             s_fd_table[i].entry_index = (uint32_t)idx;
             s_fd_table[i].offset = 0;
             s_fd_table[i].in_use = 1;
+            s_fd_table[i].cache_buf = NULL;
+            s_fd_table[i].cache_start = 0;
+            s_fd_table[i].cache_valid = 0;
             return i;
         }
     }
@@ -1503,9 +1591,17 @@ int filesystem_close(int fd)
         (void)write_sector_bitmap(&superblock);
     }
 
+    if (s_fd_table[fd].cache_buf)
+    {
+        kfree(s_fd_table[fd].cache_buf);
+        s_fd_table[fd].cache_buf = NULL;
+    }
+
     s_fd_table[fd].entry_index = (uint32_t)-1;
     s_fd_table[fd].offset = 0;
     s_fd_table[fd].in_use = 0;
+    s_fd_table[fd].cache_start = 0;
+    s_fd_table[fd].cache_valid = 0;
 
     return 0;
 }
@@ -1518,6 +1614,7 @@ int filesystem_read(int fd, void* buffer, uint32_t count)
     }
 
     const FileEntry* fe = filesystem_get_entry_for_fd(fd);
+    FileHandle* handle = &s_fd_table[fd];
     uint32_t off = filesystem_get_offset_for_fd(fd);
 
     if (!fe)
@@ -1537,17 +1634,68 @@ int filesystem_read(int fd, void* buffer, uint32_t count)
         count = remain;
     }
 
-    int r = read_at_entry(fe, off, buffer, count);
-    if (r < 0)
+    uint32_t total = 0;
+
+    while (total < count)
     {
-        return -1;
+        uint32_t cur = off + total;
+        uint32_t avail = 0;
+
+        if (handle->cache_valid &&
+            cur >= handle->cache_start &&
+            cur < handle->cache_start + handle->cache_valid)
+        {
+            avail = (handle->cache_start + handle->cache_valid) - cur;
+        }
+        else
+        {
+            int fill = file_cache_fill(fe, handle, cur);
+            if (fill < 0)
+            {
+                if (total == 0)
+                {
+
+                    return -1;
+                }
+
+                break;
+            }
+
+            if (handle->cache_valid == 0)
+            {
+                break;
+            }
+
+            avail = handle->cache_valid;
+        }
+
+        uint32_t to_copy = count - total;
+        if (to_copy > avail)
+        {
+            to_copy = avail;
+        }
+
+        if (safe_copy_out((uint8_t*)buffer + total,
+            handle->cache_buf + (cur - handle->cache_start), to_copy) < 0)
+        {
+            if (total == 0)
+            {
+
+                return -1;
+            }
+
+            break;
+        }
+
+        total += to_copy;
     }
 
-    filesystem_set_offset_for_fd(fd, off + (uint32_t)r);
+    filesystem_set_offset_for_fd(fd, off + total);
 // i filesystem_read() (diff.c)
 //printf("[FS] read fd=%d off=%u cnt=%u -> r=%d\n", fd, off, count, r);
 
-    return r;
+
+    return (int)total;
 }
 
 int32_t filesystem_lseek(int fd, int32_t off, int whence)
@@ -1596,6 +1744,7 @@ int32_t filesystem_lseek(int fd, int32_t off, int whence)
 
     uint32_t new_off = (uint32_t)proposed;
     filesystem_set_offset_for_fd(fd, new_off);
+    file_cache_reset(&s_fd_table[fd]);
 
     return (int32_t)new_off;
 }
@@ -2117,6 +2266,8 @@ int filesystem_write(int fd, const void* buffer, uint32_t count)
     {
         filesystem_set_offset_for_fd(fd, off + (uint32_t)r);
     }
+
+    file_cache_reset(&s_fd_table[fd]);
 
     spin_unlock(&file_table_lock);
 

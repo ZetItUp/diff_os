@@ -414,6 +414,7 @@ games:
 
 quake:
 	@echo "[Games] Compiling quake"
+	@$(MAKE) -C games/quake/WinQuake clean
 	@$(MAKE) -C games/quake/WinQuake
 
 allclean: clean

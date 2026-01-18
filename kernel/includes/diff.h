@@ -94,6 +94,9 @@ typedef struct FileHandle
     uint32_t entry_index;  // Index into file_table entries
     uint32_t offset;       // Current read offset
     int in_use;            // 1 if slot is allocated
+    uint8_t *cache_buf;    // Read cache buffer
+    uint32_t cache_start;  // Cache start offset
+    uint32_t cache_valid;  // Valid bytes in cache
 } FileHandle;
 
 typedef struct filesystem_stat_t
