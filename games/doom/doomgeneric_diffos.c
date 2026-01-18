@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <stdlib.h>
 #include <string.h>
 #include <syscall.h>
 #include <unistd.h>
@@ -145,8 +146,7 @@ void DG_Init(void)
     int w = DOOMGENERIC_RESX;
     int h = DOOMGENERIC_RESY;
 
-    size_t n = (size_t)w * h;
-    DG_ScreenBuffer = (pixel_t*)malloc(n * sizeof(pixel_t));
+    pixel_t *old_buffer = DG_ScreenBuffer;
 
     char exec_root[256];
     if (system_getexecroot(exec_root, sizeof(exec_root)) >= 0 && exec_root[0] != '\0')
@@ -171,6 +171,13 @@ void DG_Init(void)
         printf("[DOOM] Failed to create window!\n");
         return;
     }
+
+    if (old_buffer && old_buffer != (pixel_t *)g_doom_window->pixels)
+    {
+        free(old_buffer);
+    }
+
+    DG_ScreenBuffer = (pixel_t *)g_doom_window->pixels;
 
     // Push an initial blank frame so the WM shows the window even before the first game draw.
     memset(DG_ScreenBuffer, 0, (size_t)w * h * sizeof(pixel_t));
