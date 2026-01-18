@@ -20,5 +20,5 @@
 #define GFX_CLOSE_HOVER         "/system/graphics/close_hover.tga"
 #define GFX_CLOSE_PRESSED       "/system/graphics/close_pressed.tga"
 
-#define desktop_background_color color_rgb(7, 0, 63)
+#define desktop_background_color color_rgb(38, 54, 31)
 // #define desktop_background_color color_rgb(69, 67, 117)

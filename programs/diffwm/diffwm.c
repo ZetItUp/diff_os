@@ -446,36 +446,6 @@ static void wm_window_mark_damage(wm_window_t *window, int rel_x, int rel_y, int
     rect->h = height;
 }
 
-static void wm_damage_window_area(int x, int y, int w, int h)
-{
-    if (w <= 0 || h <= 0)
-    {
-        return;
-    }
-
-    for (wm_window_t *win = g_windows; win; win = win->next)
-    {
-        int win_x = win->x;
-        int win_y = win->y;
-        int win_w = (int)win->width;
-        int win_h = (int)win->height;
-
-        int overlap_x0 = x > win_x ? x : win_x;
-        int overlap_y0 = y > win_y ? y : win_y;
-        int overlap_x1 = (x + w) < (win_x + win_w) ? (x + w) : (win_x + win_w);
-        int overlap_y1 = (y + h) < (win_y + win_h) ? (y + h) : (win_y + win_h);
-
-        if (overlap_x0 < overlap_x1 && overlap_y0 < overlap_y1)
-        {
-            wm_window_mark_damage(win,
-                                  overlap_x0 - win_x,
-                                  overlap_y0 - win_y,
-                                  overlap_x1 - overlap_x0,
-                                  overlap_y1 - overlap_y0);
-        }
-    }
-}
-
 static void wm_schedule_full_redraw(wm_window_t *window)
 {
     if (!window)
@@ -1502,6 +1472,9 @@ static void wm_repaint_dirty_region(void)
     // Temporarily suppress dirty marking during repaint
     g_disable_dirty_mark = 1;
 
+    // Fill background first to ensure clean slate
+    wm_fill_bg_region(min_x, min_y, dirty_w, dirty_h);
+
     wm_draw_desktop_icons(min_x, min_y, dirty_w, dirty_h);
 
     // Collect windows so we can paint bottom-to-top (oldest first).
@@ -1525,10 +1498,9 @@ static void wm_repaint_dirty_region(void)
 
         if (rects_intersect(min_x, min_y, dirty_w, dirty_h, wx, wy, ww, wh))
         {
-            if (!win->needs_full_redraw && win->damage_count == 0)
-            {
-                wm_schedule_full_redraw(win);
-            }
+            // Always schedule full redraw when repainting dirty region
+            // since we cleared the background
+            wm_schedule_full_redraw(win);
             dwm_msg_t msg = {0};
             msg.window_id = win->id;
             wm_draw_window(&msg);
@@ -1542,16 +1514,14 @@ static void wm_repaint_dirty_region(void)
         int wx, wy, ww, wh;
         wm_get_decor_bounds(fwin, &wx, &wy, &ww, &wh);
 
-    if (rects_intersect(min_x, min_y, dirty_w, dirty_h, wx, wy, ww, wh))
-    {
-        if (!fwin->needs_full_redraw && fwin->damage_count == 0)
+        if (rects_intersect(min_x, min_y, dirty_w, dirty_h, wx, wy, ww, wh))
         {
+            // Always schedule full redraw when repainting dirty region
             wm_schedule_full_redraw(fwin);
+            dwm_msg_t msg = {0};
+            msg.window_id = fwin->id;
+            wm_draw_window(&msg);
         }
-        dwm_msg_t msg = {0};
-        msg.window_id = fwin->id;
-        wm_draw_window(&msg);
-    }
     }
 
     g_disable_dirty_mark = 0;
@@ -1668,10 +1638,10 @@ void wm_set_focus(wm_window_t *window)
     g_prev_focus = old_focus;
     g_focus_dirty = 1; // Need to repaint borders for focus change
 
-    // Immediately redraw focus-sensitive decorations and present
-    // wm_redraw_focus_dirty() now clears and draws directly, so no need
-    // for wm_repaint_dirty_region() which would erase our drawings
+    // Mark dirty areas and use wm_repaint_dirty_region to properly
+    // redraw all windows in z-order
     wm_redraw_focus_dirty();
+    wm_repaint_dirty_region();
     wm_draw_cursor();
     wm_request_present();
 }
@@ -1689,31 +1659,26 @@ static void wm_add_window(wm_window_t *window)
     g_event_ctx.focused = window;
     g_event_ctx.windows = g_windows;
 
-    // Repaint old window with unfocused decorations
+    // Mark old window area as dirty for unfocused decoration repaint
     if (old_focus)
     {
         int dx, dy, dw, dh;
         wm_get_decor_bounds(old_focus, &dx, &dy, &dw, &dh);
-        wm_fill_bg_region(dx, dy, dw, dh);
-
-        dwm_msg_t msg = {0};
-        msg.window_id = old_focus->id;
-        wm_draw_window(&msg);
-
         wm_add_dirty_rect(dx, dy, dw, dh);
-
-        // Present immediately so decorations update is visible
-        wm_draw_cursor();
-        wm_request_present();
 
         // Send focus lost event to the old window
         event_send_focus(old_focus, 0);
     }
 
-    // Mark the new window's decorated bounds as dirty so it renders on first present.
+    // Mark the new window's decorated bounds as dirty so it renders on first present
     int nx, ny, nw, nh;
     wm_get_decor_bounds(window, &nx, &ny, &nw, &nh);
     wm_add_dirty_rect(nx, ny, nw, nh);
+
+    // Use wm_repaint_dirty_region to properly redraw all windows in z-order
+    wm_repaint_dirty_region();
+    wm_draw_cursor();
+    wm_request_present();
 
     g_needs_redraw = 1;
 }
@@ -1736,7 +1701,10 @@ static inline void wm_memset32(uint32_t *dst, uint32_t val, size_t count)
 // Clear a region of the backbuffer to the desktop background color
 void wm_clear_region(int x, int y, int w, int h)
 {
-    if (!g_backbuffer) return;
+    if (!g_backbuffer)
+    {
+        return;
+    }
 
     const uint32_t bg = desktop_background_color;
 
@@ -1750,7 +1718,10 @@ void wm_clear_region(int x, int y, int w, int h)
 
     int row_width = x1 - x0;
     int row_height = y1 - y0;
-    if (row_width <= 0 || row_height <= 0) return;
+    if (row_width <= 0 || row_height <= 0)
+    {
+        return;
+    }
 
     for (int row = y0; row < y1; row++)
     {
@@ -1758,8 +1729,8 @@ void wm_clear_region(int x, int y, int w, int h)
         wm_memset32(dst, bg, (size_t)row_width);
     }
 
-    wm_damage_window_area(x0, y0, row_width, row_height);
-    // Mark cleared region as dirty
+    // Mark cleared region as dirty - wm_repaint_dirty_region will handle
+    // scheduling full redraws for any intersecting windows
     wm_add_dirty_rect(x0, y0, row_width, row_height);
 }
 
@@ -1860,9 +1831,9 @@ static int wm_update_mouse(void)
     return moved;
 }
 
-// Repaint focus-related window decorations.
-// Clears and redraws both the previously focused and newly focused windows
-// to update their decoration colors (title bar, border).
+// Mark focus-related window areas as dirty for repaint.
+// The actual redraw is handled by wm_repaint_dirty_region() which
+// properly draws all windows in z-order.
 static void wm_redraw_focus_dirty(void)
 {
     if (!g_focus_dirty)
@@ -1870,41 +1841,21 @@ static void wm_redraw_focus_dirty(void)
         return;
     }
 
-    // Clear and redraw the previously focused window (now unfocused)
-        if (g_prev_focus)
-        {
-            int dx, dy, dw, dh;
-            wm_get_decor_bounds(g_prev_focus, &dx, &dy, &dw, &dh);
+    // Mark the previously focused window area as dirty
+    if (g_prev_focus)
+    {
+        int dx, dy, dw, dh;
+        wm_get_decor_bounds(g_prev_focus, &dx, &dy, &dw, &dh);
+        wm_add_dirty_rect(dx, dy, dw, dh);
+    }
 
-            // Clear the decoration area to background
-            wm_fill_bg_region(dx, dy, dw, dh);
-
-            // Redraw the window with unfocused decorations
-            dwm_msg_t msg = {0};
-            msg.window_id = g_prev_focus->id;
-            wm_schedule_full_redraw(g_prev_focus);
-            wm_draw_window(&msg);
-
-            wm_add_dirty_rect(dx, dy, dw, dh);
-        }
-
-    // Clear and redraw the newly focused window
-        if (g_focused)
-        {
-            int dx, dy, dw, dh;
-            wm_get_decor_bounds(g_focused, &dx, &dy, &dw, &dh);
-
-            // Clear the decoration area to background
-            wm_fill_bg_region(dx, dy, dw, dh);
-
-            // Redraw the window with focused decorations
-            dwm_msg_t msg = {0};
-            msg.window_id = g_focused->id;
-            wm_schedule_full_redraw(g_focused);
-            wm_draw_window(&msg);
-
-            wm_add_dirty_rect(dx, dy, dw, dh);
-        }
+    // Mark the newly focused window area as dirty
+    if (g_focused)
+    {
+        int dx, dy, dw, dh;
+        wm_get_decor_bounds(g_focused, &dx, &dy, &dw, &dh);
+        wm_add_dirty_rect(dx, dy, dw, dh);
+    }
 
     g_focus_dirty = 0;
 }
