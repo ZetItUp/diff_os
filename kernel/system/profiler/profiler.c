@@ -12,6 +12,61 @@
 static profiler_state_t s_profiler;
 static int s_initialized = 0;
 
+#define PROFILER_DISABLED 1
+
+#if PROFILER_DISABLED
+void profiler_init(void)
+{
+    s_profiler.active = 0;
+    s_profiler.target_pid = -1;
+    s_initialized = 1;
+}
+
+int profiler_start(int pid)
+{
+    (void)pid;
+    return -1;
+}
+
+int profiler_stop(void)
+{
+    return -1;
+}
+
+void profiler_record_sample(uint32_t eip, int pid)
+{
+    (void)eip;
+    (void)pid;
+}
+
+int profiler_dump_csv(void)
+{
+    return -1;
+}
+
+int profiler_is_active(void)
+{
+    return 0;
+}
+
+int profiler_target_pid(void)
+{
+    return -1;
+}
+
+int profiler_load_symbols(const void *dex_data, size_t dex_size, uint32_t image_base, const char *library_name)
+{
+    (void)dex_data;
+    (void)dex_size;
+    (void)image_base;
+    (void)library_name;
+    return -1;
+}
+
+void profiler_clear_symbols(void)
+{
+}
+#else
 void profiler_init(void)
 {
     memset(&s_profiler, 0, sizeof(s_profiler));
@@ -416,3 +471,5 @@ int profiler_load_symbols(const void *dex_data, size_t dex_size, uint32_t image_
 
     return 0;
 }
+
+#endif

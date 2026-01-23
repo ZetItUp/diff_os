@@ -332,6 +332,8 @@ static void panic_dump_code_window(uint32_t center, size_t pre_bytes, size_t pos
 
 // Fault handling
 static volatile int s_in_page_fault = 0; // reentrancy guard
+static int s_pf_streak_pid = -1;
+static uint32_t s_pf_streak_count;
 
 // PF output that does not page fault
 static void print_user_stack_snapshot(uint32_t useresp)
@@ -424,6 +426,41 @@ void fault_handler(struct stack_frame *frame)
 {
     int is_user_mode = ((frame->cs & 3u) == 3u);
 
+    if (frame->int_no < 32)
+    {
+        panic_serial_init();
+        panic_puts("EXC ");
+        panic_putu32(frame->int_no);
+        panic_puts(" EIP=");
+        panic_puthex32(frame->eip);
+        panic_puts("\n");
+    }
+
+    if (frame->int_no == 8)
+    {
+        panic_serial_init();
+        panic_puts("==== DOUBLE FAULT ====\n");
+        panic_puts("EIP=");
+        panic_puthex32(frame->eip);
+        panic_puts(" CS=");
+        panic_puthex32(frame->cs);
+        panic_puts(" EFLAGS=");
+        panic_puthex32(frame->eflags);
+        panic_puts("\n");
+        panic_puts("ERR=");
+        panic_puthex32(frame->err_code);
+        panic_puts(" CR3=");
+        panic_puthex32(read_cr3());
+        panic_puts("\n");
+        panic_print_cpu_context(frame);
+        panic_print_process_info();
+
+        for (;;)
+        {
+            asm volatile("hlt");
+        }
+    }
+
     if (frame->int_no == 1)
     {
         if (debug_handle_single_step(frame))
@@ -497,6 +534,36 @@ void fault_handler(struct stack_frame *frame)
 
         if (handled)
         {
+            if (is_user_mode)
+            {
+                process_t *proc = process_current();
+                int pid = proc ? proc->pid : -1;
+                if (pid == s_pf_streak_pid)
+                {
+                    s_pf_streak_count++;
+                }
+                else
+                {
+                    s_pf_streak_pid = pid;
+                    s_pf_streak_count = 0;
+                }
+
+                if (s_pf_streak_count > 2048)
+                {
+                    panic_serial_init();
+                    panic_puts("PF storm PID=");
+                    panic_putu32(pid < 0 ? 0u : (uint32_t)pid);
+                    panic_puts(" EIP=");
+                    panic_puthex32(frame->eip);
+                    panic_puts(" CR2=");
+                    panic_puthex32(cr2);
+                    panic_puts(" ERR=");
+                    panic_puthex32(error_code);
+                    panic_puts("\n");
+                    process_exit_current(128 + SIGSEGV);
+                }
+            }
+
             return;
         }
 
