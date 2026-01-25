@@ -15,6 +15,7 @@ QEMU_MONITOR ?= stdio
 QEMU_SERIAL  ?= file:serial.log
 QEMU_EXTRA   ?=
 QEMU_MEM     ?= 128M
+QEMU_VGAMEM  ?= 64
 
 ifeq ($(HEADLESS),1)
 QEMU_MONITOR = none
@@ -283,6 +284,7 @@ run:
 		$(if $(HEADLESS),,$(if $(QEMU_DISPLAY),-display $(QEMU_DISPLAY),)) \
 		-monitor $(QEMU_MONITOR) \
 		-m $(QEMU_MEM) \
+		-device VGA,vgamem_mb=$(QEMU_VGAMEM) \
 		-serial $(QEMU_SERIAL) \
 		-no-reboot -no-shutdown \
 		-d guest_errors -D qemu.log \
@@ -296,7 +298,7 @@ run:
 # Debug in QEMU with GDB
 debug: tools drivers $(TARGET_VMDK)
 	@echo "[QEMU] Starting in debug mode"
-	@$(QEMU) -display default,show-cursor=off -monitor stdio -m $(QEMU_MEM) -vga std \
+	@$(QEMU) -display default,show-cursor=off -monitor stdio -m $(QEMU_MEM) -device VGA,vgamem_mb=$(QEMU_VGAMEM) \
 		-drive file=$(TARGET_VMDK),format=vmdk \
 		-netdev user,id=net0 -device rtl8139,netdev=net0 -s -S &
 	@echo "[GDB] Starting debugger"

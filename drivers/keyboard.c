@@ -262,6 +262,7 @@ static void i8042_init(void)
 
     uint8_t cmd_byte = i8042_read_cmdbyte();
     cmd_byte |= 0x01; // Enable IRQ1
+    cmd_byte &= (uint8_t)~0x10; // Ensure keyboard port is enabled
     i8042_write_cmdbyte(cmd_byte);
 
     while (kernel->inb(KEYBOARD_STATUS) & 0x01) // Drain any leftovers

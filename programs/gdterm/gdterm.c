@@ -18,7 +18,7 @@
 #include <tty.h>
 
 #define WIN_W 640
-#define WIN_H 600
+#define WIN_H 400
 #define TERMINAL_PADDING_LEFT 8
 #define TERMINAL_PADDING_TOP 8
 
