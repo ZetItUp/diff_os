@@ -283,8 +283,11 @@ static void init_module_fs(void)
 {
     if (s_module_start == 0 || s_module_size == 0)
     {
+        printf("[INIT] No module found, skipping module FS init\n");
         return;
     }
+
+    printf("[INIT] Module at 0x%08x size=%u bytes\n", s_module_start, s_module_size);
 
     // Reserve the module's physical memory so it won't be allocated to processes
     paging_reserve_phys_range(s_module_start, s_module_size);

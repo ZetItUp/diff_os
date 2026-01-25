@@ -556,6 +556,9 @@ int disk_read(uint32_t sector, uint32_t count, void* buffer)
         return module_disk_read(sector, count, buffer);
     }
 
+    // Debug: should not reach here if using module image
+    printf("[FS] WARNING: g_module_base is NULL, falling back to ATA (sector=%u)\n", sector);
+
     if (superblock.total_sectors != 0)
     {
         if (sector >= superblock.total_sectors)
@@ -1269,9 +1272,6 @@ int read_file(const FileTable* table, const char* path, void* buffer)
         file_size_bytes = (uint32_t)capacity_bytes;
     }
 
-    printf("[FS] read_file '%s': LBA=%u count=%u size=%u buf=%p\n",
-         path, start_sector, sector_count, file_size_bytes, buffer);
-
     uint8_t* dst = (uint8_t*)buffer;
 
     if (LOOKS_LIKE_KMAP_WIN(dst))
@@ -1338,18 +1338,15 @@ int read_file(const FileTable* table, const char* path, void* buffer)
         uint32_t bytes = chunk * SECTOR_SIZE;
 
         int rr = disk_read(lba, chunk, bounce);
-        printf("[FS] disk_read LBA=%u chunk=%u -> rr=%d bounce[0..3]=%02x%02x%02x%02x\n",
-               lba, chunk, rr, bounce[0], bounce[1], bounce[2], bounce[3]);
         if (rr < (int)bytes)
         {
-            printf("[FS] disk_read FAILED at LBA=%u\n", lba);
+            DDBG("[Diff FS] disk_read FAILED at LBA=%u\n", lba);
             kfree(bounce);
             return -2;
         }
 
         if (safe_copy_out(dst, bounce, bytes) < 0)
         {
-            printf("[FS] safe_copy_out FAILED\n");
             kfree(bounce);
             return -3;
         }
@@ -1796,10 +1793,6 @@ int filesystem_read(int fd, void* buffer, uint32_t count)
     }
 
     filesystem_set_offset_for_fd(fd, off + total);
-// i filesystem_read() (diff.c)
-//printf("[FS] read fd=%d off=%u cnt=%u -> r=%d\n", fd, off, count, r);
-
-
     return (int)total;
 }
 
@@ -2175,6 +2168,13 @@ static int write_at_entry(FileEntry* fe, uint32_t offset, const void* buffer, ui
     if (!fe || !buffer || count == 0)
     {
         return 0;
+    }
+
+    // Writing is not supported when running from RAM module (no real disk)
+    if (g_module_base)
+    {
+        DDBG("[Diff FS] write_at_entry: writes not supported in module mode\n");
+        return -1;
     }
 
     // Check if we need to expand the file
