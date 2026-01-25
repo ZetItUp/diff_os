@@ -101,7 +101,7 @@ static FILE _stdout = {
     .buffer_len = 0,
 };
 static FILE _stderr = {
-    .file_descriptor = 2,
+    .file_descriptor = 1,
     .flags = FILE_CAN_WRITE,
     .error = 0,
     .eof = 0,

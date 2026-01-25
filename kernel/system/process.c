@@ -440,6 +440,49 @@ void process_destroy(process_t *p)
         paging_switch_address_space(cr3_before);
     }
 }
+
+void process_reap_orphan_zombies(void)
+{
+    for (;;)
+    {
+        process_t *victim = NULL;
+        uint32_t f;
+
+        proc_list_lock(&f);
+        for (process_t *it = g_all_head; it; it = it->next)
+        {
+            // Only reap true orphans: zombies whose parent is dead or NULL
+            // A zombie with a live parent should wait for waitpid()
+            int is_orphan = (it->parent == NULL ||
+                             it->parent->state == PROCESS_DEAD ||
+                             it->parent->state == PROCESS_ZOMBIE);
+
+            if (it->pid != 0 &&
+                it->state == PROCESS_ZOMBIE &&
+                it->live_threads == 0 &&
+                is_orphan)
+            {
+                it->state = PROCESS_DEAD;
+                victim = it;
+                break;
+            }
+        }
+        proc_list_unlock(f);
+
+        if (!victim)
+        {
+            break;
+        }
+
+        if (victim->cr3)
+        {
+            paging_free_all_user_in(victim->cr3);
+        }
+
+        exl_invalidate_for_cr3(victim->cr3);
+        process_destroy(victim);
+    }
+}
 // Link process into global list
 static void process_link(process_t *p)
 {
@@ -752,6 +795,8 @@ void __attribute__((noreturn)) process_exit_current(int exit_code)
     {
         // Store exit code for wait()
         p->exit_code = exit_code;
+
+        printf("[PROC] exit pid=%d code=%d\n", p->pid, exit_code);
 
         process_cleanup_resources(p);
     }
@@ -1113,6 +1158,7 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
 
     if (copy_user_cstr(&kpath, upath, 256) != 0)
     {
+        printf("[PROC] spawn: copy_user_cstr failed\n");
         return -1;
     }
 
@@ -1121,6 +1167,7 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
     const char *base = process_cwd_path(caller);
     if (path_normalize(base, kpath, norm_path, sizeof(norm_path)) != 0)
     {
+        printf("[PROC] spawn: path_normalize failed (%s)\n", kpath);
         kfree(kpath);
         return -1;
     }
@@ -1130,6 +1177,7 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
 
     if (copy_user_argv(argc, uargv, &kargv) != 0)
     {
+        printf("[PROC] spawn: copy_user_argv failed\n");
         kfree(kpath);
 
         return -1;
@@ -1162,6 +1210,27 @@ int system_process_spawn(const char *upath, int argc, char **uargv)
 
     // Inherit cwd from parent (set_cwd=0), exec_root is still set to executable dir
     int pid = dex_spawn_process(file_table, norm_path, argc, kargv, exec_dir, 0);
+    if (pid < 0)
+    {
+        const char *reason = "unknown";
+        switch (pid)
+        {
+            case -1: reason = "bad args"; break;
+            case -2: reason = "file not found"; break;
+            case -3: reason = "empty file"; break;
+            case -4: reason = "file buffer alloc"; break;
+            case -5: reason = "read file failed"; break;
+            case -6: reason = "new address space failed"; break;
+            case -7: reason = "dex_load failed"; break;
+            case -8: reason = "bad user stack"; break;
+            case -9: reason = "bad entry"; break;
+            case -10: reason = "exit stub failed"; break;
+            case -12: reason = "process create failed"; break;
+            default: break;
+        }
+        printf("[PROC] spawn: dex_spawn_process failed rc=%d (%s) path=%s\n",
+               pid, reason, norm_path);
+    }
 
     // Free temporary buffers
     free_kargv(kargv);

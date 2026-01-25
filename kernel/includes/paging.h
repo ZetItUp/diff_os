@@ -122,6 +122,7 @@ void paging_free_all_user_in(uint32_t cr3_phys);
 
 void paging_user_heap_reset(void);
 void paging_set_user_heap(uintptr_t addr);
+void paging_user_heap_force_global(int enable);
 struct process;
 void paging_adopt_pending_reservations(uint32_t cr3_phys, struct process *p);
 uintptr_t paging_kernel_cr3_phys(void);
@@ -140,6 +141,7 @@ int  page_present(uint32_t lin);
 void dump_err_bits(uint32_t err);
 
 void paging_pt_pool_commit(void);
+void paging_reserve_phys_range(uint32_t phys_start, uint32_t size);
 
 void* paging_kmap_phys(uint32_t phys, int slot);
 void  paging_kunmap_phys(int slot);

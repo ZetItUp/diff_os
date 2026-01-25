@@ -178,6 +178,8 @@ static void reap_zombies(void)
         SDBG("[SCH] reap thread: tid=%d\n", z->thread_id);
         threads_reap_one(z);
     }
+
+    process_reap_orphan_zombies();
 }
 
 // Reapa alla zombietrådar som ägs av process p (för waitpid)

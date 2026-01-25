@@ -60,10 +60,16 @@ static uint32_t g_kmap_temp_mapped_phys = 0;
 static uint32_t uheap_next = UHEAP_BASE;  // Global fallback for kernel context
 static uint32_t kmap_va1 = 0;
 static uint32_t kmap_va2 = 0;
+static int g_force_global_user_heap = 0;
 
 // Helper: get current heap_alloc_next (per-process or global fallback)
 static inline uint32_t get_heap_alloc_next(void)
 {
+    if (g_force_global_user_heap)
+    {
+        return uheap_next;
+    }
+
     process_t *p = process_current();
     if (p && p->pid > 0 && p->heap_alloc_next >= USER_MIN)
         return (uint32_t)p->heap_alloc_next;
@@ -73,6 +79,12 @@ static inline uint32_t get_heap_alloc_next(void)
 // Helper: set current heap_alloc_next (per-process or global fallback)
 static inline void set_heap_alloc_next(uint32_t val)
 {
+    if (g_force_global_user_heap)
+    {
+        uheap_next = val;  // Always update global as fallback
+        return;
+    }
+
     process_t *p = process_current();
     if (p && p->pid > 0)
         p->heap_alloc_next = val;
@@ -659,6 +671,37 @@ void init_paging(uint32_t ram_mb)
 
     // Spara basnivå för PT-poolen efter bootstrap
     pt_bootstrap_next = pt_next;
+}
+
+// Reserve a physical memory range so it won't be allocated
+// This is used to protect GRUB modules and other reserved memory
+void paging_reserve_phys_range(uint32_t phys_start, uint32_t size)
+{
+    if (size == 0) return;
+
+    uint32_t start_page = phys_start / PAGE_SIZE_4KB;
+    uint32_t end_page = (phys_start + size + PAGE_SIZE_4KB - 1) / PAGE_SIZE_4KB;
+
+    if (end_page > max_phys_pages) end_page = max_phys_pages;
+
+    for (uint32_t i = start_page; i < end_page; i++)
+    {
+        set_phys_page((int)i);
+        if (phys_page_refcnt[i] == 0) phys_page_refcnt[i] = 1;
+    }
+
+    // Also mark corresponding 4MB blocks if fully covered
+    uint32_t start_block = phys_start / BLOCK_SIZE;
+    uint32_t end_block = (phys_start + size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    if (end_block > max_blocks) end_block = max_blocks;
+
+    for (uint32_t b = start_block; b < end_block; b++)
+    {
+        set_block((int)b);
+    }
+
+    printf("[PAGING] Reserved physical range 0x%08x - 0x%08x (%u pages)\n",
+           phys_start, phys_start + size, end_page - start_page);
 }
 
 // ====== Map page range (4MB eller 4KB) ======
@@ -2250,6 +2293,11 @@ void paging_user_heap_reset(void)
 {
     set_heap_alloc_next(UHEAP_BASE);
     uresv_count = 0;
+}
+
+void paging_user_heap_force_global(int enable)
+{
+    g_force_global_user_heap = enable ? 1 : 0;
 }
 
 void paging_set_user_heap(uintptr_t addr)

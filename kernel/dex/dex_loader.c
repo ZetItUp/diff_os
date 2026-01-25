@@ -679,27 +679,29 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out_exec
     const dex_reloc_t *relocations;
     const char *string_table;
 
+    printf("[DEX-LOAD] file_data=%p file_size=%u\n", file_data, (unsigned)file_size);
+
     if (!file_data || file_size < sizeof(dex_header_t) || !out_executable)
     {
+        printf("[DEX-LOAD] FAIL: bad args\n");
         return -1;
     }
 
     header = (const dex_header_t *)file_data;
 
     // Validate magic
+    printf("[DEX-LOAD] header=%p magic=%08x\n", header, header->magic);
     if (header->magic != DEX_MAGIC)
     {
-        DEX_DBG("[DEX] Invalid DEX file\n");
-
+        printf("[DEX-LOAD] FAIL: bad magic %08x (expected %08x)\n", header->magic, DEX_MAGIC);
         return -2;
     }
 
     if (header->version_major != DEX_VERSION_MAJOR || header->version_minor != DEX_VERSION_MINOR)
     {
-        DEX_DBG("[DEX] Unsupported DEX version %u.%u (want %u.%u)\n",
+        printf("[DEX-LOAD] FAIL: bad version %u.%u (want %u.%u)\n",
                 header->version_major, header->version_minor,
                 DEX_VERSION_MAJOR, DEX_VERSION_MINOR);
-
         return -2;
     }
 
@@ -713,11 +715,10 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out_exec
         !in_range(header->rodata_offset, header->rodata_size, (uint32_t)file_size) ||
         !in_range(header->data_offset, header->data_size, (uint32_t)file_size) ||
         !in_range(header->strtab_offset, header->strtab_size, (uint32_t)file_size) ||
-        (header->resources_size && 
+        (header->resources_size &&
          !in_range(header->resources_offset, header->resources_size, (uint32_t)file_size)))
     {
-        DEX_DBG("[DEX] Section offsets or sizes out of file\n");
-
+        printf("[DEX-LOAD] FAIL: section ranges out of file\n");
         return -3;
     }
 
@@ -726,10 +727,10 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out_exec
         header->entry_offset < header->text_offset ||
         header->entry_offset >= header->text_offset + header->text_size)
     {
-        DEX_DBG("[DEX] Entry offset out of range off=0x%x\n", (unsigned)header->entry_offset);
-
+        printf("[DEX-LOAD] FAIL: entry offset out of range off=0x%x\n", (unsigned)header->entry_offset);
         return -3;
     }
+    printf("[DEX-LOAD] Sections validated OK\n");
 
     // Cache sizes and compute total image span
     text_size = header->text_size;
@@ -772,14 +773,15 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out_exec
     total_size = PAGE_ALIGN_UP(max_end_offset);
 
     // Allocate user image
+    printf("[DEX-LOAD] Allocating %u bytes for user image\n", total_size);
     image = (uint8_t *)umalloc(total_size);
 
     if (!image)
     {
-        DEX_DBG("[DEX] Unable to allocate %u bytes for program\n", total_size);
-
+        printf("[DEX-LOAD] FAIL: umalloc(%u) returned NULL\n", total_size);
         return -4;
     }
+    printf("[DEX-LOAD] image=%p\n", image);
 
     paging_reserve_range((uintptr_t)image, total_size);
     
@@ -794,9 +796,11 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out_exec
     // Copy sections and clear bss into user image
     if (text_size)
     {
-        if (copy_to_user(image + header->text_offset, (const uint8_t *)file_data + header->text_offset, text_size) != 0)
+        if (copy_to_user(image + header->text_offset,
+                         (const uint8_t *)file_data + header->text_offset,
+                         text_size) != 0)
         {
-            DEX_DBG("[DEX] Failed to copy .text to user image\n");
+            printf("[DEX-LOAD] FAIL: copy_to_user .text failed\n");
             ufree(image, total_size);
 
             return -20;
@@ -881,12 +885,16 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out_exec
     DEX_DBG("========================\n");
 
     // Apply relocations and imports
-    if (relocate_image(header, imports, relocations, string_table, image, total_size) != 0)
+    printf("[DEX-LOAD] Applying relocations...\n");
+    int reloc_rc = relocate_image(header, imports, relocations, string_table, image, total_size);
+    if (reloc_rc != 0)
     {
+        printf("[DEX-LOAD] FAIL: relocate_image returned %d\n", reloc_rc);
         ufree(image, total_size);
 
         return -6;
     }
+    printf("[DEX-LOAD] Relocations OK\n");
 
     if (is_user_va((uint32_t)file_data))
     {
@@ -941,6 +949,7 @@ int dex_load(const void *file_data, size_t file_size, dex_executable_t *out_exec
         DEX_DBG("[DEX] entry VA=%08x off=0x%x\n", (uint32_t)image + entry_offset, entry_offset);
     }
 
+    printf("[DEX-LOAD] SUCCESS: image=%p entry=%p\n", image, out_executable->dex_entry);
     return 0;
 }
 
@@ -1164,6 +1173,7 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
     uint32_t child_cr3;
     dex_executable_t loaded_executable;
     int load_return_code;
+    uint32_t saved_parent_heap_next = 0;
     uint32_t user_stack_pointer;
     uint32_t user_stack_base_address = 0;
     uint32_t user_stack_size = 0;
@@ -1171,6 +1181,9 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
     uint8_t *exit_stub;
     process_t *process;
     int process_id;
+    process_t *parent_process = NULL;
+
+    printf("[DEX-SPAWN] Starting spawn: %s\n", path ? path : "(null)");
 
     if (g_debug_mask & DEBUG_AREA_EXL)
     {
@@ -1218,34 +1231,68 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
     {
         DEX_DBG("[DEX] ERROR: Failed to read file: %s\n", path);
         kfree(file_buffer);
-        
+
         return -5;
     }
 
+    printf("[DEX-SPAWN] After read_file: file_buffer=%p magic=%08x\n",
+           file_buffer, *(uint32_t*)file_buffer);
+
+    parent_process = process_current();
+
+    if (parent_process)
+    {
+        saved_parent_heap_next = (uint32_t)parent_process->heap_alloc_next;
+    }
+
     parent_cr3 = read_cr3_local();
+    printf("[DEX-SPAWN] parent_cr3=%08x, allocating child address space\n", parent_cr3);
+    printf("[DEX-SPAWN] Before new_address_space: magic=%08x\n", *(uint32_t*)file_buffer);
     child_cr3 = paging_new_address_space();
 
     if (!child_cr3)
     {
-        DEX_DBG("[DEX] ERROR: paging_new_address_space failed");
+        printf("[DEX-SPAWN] ERROR: paging_new_address_space failed!\n");
         kfree(file_buffer);
-        
+
         return -6;
     }
+    printf("[DEX-SPAWN] child_cr3=%08x\n", child_cr3);
+    printf("[DEX-SPAWN] After new_address_space: magic=%08x\n", *(uint32_t*)file_buffer);
+
+    // Check file buffer BEFORE switch
+    printf("[DEX-SPAWN] Before switch: file_buffer=%p magic=%08x\n",
+           file_buffer, *(uint32_t*)file_buffer);
 
     paging_switch_address_space(child_cr3);
-    
+
+    // Check file buffer AFTER switch
+    printf("[DEX-SPAWN] After switch: file_buffer=%p magic=%08x\n",
+           file_buffer, *(uint32_t*)file_buffer);
+
+    paging_user_heap_force_global(1);
+
     // Clear EXL cache for this CR3 before removing user mappings
     exl_invalidate_for_cr3(read_cr3_local());
-    
+
     paging_free_all_user();
     paging_user_heap_reset();
+
+    // Check file buffer AFTER free_all_user
+    printf("[DEX-SPAWN] After free_all_user: magic=%08x\n", *(uint32_t*)file_buffer);
 
     load_return_code = dex_load(file_buffer, fe_file_size_bytes(file_entry), &loaded_executable);
 
     if (load_return_code != 0)
     {
         paging_switch_address_space(parent_cr3);
+        paging_user_heap_force_global(0);
+
+        if (saved_parent_heap_next >= USER_MIN)
+        {
+            paging_set_user_heap(saved_parent_heap_next);
+        }
+
         paging_destroy_address_space(child_cr3);
         kfree(file_buffer);
         DEX_DBG("[DEX] ERROR: dex_load rc=%d\n", load_return_code);
@@ -1258,6 +1305,13 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
     if (!user_stack_pointer || !is_user_va(user_stack_pointer))
     {
         paging_switch_address_space(parent_cr3);
+        paging_user_heap_force_global(0);
+
+        if (saved_parent_heap_next >= USER_MIN)
+        {
+            paging_set_user_heap(saved_parent_heap_next);
+        }
+
         paging_destroy_address_space(child_cr3);
         kfree(file_buffer);
         DEX_DBG("[DEX] ERROR: bad user_sp=%08x\n", user_stack_pointer);
@@ -1270,6 +1324,13 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
     if (!is_user_va(entry_address))
     {
         paging_switch_address_space(parent_cr3);
+        paging_user_heap_force_global(0);
+
+        if (saved_parent_heap_next >= USER_MIN)
+        {
+            paging_set_user_heap(saved_parent_heap_next);
+        }
+
         paging_destroy_address_space(child_cr3);
         kfree(file_buffer);
         DEX_DBG("[DEX] ERROR: bad entry_va=%08x\n", entry_address);
@@ -1282,6 +1343,13 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
     if (!exit_stub || !is_user_va((uint32_t)exit_stub))
     {
         paging_switch_address_space(parent_cr3);
+        paging_user_heap_force_global(0);
+
+        if (saved_parent_heap_next >= USER_MIN)
+        {
+            paging_set_user_heap(saved_parent_heap_next);
+        }
+
         paging_destroy_address_space(child_cr3);
         kfree(file_buffer);
         DEX_DBG("[DEX] ERROR: stub build failed (%p)\n", exit_stub);
@@ -1332,6 +1400,12 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
     }
 
     paging_switch_address_space(parent_cr3);
+    paging_user_heap_force_global(0);
+
+    if (saved_parent_heap_next >= USER_MIN)
+    {
+        paging_set_user_heap(saved_parent_heap_next);
+    }
 
     // Clear single-step debug state before spawning new process
     debug_clear_single_step();
@@ -1350,6 +1424,13 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
     {
         paging_switch_address_space(child_cr3);
         paging_switch_address_space(parent_cr3);
+        paging_user_heap_force_global(0);
+
+        if (saved_parent_heap_next >= USER_MIN)
+        {
+            paging_set_user_heap(saved_parent_heap_next);
+        }
+
         paging_destroy_address_space(child_cr3);
         kfree(file_buffer);
         DEX_DBG("[DEX] ERROR: process_create_user_with_as failed");
@@ -1408,5 +1489,6 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
         }
     }
 
+    printf("[DEX-SPAWN] SUCCESS: pid=%d path=%s\n", process_id, path);
     return process_id;
 }

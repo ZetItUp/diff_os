@@ -128,3 +128,4 @@ void process_set_kernel_stack(process_t *p, uintptr_t base, uintptr_t top, size_
 int system_thread_create_user(uintptr_t user_eip, uintptr_t user_esp, size_t kstack_bytes);
 int system_process_get_resources(int pid, void *user_buf, uint32_t buf_len);
 int system_process_get_name(int pid, char *user_buf, size_t buf_len);
+void process_reap_orphan_zombies(void);

@@ -1269,8 +1269,8 @@ int read_file(const FileTable* table, const char* path, void* buffer)
         file_size_bytes = (uint32_t)capacity_bytes;
     }
 
-    DDBG("[Diff FS] read_file '%s': LBA=%u count=%u size=%u\n",
-         path, start_sector, sector_count, file_size_bytes);
+    printf("[FS] read_file '%s': LBA=%u count=%u size=%u buf=%p\n",
+         path, start_sector, sector_count, file_size_bytes, buffer);
 
     uint8_t* dst = (uint8_t*)buffer;
 
@@ -1338,15 +1338,18 @@ int read_file(const FileTable* table, const char* path, void* buffer)
         uint32_t bytes = chunk * SECTOR_SIZE;
 
         int rr = disk_read(lba, chunk, bounce);
+        printf("[FS] disk_read LBA=%u chunk=%u -> rr=%d bounce[0..3]=%02x%02x%02x%02x\n",
+               lba, chunk, rr, bounce[0], bounce[1], bounce[2], bounce[3]);
         if (rr < (int)bytes)
         {
-            DDBG("[Diff FS] read_file: disk_read failed at LBA=%u (chunk=%u)\n", lba, chunk);
+            printf("[FS] disk_read FAILED at LBA=%u\n", lba);
             kfree(bounce);
             return -2;
         }
 
         if (safe_copy_out(dst, bounce, bytes) < 0)
         {
+            printf("[FS] safe_copy_out FAILED\n");
             kfree(bounce);
             return -3;
         }
