@@ -53,6 +53,15 @@ static int sector_bitmap_dirty;
 
 extern volatile int g_in_irq;
 
+static const uint8_t *g_module_base = NULL;
+static uint32_t g_module_bytes = 0;
+
+void diff_set_module_image(const void *base, uint32_t bytes)
+{
+    g_module_base = (const uint8_t *)base;
+    g_module_bytes = bytes;
+}
+
 // ---------------------------------------------------------------------------
 // Pointer and range helpers
 // ---------------------------------------------------------------------------
@@ -79,6 +88,74 @@ static inline int is_user_range(const void* ptr, size_t n)
     }
 
     return 1;
+}
+
+static int safe_copy_out(void* dst, const void* src, uint32_t n);
+
+static int module_disk_read(uint32_t sector, uint32_t count, void *buffer)
+{
+    if (!g_module_base || g_module_bytes == 0)
+    {
+        return -1;
+    }
+
+    uint64_t start = (uint64_t)sector * SECTOR_SIZE;
+    uint64_t bytes = (uint64_t)count * SECTOR_SIZE;
+    uint64_t limit = g_module_bytes;
+
+    if (start >= limit)
+    {
+        return -2;
+    }
+
+    if (start + bytes > limit)
+    {
+        uint64_t max_bytes = limit - start;
+        count = (uint32_t)(max_bytes / SECTOR_SIZE);
+        bytes = (uint64_t)count * SECTOR_SIZE;
+    }
+
+    if (count == 0)
+    {
+        return 0;
+    }
+
+    uintptr_t src_phys = (uintptr_t)g_module_base + (uintptr_t)start;
+    uint32_t remaining = (uint32_t)bytes;
+    uint8_t *dst = (uint8_t *)buffer;
+
+    while (remaining > 0)
+    {
+        uintptr_t page_base = src_phys & ~(uintptr_t)(PAGE_SIZE_4KB - 1u);
+        uint32_t page_off = (uint32_t)(src_phys & (PAGE_SIZE_4KB - 1u));
+        uint32_t chunk = PAGE_SIZE_4KB - page_off;
+
+        if (chunk > remaining)
+        {
+            chunk = remaining;
+        }
+
+        uint8_t *mapped = (uint8_t *)paging_kmap_phys((uint32_t)page_base, 0);
+
+        if (!mapped)
+        {
+            return -4;
+        }
+
+        if (safe_copy_out(dst, mapped + page_off, chunk) < 0)
+        {
+            paging_kunmap_phys(0);
+            return -3;
+        }
+
+        paging_kunmap_phys(0);
+
+        dst += chunk;
+        src_phys += chunk;
+        remaining -= chunk;
+    }
+
+    return (int)bytes;
 }
 
 // Prefault user span for writes (kernel -> user)
@@ -331,8 +408,8 @@ static int read_at_entry(const FileEntry* fe, uint32_t offset, void* buffer, uin
 
         uint8_t temp[SECTOR_SIZE];
 
-        int rr = ata_read(first_sector_lba, 1, temp);
-        if (rr < 0)
+        int rr = disk_read(first_sector_lba, 1, temp);
+        if (rr < (int)SECTOR_SIZE)
         {
             return -2;
         }
@@ -474,6 +551,11 @@ int disk_read(uint32_t sector, uint32_t count, void* buffer)
         return -1;
     }
 
+    if (g_module_base)
+    {
+        return module_disk_read(sector, count, buffer);
+    }
+
     if (superblock.total_sectors != 0)
     {
         if (sector >= superblock.total_sectors)
@@ -585,6 +667,11 @@ int disk_write(uint32_t sector, uint32_t count, const void* buffer)
     if (!buffer)
     {
         return -1;
+    }
+
+    if (g_module_base)
+    {
+        return -4;
     }
 
     if (superblock.total_sectors != 0)
@@ -1209,8 +1296,8 @@ int read_file(const FileTable* table, const char* path, void* buffer)
 
         while (left > 0)
         {
-            int rr = ata_read(lba, 1, temp);
-            if (rr < 0)
+            int rr = disk_read(lba, 1, temp);
+            if (rr < (int)SECTOR_SIZE)
             {
                 return -2;
             }
@@ -1227,8 +1314,8 @@ int read_file(const FileTable* table, const char* path, void* buffer)
 
         if (tail_bytes)
         {
-            int rr = ata_read(lba, 1, temp);
-            if (rr < 0)
+            int rr = disk_read(lba, 1, temp);
+            if (rr < (int)SECTOR_SIZE)
             {
                 return -2;
             }
@@ -1250,10 +1337,10 @@ int read_file(const FileTable* table, const char* path, void* buffer)
         uint32_t chunk = (full_sectors > MAX_SECTORS_PER_OP) ? MAX_SECTORS_PER_OP : full_sectors;
         uint32_t bytes = chunk * SECTOR_SIZE;
 
-        int rr = ata_read(lba, chunk, bounce);
-        if (rr < 0)
+        int rr = disk_read(lba, chunk, bounce);
+        if (rr < (int)bytes)
         {
-            DDBG("[Diff FS] read_file: ata_read failed at LBA=%u (chunk=%u)\n", lba, chunk);
+            DDBG("[Diff FS] read_file: disk_read failed at LBA=%u (chunk=%u)\n", lba, chunk);
             kfree(bounce);
             return -2;
         }
@@ -1274,10 +1361,10 @@ int read_file(const FileTable* table, const char* path, void* buffer)
     {
         uint8_t temp[SECTOR_SIZE];
 
-        int rr = ata_read(lba, 1, temp);
-        if (rr < 0)
+        int rr = disk_read(lba, 1, temp);
+        if (rr < (int)SECTOR_SIZE)
         {
-            DDBG("[Diff FS] read_file: ata_read tail failed at LBA=%u\n", lba);
+            DDBG("[Diff FS] read_file: disk_read tail failed at LBA=%u\n", lba);
             kfree(bounce);
             return -2;
         }

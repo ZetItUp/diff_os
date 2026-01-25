@@ -113,6 +113,7 @@ extern SuperBlock superblock;
 
 int disk_read(uint32_t sector, uint32_t count, void* buffer);
 int disk_write(uint32_t sector, uint32_t count, const void* buffer);
+void diff_set_module_image(const void *base, uint32_t bytes);
 
 // Superblock / tables
 

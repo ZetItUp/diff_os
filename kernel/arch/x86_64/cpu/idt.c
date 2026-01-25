@@ -8,6 +8,7 @@
 #include "system/syscall.h"
 #include "system/process.h"
 #include "system/signal.h"
+#include "system/callstack.h"
 #include "debug.h"
 #include "system/usercopy.h"
 #include <stdint.h>
@@ -334,6 +335,9 @@ static void panic_dump_code_window(uint32_t center, size_t pre_bytes, size_t pos
 static volatile int s_in_page_fault = 0; // reentrancy guard
 static int s_pf_streak_pid = -1;
 static uint32_t s_pf_streak_count;
+static uint32_t s_pf_streak_cr2 = 0;
+static uint32_t s_pf_streak_eip = 0;
+static uint32_t s_pf_streak_err = 0;
 
 // PF output that does not page fault
 static void print_user_stack_snapshot(uint32_t useresp)
@@ -419,6 +423,28 @@ static void print_page_fault(struct stack_frame *frame, uint32_t cr2, uint32_t c
     panic_print_process_info();
     print_user_stack_snapshot(frame->useresp);
 
+    uint32_t callstack[CALLSTACK_MAX_FRAMES];
+    int callstack_count = callstack_capture_kernel(frame->ebp,
+                                                   frame->eip,
+                                                   callstack,
+                                                   CALLSTACK_MAX_FRAMES);
+
+    if (callstack_count > 0)
+    {
+        panic_puts("Callstack:\n");
+
+        for (int i = 0; i < callstack_count; ++i)
+        {
+            panic_puts("  ");
+            panic_puthex32(callstack[i]);
+            panic_puts("\n");
+        }
+    }
+    else
+    {
+        panic_puts("Callstack unavailable\n");
+    }
+
     s_in_page_fault--;
 }
 
@@ -426,7 +452,7 @@ void fault_handler(struct stack_frame *frame)
 {
     int is_user_mode = ((frame->cs & 3u) == 3u);
 
-    if (frame->int_no < 32)
+    if (frame->int_no < 32 && frame->int_no != 14)
     {
         panic_serial_init();
         panic_puts("EXC ");
@@ -538,20 +564,26 @@ void fault_handler(struct stack_frame *frame)
             {
                 process_t *proc = process_current();
                 int pid = proc ? proc->pid : -1;
-                if (pid == s_pf_streak_pid)
+                if (pid == s_pf_streak_pid &&
+                    cr2 == s_pf_streak_cr2 &&
+                    frame->eip == s_pf_streak_eip &&
+                    error_code == s_pf_streak_err)
                 {
                     s_pf_streak_count++;
                 }
                 else
                 {
                     s_pf_streak_pid = pid;
+                    s_pf_streak_cr2 = cr2;
+                    s_pf_streak_eip = frame->eip;
+                    s_pf_streak_err = error_code;
                     s_pf_streak_count = 0;
                 }
 
                 if (s_pf_streak_count > 2048)
                 {
                     panic_serial_init();
-                    panic_puts("PF storm PID=");
+                    panic_puts("PF storm (handled) PID=");
                     panic_putu32(pid < 0 ? 0u : (uint32_t)pid);
                     panic_puts(" EIP=");
                     panic_puthex32(frame->eip);
@@ -570,19 +602,85 @@ void fault_handler(struct stack_frame *frame)
         if (is_user_mode)
         {
             process_t *proc = process_current();
+            int pid = proc ? proc->pid : -1;
+            user_sighandler_t handler = proc ? proc->sig.handlers[SIGSEGV] : SIG_DFL;
+
+            if (pid == s_pf_streak_pid &&
+                cr2 == s_pf_streak_cr2 &&
+                frame->eip == s_pf_streak_eip &&
+                error_code == s_pf_streak_err)
+            {
+                s_pf_streak_count++;
+            }
+            else
+            {
+                s_pf_streak_pid = pid;
+                s_pf_streak_cr2 = cr2;
+                s_pf_streak_eip = frame->eip;
+                s_pf_streak_err = error_code;
+                s_pf_streak_count = 0;
+            }
+
             panic_serial_init();
-            panic_puts("[PF-USER] PID=");
-            panic_putu32(proc ? (uint32_t)proc->pid : 0);
-            panic_puts(" CR2=");
-            panic_puthex32(cr2);
-            panic_puts(" EIP=");
-            panic_puthex32(frame->eip);
-            panic_puts(" ERR=");
-            panic_puthex32(error_code);
-            panic_puts("\n");
+            if (s_pf_streak_count == 0)
+            {
+                panic_puts("[PF-USER] PID=");
+                panic_putu32(pid < 0 ? 0u : (uint32_t)pid);
+                panic_puts(" CR2=");
+                panic_puthex32(cr2);
+                panic_puts(" EIP=");
+                panic_puthex32(frame->eip);
+                panic_puts(" ERR=");
+                panic_puthex32(error_code);
+                panic_puts("\n");
+
+                uint32_t callstack[CALLSTACK_MAX_FRAMES];
+                int callstack_count = callstack_capture_user(frame->ebp,
+                                                             frame->eip,
+                                                             callstack,
+                                                             CALLSTACK_MAX_FRAMES);
+
+                if (callstack_count > 0)
+                {
+                    panic_puts("Callstack:\n");
+
+                    for (int i = 0; i < callstack_count; ++i)
+                    {
+                        panic_puts("  ");
+                        panic_puthex32(callstack[i]);
+                        panic_puts("\n");
+                    }
+                }
+                else
+                {
+                    panic_puts("Callstack unavailable\n");
+                }
+            }
+            else if (s_pf_streak_count == 128)
+            {
+                panic_puts("[PF-USER] storm PID=");
+                panic_putu32(pid < 0 ? 0u : (uint32_t)pid);
+                panic_puts(" EIP=");
+                panic_puthex32(frame->eip);
+                panic_puts(" CR2=");
+                panic_puthex32(cr2);
+                panic_puts(" ERR=");
+                panic_puthex32(error_code);
+                panic_puts(" killing\n");
+            }
+
+            if (handler == SIG_DFL || handler == SIG_IGN || handler == NULL)
+            {
+                process_exit_current(128 + SIGSEGV);
+            }
 
             signal_send_to_process(proc, SIGSEGV);
             signal_maybe_deliver_frame(proc, frame);
+
+            if (s_pf_streak_count >= 128)
+            {
+                process_exit_current(128 + SIGSEGV);
+            }
 
             return;
         }

@@ -418,7 +418,11 @@ char* find_shell_path(const FileTable *table, const char *cfg_path)
         }
     }
 
+    if (!result)
+    {
+        printf("[SHELL] No path set in config\n");
+    }
+
     kfree(cfg_data);
     return result;
 }
-

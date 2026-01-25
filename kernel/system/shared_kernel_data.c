@@ -41,8 +41,6 @@ void shared_kernel_data_init(void)
     // Clear and initialize
     memset(kernel_data_ptr, 0, PAGE_SIZE_4KB);
     kernel_data_ptr->timer_frequency = 100;
-
-    printf("[SHARED] Kernel data page ready, phys=%08x\n", shared_page_phys);
 }
 
 void shared_kernel_data_update_time(uint64_t milliseconds, uint32_t ticks)

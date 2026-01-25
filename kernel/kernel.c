@@ -24,21 +24,8 @@
 #include "system/irqsw.h"
 #include "system/profiler.h"
 #include "shared_kernel_data.h"
-
-__attribute__((naked, section(".text.start")))
-void _start(void)
-{
-    asm volatile(
-        "mov (%esp), %eax\n\t"
-        "mov 4(%esp), %edx\n\t"
-        "mov $0x20000, %esp\n\t"
-        "push %edx\n\t"
-        "push %eax\n\t"
-        "call kmain\n\t"
-        "cli\n\t"
-        "hlt\n\t"
-    );
-}
+#include "multiboot.h"
+#include "cpu.h"
 
 extern char __heap_start;
 extern char __heap_end;
@@ -47,31 +34,72 @@ static sys_info_t system;
 static char background = BG_BLACK;
 static char foreground = FG_GRAY;
 
-static void init_thread(void* argument);
+static void init_thread(void);
 void display_banner(void);
 void display_sys_info(void);
+static void init_module_fs(multiboot_info_t* mbi);
 
-void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
+void kmain(uint32_t magic, multiboot_info_t* mbi)
 {
     serial_init();
-    serial_write("[KERNEL] kmain entered\n");
 
     set_color(MAKE_COLOR(foreground, background));
     clear();
-
-    uint32_t total_ram = 0;
-    for (uint32_t i = 0; i < mem_entry_count; i++)
+    // Verify multiboot magic
+    if (magic != MULTIBOOT_MAGIC)
     {
-        if (bios_mem_map[i].type == 1 && bios_mem_map[i].base_high == 0)
+        serial_write("ERROR: Invalid multiboot magic!\n");
+        printf("ERROR: Invalid multiboot magic: 0x%x\n", magic);
+
+        for (;;)
         {
-            total_ram += bios_mem_map[i].length_low;
+            asm volatile("hlt");
         }
+    }
+
+    init_module_fs(mbi);
+
+    // Calculate total RAM from multiboot memory map
+    uint32_t total_ram = 0;
+
+    if (mbi->flags & MULTIBOOT_INFO_MMAP)
+    {
+        uint32_t offset = 0;
+
+        while (offset < mbi->mmap_length)
+        {
+            multiboot_mmap_entry_t* entry = (multiboot_mmap_entry_t*)(mbi->mmap_addr + offset);
+
+            if (entry->type == MULTIBOOT_MEMORY_AVAILABLE)
+            {
+                // Only count memory below 4GB
+                if ((entry->base >> 32) == 0)
+                {
+                    uint64_t end = entry->base + entry->length;
+
+                    if (end > 0xFFFFFFFF)
+                    {
+                        end = 0xFFFFFFFF;
+                    }
+
+                    total_ram += (uint32_t)(end - entry->base);
+                }
+            }
+
+            offset += entry->size + sizeof(entry->size);
+        }
+    }
+    else if (mbi->flags & MULTIBOOT_INFO_MEMORY)
+    {
+        // Fallback using mem_upper in KB above 1MB
+        total_ram = (mbi->mem_upper + 1024) * 1024;
     }
 
     uint32_t ram_mb = (uint32_t)(total_ram / (1024 * 1024));
     system.ram_mb = ram_mb;
-    
+
     init_paging(ram_mb);
+    cpu_init();
     init_heap(&__heap_start, &__heap_end);
     device_registry_init();
     
@@ -84,7 +112,7 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
     // Try to use APIC if supported, otherwise fall back to PIC
     if (apic_is_supported())
     {
-        printf("[KERNEL] APIC supported, using APIC mode\n");
+        printf("APIC supported, using APIC mode\n");
         pic_remap(0x20, 0x28);  // Still remap PIC before disabling it
         pic_disable();          // Disable PIC
         apic_init();            // Initialize Local APIC
@@ -123,7 +151,7 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
     }
     else
     {
-        printf("[KERNEL] APIC not supported, using PIC mode\n");
+        printf("APIC not supported, using PIC mode\n");
         pic_remap(0x20, 0x28);
         irq_init();
         timer_install();        // Use PIT timer
@@ -143,10 +171,8 @@ void kmain(e820_entry_t* bios_mem_map, uint32_t mem_entry_count)
     }
 }
 
-static void init_thread(void* argument)
+static void init_thread(void)
 {
-    (void)argument;
-    
     vga_capture_rom_font_early();
     uint8_t h = vga_cell_height();
     vga_cursor_enable(0, h - 1);
@@ -183,7 +209,7 @@ static void init_thread(void* argument)
                 }
                 else
                 {
-                    printf("[KERNEL] Failed to spawn shell (pid=%d). Not retrying.\n", pid);
+                    printf("Failed to spawn shell (pid=%d). Not retrying.\n", pid);
                     shell_spawn_state = -1;
                 }
             }
@@ -212,4 +238,34 @@ void display_banner(void)
 void display_sys_info(void)
 {
     printf("[RAM] Available Memory: %u MB\n", system.ram_mb);
+}
+
+static void init_module_fs(multiboot_info_t* mbi)
+{
+    if (!mbi)
+    {
+        return;
+    }
+
+    if ((mbi->flags & MULTIBOOT_INFO_MODS) == 0)
+    {
+        return;
+    }
+
+    if (mbi->mods_count == 0)
+    {
+        return;
+    }
+
+    multiboot_module_t* mods = (multiboot_module_t*)(uintptr_t)mbi->mods_addr;
+    uint32_t start = mods[0].mod_start;
+    uint32_t end = mods[0].mod_end;
+
+    if (end <= start)
+    {
+        printf("Module range invalid start=0x%x end=0x%x\n", start, end);
+        return;
+    }
+
+    diff_set_module_image((const void*)(uintptr_t)start, end - start);
 }

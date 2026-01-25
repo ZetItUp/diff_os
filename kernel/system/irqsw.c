@@ -2,6 +2,7 @@
 #include "system/threads.h"
 #include "system/scheduler.h"
 #include "system/spinlock.h"
+#include "serial.h"
 
 #define IRQSW_QUEUE_LEN 64
 
@@ -91,6 +92,7 @@ static void irqsw_thread_entry(void *argument)
     (void)argument;
 
     g_irqsw_worker = current_thread();
+    serial_write("[IRQSW] thread start\n");
 
     for (;;)
     {

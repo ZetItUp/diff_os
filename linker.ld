@@ -10,12 +10,16 @@ PHDRS
 
 SECTIONS
 {
-    
-    . = 0x100000;
+    . = 1M;
 
-    /* Textsection (code) */
-    .text ALIGN(0x1000) : {
-        *(.text.start)
+    /* Multiboot header and entry point - must be first */
+    .multiboot ALIGN(4K) : {
+        *(.multiboot.data)
+        *(.multiboot.text)
+    } :text
+
+    /* Text section (code) */
+    .text ALIGN(4K) : {
         *(.text)
     } :text
 

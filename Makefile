@@ -15,6 +15,7 @@ QEMU_DISPLAY ?= default,show-cursor=off
 QEMU_MONITOR ?= stdio
 QEMU_SERIAL  ?= file:serial.log
 QEMU_EXTRA   ?=
+QEMU_MEM     ?= 128M
 
 ifeq ($(HEADLESS),1)
 QEMU_MONITOR = none
@@ -52,11 +53,8 @@ endif
 BOOT_STAGE1 = boot/boot.asm
 BOOT_STAGE2 = boot/boot_stage2.asm
 
-# Source Files - CD-ROM boot
-BOOT_CD_STAGE1 = boot/boot_cd.asm
-BOOT_CD_STAGE2 = boot/boot_stage2_cd.asm
-
 ASM_SRC = \
+	boot/multiboot.asm \
 	kernel/arch/x86_64/cpu/isr_stub.asm \
 	kernel/arch/x86_64/cpu/usermode.asm \
 	kernel/arch/x86_64/cpu/context_switch.asm
@@ -72,6 +70,7 @@ KERNEL_SRC = \
 	kernel/arch/x86_64/cpu/apic.c \
 	kernel/arch/x86_64/cpu/timer.c \
 	kernel/arch/x86_64/cpu/tss.c \
+	kernel/arch/x86_64/cpu/cpu.c \
 	kernel/drivers/ata.c \
 	kernel/drivers/config.c \
 	kernel/drivers/ipv4_config.c \
@@ -93,6 +92,7 @@ KERNEL_SRC = \
 	kernel/system/scheduler.c \
 	kernel/system/irqsw.c \
 	kernel/system/spinlock.c \
+	kernel/system/callstack.c \
 	kernel/system/messaging.c \
 	kernel/system/shared_mem.c \
 	kernel/system/shared_kernel_data.c \
@@ -139,7 +139,7 @@ TARGET = $(BUILD)/diffos.img
 ISO = $(BUILD)/diffos.iso
 CD_ISO = $(BUILD)/diffos_cd.iso
 
-.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean iso vdi vmdk graphics cd run-cd quake
+.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean iso vdi vmdk graphics cd quake
 
 all: tools drivers $(ISO)
 
@@ -201,27 +201,6 @@ $(BUILD)/boot_stage2.bin: $(BOOT_STAGE2) $(BUILD)/kernel_sizes.inc
 	@$(NASM) $(NASMFLAGS) $< -o $@
 	@echo "[ASM] Stage 2 loader built: $@"
 
-# CD-ROM Bootloader Stages
-$(BUILD)/boot_cd_stage1.bin: $(BOOT_CD_STAGE1) $(BUILD)/boot_stage2_cd.bin
-	@mkdir -p $(BUILD)
-	@echo "[ASM] Building CD Stage 1 bootloader"
-	@stage2_sectors=$$(expr \( $$(stat -c %s $(BUILD)/boot_stage2_cd.bin) + 2047 \) / 2048); \
-	$(NASM) $(NASMFLAGS) -D STAGE2_SECTORS=$$stage2_sectors $< -o $@
-	@echo "[ASM] CD Bootloader Stage 1 built: $@"
-
-$(BUILD)/boot_stage2_cd.bin: $(BOOT_CD_STAGE2)
-	@mkdir -p $(BUILD)
-	@echo "[ASM] Building CD Stage 2 loader"
-	@$(NASM) $(NASMFLAGS) $< -o $@
-	@echo "[ASM] CD Stage 2 loader built: $@"
-
-$(BUILD)/boot_cd.bin: $(BUILD)/boot_cd_stage1.bin $(BUILD)/boot_stage2_cd.bin
-	@echo "[CD] Packing El Torito boot image (stage1 + stage2)"
-	@dd if=$(BUILD)/boot_cd_stage1.bin of=$(BUILD)/boot_cd_stage1.padded.bin bs=2048 conv=sync status=none
-	@dd if=$(BUILD)/boot_stage2_cd.bin of=$(BUILD)/boot_stage2_cd.padded.bin bs=2048 conv=sync status=none
-	@cat $(BUILD)/boot_cd_stage1.padded.bin $(BUILD)/boot_stage2_cd.padded.bin > $@
-	@echo "[CD] Boot image built: $@"
-
 # Kernel ELF
 $(BUILD)/kernel.elf: $(KERNEL_OBJ) $(ASM_OBJ) linker.ld
 	@echo "[LD] Linking kernel"
@@ -242,6 +221,11 @@ $(BUILD)/kernel.bin: $(BUILD)/kernel.elf
 	@echo "[OBJCOPY] Kernel binary created: $@"
 
 # ASM source compilation
+$(OBJ)/%.o: boot/%.asm
+	@mkdir -p $(OBJ)
+	@echo "[ASM] Compiling $<"
+	@nasm -f elf32 $< -o $@
+
 $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.asm
 	@mkdir -p $(OBJ)
 	@echo "[ASM] Compiling $<"
@@ -314,60 +298,16 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 
-# Run in QEMU (using hard disk boot - more reliable than CD-ROM)
-run: tools drivers $(TARGET)
-	@echo "[QEMU] Starting OS"
-	$(QEMU) \
-		$(if $(HEADLESS),,$(if $(QEMU_DISPLAY),-display $(QEMU_DISPLAY),)) \
-		-monitor $(QEMU_MONITOR) \
-		-m 64M \
-		-serial $(QEMU_SERIAL) \
-		-no-reboot -no-shutdown \
-		-d guest_errors,trace:ioport_* -D qemu.log \
-		-boot c \
-		-hda $(TARGET) \
-		-netdev user,id=net0 \
-		-device rtl8139,netdev=net0 \
-		$(QEMU_EXTRA) \
-		-chardev file,id=dbg,path=/home/zet/os/debugcon.log \
-		-device isa-debugcon,iobase=0xe9,chardev=dbg
-
-# Debug in QEMU with GDB
-debug: tools drivers $(TARGET)
-	@echo "[QEMU] Starting in debug mode"
-	@$(QEMU) -display default,show-cursor=off -monitor stdio -m 64M -vga std -boot c -hda $(TARGET) -netdev user,id=net0 -device rtl8139,netdev=net0 -s -S &
-	@echo "[GDB] Starting debugger"
-	@gdb -x 1kernel.gdb
-
-# CD-ROM ISO image (El Torito bootable)
-$(CD_ISO): tools exls graphics $(BUILD)/boot_cd.bin $(BUILD)/boot_stage2_cd.bin $(BUILD)/kernel.bin $(TARGET)
-	@echo "[CD] Creating bootable CD-ROM ISO"
-	@mkdir -p $(BUILD)/cdroot/boot
-	@cp $(BUILD)/boot_cd.bin $(BUILD)/cdroot/boot/
-	@cp $(BUILD)/boot_stage2_cd.bin $(BUILD)/cdroot/boot/
-	@cp $(TARGET) $(BUILD)/cdroot/diffos.img
-	@$(MKISOFS) -o $@ \
-		-b boot/boot_cd.bin \
-		-no-emul-boot \
-		-boot-load-size 12 \
-		-boot-info-table \
-		-V "DIFFOS" \
-		-publisher "DiffOS" \
-		-quiet \
-		$(BUILD)/cdroot
-	@rm -rf $(BUILD)/cdroot
-	@echo "[CD] Bootable CD-ROM ISO created: $@"
-
-# Build CD target
-cd: $(CD_ISO)
-
-# Run CD-ROM in QEMU
-run-cd: $(CD_ISO)
+# Run in QEMU (boots from GRUB ISO)
+run:
+	@$(MAKE) clean --no-print-directory
+	@$(MAKE) drivers --no-print-directory
+	@$(MAKE) $(CD_ISO) --no-print-directory
 	@echo "[QEMU] Starting OS from CD-ROM"
 	$(QEMU) \
 		$(if $(HEADLESS),,$(if $(QEMU_DISPLAY),-display $(QEMU_DISPLAY),)) \
 		-monitor $(QEMU_MONITOR) \
-		-m 64M \
+		-m $(QEMU_MEM) \
 		-serial $(QEMU_SERIAL) \
 		-no-reboot -no-shutdown \
 		-d guest_errors,trace:ioport_* -D qemu.log \
@@ -378,6 +318,37 @@ run-cd: $(CD_ISO)
 		$(QEMU_EXTRA) \
 		-chardev file,id=dbg,path=/home/zet/os/debugcon.log \
 		-device isa-debugcon,iobase=0xe9,chardev=dbg
+
+# Debug in QEMU with GDB
+debug: tools drivers $(TARGET)
+	@echo "[QEMU] Starting in debug mode"
+	@$(QEMU) -display default,show-cursor=off -monitor stdio -m $(QEMU_MEM) -vga std -boot c -hda $(TARGET) -netdev user,id=net0 -device rtl8139,netdev=net0 -s -S &
+	@echo "[GDB] Starting debugger"
+	@gdb -x 1kernel.gdb
+
+# CD-ROM ISO image (GRUB bootable)
+$(CD_ISO): tools exls graphics $(BUILD)/kernel.elf $(TARGET)
+	@echo "[CD] Creating GRUB bootable CD-ROM ISO"
+	@mkdir -p $(BUILD)/isoroot/boot/grub
+	@echo 'set timeout_style=hidden' > $(BUILD)/isoroot/boot/grub/grub.cfg
+	@echo 'set timeout=0' >> $(BUILD)/isoroot/boot/grub/grub.cfg
+	@echo 'terminal_input console' >> $(BUILD)/isoroot/boot/grub/grub.cfg
+	@echo 'terminal_output console' >> $(BUILD)/isoroot/boot/grub/grub.cfg
+	@echo 'set gfxpayload=text' >> $(BUILD)/isoroot/boot/grub/grub.cfg
+	@cp $(BUILD)/kernel.elf $(BUILD)/isoroot/boot/
+	@cp $(TARGET) $(BUILD)/isoroot/diffos.img
+	@echo 'set default=0' >> $(BUILD)/isoroot/boot/grub/grub.cfg
+	@echo 'menuentry "DiffOS" {' >> $(BUILD)/isoroot/boot/grub/grub.cfg
+	@echo '    multiboot /boot/kernel.elf' >> $(BUILD)/isoroot/boot/grub/grub.cfg
+	@echo '    module /diffos.img diffos.img' >> $(BUILD)/isoroot/boot/grub/grub.cfg
+	@echo '    boot' >> $(BUILD)/isoroot/boot/grub/grub.cfg
+	@echo '}' >> $(BUILD)/isoroot/boot/grub/grub.cfg
+	grub-mkrescue -o $@ $(BUILD)/isoroot 2>/dev/null
+	@rm -rf $(BUILD)/isoroot
+	@echo "[CD] GRUB bootable CD-ROM ISO created: $@"
+
+# Build CD target
+cd: $(CD_ISO)
 
 exls:
 	@dirs="$(EXL_SUBDIRS)"; \
