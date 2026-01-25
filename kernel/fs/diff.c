@@ -586,7 +586,7 @@ int disk_read(uint32_t sector, uint32_t count, void* buffer)
         for (uint32_t i = 0; i < count; i++)
         {
             int r = ata_read(sector + i, 1, tmp);
-            if (r < 0)
+            if (r != (int)SECTOR_SIZE)
             {
                 return (int)(done ? (int)(done * SECTOR_SIZE) : -2);
             }
@@ -617,7 +617,7 @@ int disk_read(uint32_t sector, uint32_t count, void* buffer)
         for (uint32_t i = 0; i < count; i++)
         {
             int r = ata_read(sector + i, 1, tmp);
-            if (r < 0)
+            if (r != (int)SECTOR_SIZE)
             {
                 return (int)(done ? (int)(done * SECTOR_SIZE) : -2);
             }
@@ -640,7 +640,7 @@ int disk_read(uint32_t sector, uint32_t count, void* buffer)
         uint32_t bytes = chunk * SECTOR_SIZE;
 
         int rr = ata_read(lba, chunk, bounce);
-        if (rr < 0)
+        if (rr != (int)bytes)
         {
             kfree(bounce);
             return (int)(bytes_done ? (int)bytes_done : -2);

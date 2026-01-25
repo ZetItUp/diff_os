@@ -136,6 +136,7 @@ KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))
 
 # Targets
 TARGET = $(BUILD)/diffos.img
+IMG_SIZE_MB ?= 48
 ISO = $(BUILD)/diffos.iso
 CD_ISO = $(BUILD)/diffos_cd.iso
 
@@ -158,7 +159,7 @@ graphics:
 $(TARGET): tools exls graphics $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] Creating OS image"
 	@cp $(BUILD)/kernel.bin image/system/kernel.bin
-	@$(MKDIFFOS) $(TARGET) 64 $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
+	@$(MKDIFFOS) $(TARGET) $(IMG_SIZE_MB) $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
 	@echo "[IMG] OS image created: $@"
 
 # VirtualBox VDI format
