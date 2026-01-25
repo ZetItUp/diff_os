@@ -5,12 +5,11 @@ OBJCOPY = i386-elf-objcopy
 NASM = nasm
 
 # QEMU Configuration
-# Choose which QEMU to use (comment/uncomment):
 QEMU = qemu-system-i386
 
 # QEMU runtime config:
 # - Default uses a GUI display (if available).
-# - Use `HEADLESS=1 make run` / `HEADLESS=1 make run-cd` for serial-only output.
+# - Use `HEADLESS=1 make run` for serial-only output.
 QEMU_DISPLAY ?= default,show-cursor=off
 QEMU_MONITOR ?= stdio
 QEMU_SERIAL  ?= file:serial.log
@@ -35,10 +34,8 @@ NASMFLAGS = -f bin
 
 # mkdiffos tool
 MKDIFFOS = $(BUILD)/mkdiffos
-MKISOFS = mkisofs
 TOOLS_DIR = tools
 DRIVERS_DIR = drivers
-IMAGE = $(TARGET)
 EXLS_DIR = exls
 EXL_SUBDIRS := $(patsubst %/,%,$(dir $(wildcard $(EXLS_DIR)/*/Makefile)))
 
@@ -49,7 +46,7 @@ endif
 
 .PRECIOUS: %.o %.elf %.bin %.patched
 
-# Source Files - Normal HDD boot
+# Source Files
 BOOT_STAGE1 = boot/boot.asm
 BOOT_STAGE2 = boot/boot_stage2.asm
 
@@ -58,7 +55,7 @@ ASM_SRC = \
 	kernel/arch/x86_64/cpu/isr_stub.asm \
 	kernel/arch/x86_64/cpu/usermode.asm \
 	kernel/arch/x86_64/cpu/context_switch.asm
-	
+
 KERNEL_SRC = \
     kernel/library/string.c \
 	kernel/library/printf.c \
@@ -121,93 +118,72 @@ KERNEL_SRC += \
 	kernel/interfaces/intf_console.c \
 	kernel/interfaces/intf_tty.c
 
-PROGRAMS_LIST = dterm \
-				hello \
-				ls \
-				ttest \
-				ptest \
-				brktest
-
-# Helpers
-KERNEL_SRC += \
-
 ASM_OBJ = $(addprefix $(OBJ)/,$(notdir $(ASM_SRC:.asm=.o)))
 KERNEL_OBJ = $(addprefix $(OBJ)/,$(notdir $(KERNEL_SRC:.c=.o)))
 
 # Targets
-TARGET = $(BUILD)/diffos.img
+TARGET_RAW = $(BUILD)/diffos.img
+TARGET_VMDK = $(BUILD)/diffos.vmdk
 IMG_SIZE_MB ?= 48
-ISO = $(BUILD)/diffos.iso
-CD_ISO = $(BUILD)/diffos_cd.iso
 
-.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean iso vdi vmdk graphics cd quake
+.PHONY: all clean run games debug tools drivers exls exls-clean progs allclean vmdk vdi graphics quake
 
-all: tools drivers $(ISO)
+# Default target: build VMDK
+all: $(TARGET_VMDK)
 
 tools:
 	@echo "[TOOLS] Making tools..."
 	@$(MAKE) -C $(TOOLS_DIR) all --no-print-directory
 
 drivers:
-	@echo "[DRIVERS] Creating Drivers...i"
+	@echo "[DRIVERS] Creating Drivers..."
 	@$(MAKE) -C $(DRIVERS_DIR) all --no-print-directory
 
 graphics:
 	@$(MAKE) -C graphics --no-print-directory
 
-# Main OS image
-$(TARGET): tools exls graphics $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
-	@echo "[IMG] Creating OS image"
+# Raw disk image with GRUB bootloader and Diff filesystem
+$(TARGET_RAW): tools exls graphics $(BUILD)/kernel.elf $(BUILD)/kernel.bin
+	@echo "[IMG] Creating OS disk image with GRUB"
 	@cp $(BUILD)/kernel.bin image/system/kernel.bin
-	@$(MKDIFFOS) $(TARGET) $(IMG_SIZE_MB) $(BUILD)/boot.bin $(BUILD)/boot_stage2.bin $(BUILD)/kernel.bin
-	@echo "[IMG] OS image created: $@"
+	@chmod +x $(TOOLS_DIR)/mkgrubdisk.sh
+	@$(TOOLS_DIR)/mkgrubdisk.sh $(TARGET_RAW) $(IMG_SIZE_MB) $(BUILD)/kernel.elf
+	@$(MKDIFFOS) $(TARGET_RAW) $(IMG_SIZE_MB) $(BUILD)/kernel.bin
+	@echo "[IMG] Raw disk image created: $@"
+
+# VMDK format (works with QEMU, VirtualBox, VMware)
+$(TARGET_VMDK): $(TARGET_RAW)
+	@echo "[VMDK] Creating VMDK disk image"
+	@rm -f $@
+	@qemu-img convert -f raw -O vmdk $(TARGET_RAW) $@
+	@echo "[VMDK] Disk image created: $@"
 
 # VirtualBox VDI format
-$(BUILD)/diffos.vdi: $(TARGET)
+$(BUILD)/diffos.vdi: $(TARGET_RAW)
 	@echo "[VDI] Creating VirtualBox disk image"
 	@rm -f $@
-	@VBoxManage convertfromraw --format VDI $(TARGET) $@ 2>/dev/null || \
-		qemu-img convert -f raw -O vdi $(TARGET) $@
+	@VBoxManage convertfromraw --format VDI $(TARGET_RAW) $@ 2>/dev/null || \
+		qemu-img convert -f raw -O vdi $(TARGET_RAW) $@
 	@echo "[VDI] VirtualBox image created: $@"
 
-# VMware VMDK format
-$(BUILD)/diffos.vmdk: $(TARGET)
-	@echo "[VMDK] Creating VMware disk image"
-	@rm -f $@
-	@qemu-img convert -f raw -O vmdk $(TARGET) $@
-	@echo "[VMDK] VMware image created: $@"
-
-# Hybrid ISO (boots as CD-ROM or raw disk via USB/direct)
-$(ISO): $(TARGET)
-	@echo "[ISO] Creating hybrid ISO"
-	@cp $(TARGET) $@
-	@# Rename to .iso - the raw image already has a valid MBR and can boot directly
-	@echo "[ISO] Hybrid image created: $@"
-	@echo "[ISO] Use with: -cdrom (CD boot) or -hda (disk boot)"
-
-iso: $(ISO)
+vmdk: $(TARGET_VMDK)
 vdi: $(BUILD)/diffos.vdi
-vmdk: $(BUILD)/diffos.vmdk
 
 # Bootloader Stages
 $(BUILD)/boot.bin: $(BOOT_STAGE1)
 	@mkdir -p $(BUILD)
 	@echo "[ASM] Building Stage 1 bootloader"
 	@$(NASM) $(NASMFLAGS) $< -o $@
-	@echo "[ASM] Bootloader Stage 1 built: $@"
 
 $(BUILD)/boot_stage2.bin: $(BOOT_STAGE2) $(BUILD)/kernel_sizes.inc
 	@mkdir -p $(BUILD)
 	@echo "[ASM] Building Stage 2 loader"
 	@$(NASM) $(NASMFLAGS) $< -o $@
-	@echo "[ASM] Stage 2 loader built: $@"
 
 # Kernel ELF
 $(BUILD)/kernel.elf: $(KERNEL_OBJ) $(ASM_OBJ) linker.ld
 	@echo "[LD] Linking kernel"
-	$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJ) $(ASM_OBJ) # 2>/dev/null
-	@echo "[LD] Kernel linked: $@"
-
+	$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJ) $(ASM_OBJ)
 
 $(BUILD)/kernel_sizes.inc: $(BUILD)/kernel.bin
 	@mkdir -p $(BUILD)
@@ -219,7 +195,6 @@ $(BUILD)/kernel_sizes.inc: $(BUILD)/kernel.bin
 $(BUILD)/kernel.bin: $(BUILD)/kernel.elf
 	@echo "[OBJCOPY] Creating kernel binary"
 	@$(OBJCOPY) $(OBJCOPYFLAGS) $< $@
-	@echo "[OBJCOPY] Kernel binary created: $@"
 
 # ASM source compilation
 $(OBJ)/%.o: boot/%.asm
@@ -298,58 +273,34 @@ $(OBJ)/%.o: kernel/arch/x86_64/cpu/%.c
 	@echo "[CC] Compiling $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
-
-# Run in QEMU (boots from GRUB ISO)
+# Run in QEMU (boots from disk image)
 run:
 	@$(MAKE) clean --no-print-directory
 	@$(MAKE) drivers --no-print-directory
-	@$(MAKE) $(CD_ISO) --no-print-directory
-	@echo "[QEMU] Starting OS from CD-ROM"
+	@$(MAKE) $(TARGET_VMDK) --no-print-directory
+	@echo "[QEMU] Starting OS from disk"
 	$(QEMU) \
 		$(if $(HEADLESS),,$(if $(QEMU_DISPLAY),-display $(QEMU_DISPLAY),)) \
 		-monitor $(QEMU_MONITOR) \
 		-m $(QEMU_MEM) \
 		-serial $(QEMU_SERIAL) \
 		-no-reboot -no-shutdown \
-		-d guest_errors,trace:ioport_* -D qemu.log \
-		-boot d \
-		-cdrom $(CD_ISO) \
+		-d guest_errors -D qemu.log \
+		-drive file=$(TARGET_VMDK),format=vmdk \
 		-netdev user,id=net0 \
 		-device rtl8139,netdev=net0 \
 		$(QEMU_EXTRA) \
-		-chardev file,id=dbg,path=/home/zet/os/debugcon.log \
+		-chardev file,id=dbg,path=debugcon.log \
 		-device isa-debugcon,iobase=0xe9,chardev=dbg
 
 # Debug in QEMU with GDB
-debug: tools drivers $(TARGET)
+debug: tools drivers $(TARGET_VMDK)
 	@echo "[QEMU] Starting in debug mode"
-	@$(QEMU) -display default,show-cursor=off -monitor stdio -m $(QEMU_MEM) -vga std -boot c -hda $(TARGET) -netdev user,id=net0 -device rtl8139,netdev=net0 -s -S &
+	@$(QEMU) -display default,show-cursor=off -monitor stdio -m $(QEMU_MEM) -vga std \
+		-drive file=$(TARGET_VMDK),format=vmdk \
+		-netdev user,id=net0 -device rtl8139,netdev=net0 -s -S &
 	@echo "[GDB] Starting debugger"
 	@gdb -x 1kernel.gdb
-
-# CD-ROM ISO image (GRUB bootable)
-$(CD_ISO): tools exls graphics $(BUILD)/kernel.elf $(TARGET)
-	@echo "[CD] Creating GRUB bootable CD-ROM ISO"
-	@mkdir -p $(BUILD)/isoroot/boot/grub
-	@echo 'set timeout_style=hidden' > $(BUILD)/isoroot/boot/grub/grub.cfg
-	@echo 'set timeout=0' >> $(BUILD)/isoroot/boot/grub/grub.cfg
-	@echo 'terminal_input console' >> $(BUILD)/isoroot/boot/grub/grub.cfg
-	@echo 'terminal_output console' >> $(BUILD)/isoroot/boot/grub/grub.cfg
-	@echo 'set gfxpayload=text' >> $(BUILD)/isoroot/boot/grub/grub.cfg
-	@cp $(BUILD)/kernel.elf $(BUILD)/isoroot/boot/
-	@cp $(TARGET) $(BUILD)/isoroot/diffos.img
-	@echo 'set default=0' >> $(BUILD)/isoroot/boot/grub/grub.cfg
-	@echo 'menuentry "DiffOS" {' >> $(BUILD)/isoroot/boot/grub/grub.cfg
-	@echo '    multiboot /boot/kernel.elf' >> $(BUILD)/isoroot/boot/grub/grub.cfg
-	@echo '    module /diffos.img diffos.img' >> $(BUILD)/isoroot/boot/grub/grub.cfg
-	@echo '    boot' >> $(BUILD)/isoroot/boot/grub/grub.cfg
-	@echo '}' >> $(BUILD)/isoroot/boot/grub/grub.cfg
-	grub-mkrescue -o $@ $(BUILD)/isoroot 2>/dev/null
-	@rm -rf $(BUILD)/isoroot
-	@echo "[CD] GRUB bootable CD-ROM ISO created: $@"
-
-# Build CD target
-cd: $(CD_ISO)
 
 exls:
 	@dirs="$(EXL_SUBDIRS)"; \
@@ -397,7 +348,6 @@ allclean: clean
 # Clean build
 clean:
 	@echo "[CLEAN] Removing build files"
-	@echo "[CLEAN] Removing tools build files"
 	@$(MAKE) -C $(TOOLS_DIR) clean --no-print-directory
 	@$(MAKE) -C $(DRIVERS_DIR) clean --no-print-directory
 	@$(MAKE) -C graphics clean --no-print-directory

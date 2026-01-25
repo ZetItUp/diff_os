@@ -53,15 +53,6 @@ static int sector_bitmap_dirty;
 
 extern volatile int g_in_irq;
 
-static const uint8_t *g_module_base = NULL;
-static uint32_t g_module_bytes = 0;
-
-void diff_set_module_image(const void *base, uint32_t bytes)
-{
-    g_module_base = (const uint8_t *)base;
-    g_module_bytes = bytes;
-}
-
 // ---------------------------------------------------------------------------
 // Pointer and range helpers
 // ---------------------------------------------------------------------------
@@ -91,72 +82,6 @@ static inline int is_user_range(const void* ptr, size_t n)
 }
 
 static int safe_copy_out(void* dst, const void* src, uint32_t n);
-
-static int module_disk_read(uint32_t sector, uint32_t count, void *buffer)
-{
-    if (!g_module_base || g_module_bytes == 0)
-    {
-        return -1;
-    }
-
-    uint64_t start = (uint64_t)sector * SECTOR_SIZE;
-    uint64_t bytes = (uint64_t)count * SECTOR_SIZE;
-    uint64_t limit = g_module_bytes;
-
-    if (start >= limit)
-    {
-        return -2;
-    }
-
-    if (start + bytes > limit)
-    {
-        uint64_t max_bytes = limit - start;
-        count = (uint32_t)(max_bytes / SECTOR_SIZE);
-        bytes = (uint64_t)count * SECTOR_SIZE;
-    }
-
-    if (count == 0)
-    {
-        return 0;
-    }
-
-    uintptr_t src_phys = (uintptr_t)g_module_base + (uintptr_t)start;
-    uint32_t remaining = (uint32_t)bytes;
-    uint8_t *dst = (uint8_t *)buffer;
-
-    while (remaining > 0)
-    {
-        uintptr_t page_base = src_phys & ~(uintptr_t)(PAGE_SIZE_4KB - 1u);
-        uint32_t page_off = (uint32_t)(src_phys & (PAGE_SIZE_4KB - 1u));
-        uint32_t chunk = PAGE_SIZE_4KB - page_off;
-
-        if (chunk > remaining)
-        {
-            chunk = remaining;
-        }
-
-        uint8_t *mapped = (uint8_t *)paging_kmap_phys((uint32_t)page_base, 0);
-
-        if (!mapped)
-        {
-            return -4;
-        }
-
-        if (safe_copy_out(dst, mapped + page_off, chunk) < 0)
-        {
-            paging_kunmap_phys(0);
-            return -3;
-        }
-
-        paging_kunmap_phys(0);
-
-        dst += chunk;
-        src_phys += chunk;
-        remaining -= chunk;
-    }
-
-    return (int)bytes;
-}
 
 // Prefault user span for writes (kernel -> user)
 static int prefault_user_write_range(void* dst, uint32_t n)
@@ -551,14 +476,6 @@ int disk_read(uint32_t sector, uint32_t count, void* buffer)
         return -1;
     }
 
-    if (g_module_base)
-    {
-        return module_disk_read(sector, count, buffer);
-    }
-
-    // Debug: should not reach here if using module image
-    printf("[FS] WARNING: g_module_base is NULL, falling back to ATA (sector=%u)\n", sector);
-
     if (superblock.total_sectors != 0)
     {
         if (sector >= superblock.total_sectors)
@@ -670,11 +587,6 @@ int disk_write(uint32_t sector, uint32_t count, const void* buffer)
     if (!buffer)
     {
         return -1;
-    }
-
-    if (g_module_base)
-    {
-        return -4;
     }
 
     if (superblock.total_sectors != 0)
@@ -949,7 +861,8 @@ int read_superblock(SuperBlock* sb)
     }
 
     // Use disk_read so we exercise the same safety path everywhere
-    int r = disk_read(2048, 1, sb);
+    // Superblock is at sector 16384 (8MB offset) to leave room for GRUB + kernel
+    int r = disk_read(16384, 1, sb);
     if (r < 0)
     {
         return -1;
@@ -2170,12 +2083,6 @@ static int write_at_entry(FileEntry* fe, uint32_t offset, const void* buffer, ui
         return 0;
     }
 
-    // Writing is not supported when running from RAM module (no real disk)
-    if (g_module_base)
-    {
-        DDBG("[Diff FS] write_at_entry: writes not supported in module mode\n");
-        return -1;
-    }
 
     // Check if we need to expand the file
     uint32_t end_offset = offset + count;

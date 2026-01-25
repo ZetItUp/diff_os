@@ -37,28 +37,17 @@ static char foreground = FG_GRAY;
 static void init_thread(void);
 void display_banner(void);
 void display_sys_info(void);
-static void capture_module_info(multiboot_info_t* mbi);
-static void init_module_fs(void);
-
 void kmain(uint32_t magic, multiboot_info_t* mbi)
 {
     serial_init();
 
     set_color(MAKE_COLOR(foreground, background));
     clear();
-    // Verify multiboot magic
-    if (magic != MULTIBOOT_MAGIC)
-    {
-        serial_write("ERROR: Invalid multiboot magic!\n");
-        printf("ERROR: Invalid multiboot magic: 0x%x\n", magic);
 
-        for (;;)
-        {
-            asm volatile("hlt");
-        }
-    }
-
-    capture_module_info(mbi);
+    // Note: We don't require multiboot magic since we support both
+    // GRUB (multiboot) and custom bootloader boot methods.
+    // The custom bootloader doesn't set multiboot magic.
+    (void)magic;  // Suppress unused warning
 
     // Calculate total RAM from multiboot memory map
     uint32_t total_ram = 0;
@@ -100,7 +89,6 @@ void kmain(uint32_t magic, multiboot_info_t* mbi)
     system.ram_mb = ram_mb;
 
     init_paging(ram_mb);
-    init_module_fs();  // Reserve and set up module after paging is initialized
     cpu_init();
     init_heap(&__heap_start, &__heap_end);
     device_registry_init();
@@ -242,56 +230,3 @@ void display_sys_info(void)
     printf("[RAM] Available Memory: %u MB\n", system.ram_mb);
 }
 
-// Module info storage - captured early, reserved after paging init
-static uint32_t s_module_start = 0;
-static uint32_t s_module_size = 0;
-
-// Capture module info from multiboot (called before init_paging)
-static void capture_module_info(multiboot_info_t* mbi)
-{
-    if (!mbi)
-    {
-        return;
-    }
-
-    if ((mbi->flags & MULTIBOOT_INFO_MODS) == 0)
-    {
-        return;
-    }
-
-    if (mbi->mods_count == 0)
-    {
-        return;
-    }
-
-    multiboot_module_t* mods = (multiboot_module_t*)(uintptr_t)mbi->mods_addr;
-    uint32_t start = mods[0].mod_start;
-    uint32_t end = mods[0].mod_end;
-
-    if (end <= start)
-    {
-        printf("Module range invalid start=0x%x end=0x%x\n", start, end);
-        return;
-    }
-
-    s_module_start = start;
-    s_module_size = end - start;
-}
-
-// Set up module filesystem (called after init_paging to reserve physical pages)
-static void init_module_fs(void)
-{
-    if (s_module_start == 0 || s_module_size == 0)
-    {
-        printf("[INIT] No module found, skipping module FS init\n");
-        return;
-    }
-
-    printf("[INIT] Module at 0x%08x size=%u bytes\n", s_module_start, s_module_size);
-
-    // Reserve the module's physical memory so it won't be allocated to processes
-    paging_reserve_phys_range(s_module_start, s_module_size);
-
-    // Now set up the module for filesystem access
-    diff_set_module_image((const void*)(uintptr_t)s_module_start, s_module_size);
-}

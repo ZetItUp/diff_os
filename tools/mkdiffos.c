@@ -7,8 +7,7 @@
 #include <unistd.h>
 
 #define SECTOR_SIZE 512
-#define RESERVED_STAGE2_SECTORS 31
-#define FS_START_LBA 2048
+#define FS_START_LBA 16384  // 8MB offset - leaves room for GRUB + kernel.elf
 #define PARTITION_TYPE 0xC8
 #define MAX_FILES 256
 #define MAX_FILENAME_LEN 256
@@ -258,22 +257,22 @@ static void write_zeros(FILE *f, size_t sectors)
 
 int main(int argc, char *argv[])
 {
-    if (argc != 6)
+    if (argc != 4)
     {
-        printf("Usage: %s <output.img> <size_mb> <boot.bin> <stage2loader file> <kernel.bin>\n", argv[0]);
+        printf("Usage: %s <output.img> <size_mb> <kernel.bin>\n", argv[0]);
+        printf("\nWrites Diff filesystem to an existing disk image starting at sector %d.\n", FS_START_LBA);
+        printf("The image should already contain GRUB bootloader (use mkgrubdisk.sh first).\n");
 
         return 1;
     }
 
     const char *out_name    = argv[1];
     int size_mb             = atoi(argv[2]);
-    const char *boot_file   = argv[3];
-    const char *stage2_file = argv[4];
-    const char *kernel_file = argv[5];
+    const char *kernel_file = argv[3];
 
-    if (size_mb < 8)
+    if (size_mb < 16)
     {
-        printf("Image size must be at least 8 MB\n");
+        printf("Image size must be at least 16 MB\n");
 
         return 1;
     }
@@ -311,7 +310,7 @@ int main(int argc, char *argv[])
     table.entries[2].entry_id  = 3;
     table.entries[2].parent_id = 2;
     table.entries[2].type      = ENTRY_TYPE_FILE;
-    
+
     snprintf(table.entries[2].filename, MAX_FILENAME_LEN, "kernel.bin");
     table.entries[2].data.file.file_size_bytes = (uint32_t)kernel_size;
     table.count = 3;
@@ -342,82 +341,25 @@ int main(int argc, char *argv[])
         }
 
         uint32_t file_sectors = (table.entries[i].data.file.file_size_bytes + SECTOR_SIZE - 1) / SECTOR_SIZE;
-        
+
         table.entries[i].data.file.start_sector = next_sector;
         table.entries[i].data.file.sector_count = file_sectors;
         next_sector += file_sectors;
     }
 
-    FILE *out = fopen(out_name, "wb+");
+    // Open existing image for read/write (preserves GRUB bootloader)
+    FILE *out = fopen(out_name, "r+b");
 
     if (!out)
     {
-        perror("Failed to create image");
+        perror("Failed to open image (run mkgrubdisk.sh first)");
 
         return 1;
     }
 
-    // Write MBR and partition
-    FILE *boot = fopen(boot_file, "rb");
-
-    if (!boot)
-    {
-        perror("Unable to open boot.bin");
-
-        return 1;
-    }
-
-    uint8_t mbr[SECTOR_SIZE] = {0};
-    fread(mbr, 1, 446, boot);
-    fclose(boot);
-
-    uint8_t *pt = mbr + 446;
-    memset(pt, 0, 64);
-    pt[0] = 0x80;
-    pt[4] = PARTITION_TYPE;
-    
-    *(uint32_t *)(pt + 8)  = FS_START_LBA;
-    *(uint32_t *)(pt + 12) = total_sectors - FS_START_LBA;
-    
-    mbr[510] = 0x55;
-    mbr[511] = 0xAA;
-    
-    fwrite(mbr, 1, SECTOR_SIZE, out);
-
-    // Write stage2 directly after MBR, pad to RESERVED_STAGE2_SECTORS
-    FILE *stage2 = fopen(stage2_file, "rb");
-
-    if (!stage2)
-    {
-        perror("Unable to find stage2 file");
-
-        return 1;
-    }
-
-    uint8_t buffer[SECTOR_SIZE];
-    size_t rd;
-    int sectors_written = 0;
-
-    while ((rd = fread(buffer, 1, SECTOR_SIZE, stage2)) > 0)
-    {
-        fwrite(buffer, 1, rd, out);
-        sectors_written++;
-    }
-
-    fclose(stage2);
-
-    if (sectors_written < RESERVED_STAGE2_SECTORS)
-    {
-        write_zeros(out, RESERVED_STAGE2_SECTORS - sectors_written);
-    }
-
-    // Pad to FS_START_LBA
-    uint32_t used = 1 + RESERVED_STAGE2_SECTORS;
-    write_zeros(out, FS_START_LBA - used);
-
-    // Superblock
+    // Seek to filesystem start and write superblock
     SuperBlock sb = {0};
-    sb.magic = 0x44494646;
+    sb.magic = 0x44494646;  // "DIFF"
     sb.version = 1;
     sb.total_sectors = total_sectors;
     sb.file_table_sector = file_table_sector;
@@ -458,6 +400,9 @@ int main(int argc, char *argv[])
     write_zeros(out, sector_bitmap_size);
 
     // Write file contents
+    uint8_t buffer[SECTOR_SIZE];
+    size_t rd;
+
     for (int i = 0; i < table.count; i++)
     {
         if (table.entries[i].type != ENTRY_TYPE_FILE)
@@ -518,7 +463,7 @@ int main(int argc, char *argv[])
     }
 
     fclose(out);
-    printf("[MKDIFF OS] Image created: %s\n", out_name);
+    printf("[MKDIFFOS] Filesystem written to: %s\n", out_name);
 
     return 0;
 }
