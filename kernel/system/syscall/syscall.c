@@ -887,7 +887,19 @@ int system_call_dispatch(struct syscall_frame *f)
         }
         case SYSTEM_VIDEO_MODE_SET:
         {
-            ret = system_video_mode_set((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2);
+            uint32_t w = (uint32_t)arg0;
+            uint32_t h = (uint32_t)arg1;
+            uint32_t bpp = (uint32_t)arg2;
+
+            if (bpp == 0 && h <= 64 && (w >> 16) != 0)
+            {
+                // Backward compatible packed mode: arg0=(w<<16)|h, arg1=bpp
+                bpp = h;
+                h = w & 0xFFFF;
+                w = (w >> 16) & 0xFFFF;
+            }
+
+            ret = system_video_mode_set((int)w, (int)h, (int)bpp);
 
             break;
         }

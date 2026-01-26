@@ -34,8 +34,8 @@
 #define VBE_DISPI_LFB_ENABLED         0x40     // Use linear framebuffer instead of banked mode
 #define VBE_DISPI_NOCLEARMEM          0x80     // Do not clear video memory when enabling (faster)
 
-static uint32_t g_req_width  = 1280;
-static uint32_t g_req_height = 720;
+static uint32_t g_req_width  = 1024;
+static uint32_t g_req_height = 768;
 static uint32_t g_req_bpp    = 32;
 
 static kernel_exports_t *kernel = 0;

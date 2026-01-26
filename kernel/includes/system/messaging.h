@@ -5,7 +5,7 @@
 #include "system/threads.h"
 
 #define MESSAGES_MAX_CHANNELS    32      
-#define MESSAGES_QUEUE_LEN       64
+#define MESSAGES_QUEUE_LEN       128
 #define MESSAGES_MAX             240     // Maximum payload bytes per message
 
 // Message Channel

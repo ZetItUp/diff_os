@@ -164,6 +164,8 @@ static size_t g_backbuffer_bytes = 0;
 static wm_window_t *g_prev_focus = NULL;
 static volatile int g_focus_dirty = 0;
 static uint64_t g_last_present_ms = 0;
+static uint64_t g_last_mode_check_ms = 0;
+static int g_fullscreen_active = 0;
 
 // Cursor theme and state
 static cursor_theme_t g_cursor_theme;
@@ -2286,6 +2288,32 @@ int main(void)
 
     for(;;)
     {
+        uint64_t now_ms = monotonic_ms();
+        if (g_last_mode_check_ms == 0 || (now_ms - g_last_mode_check_ms) >= 200)
+        {
+            video_mode_info_t mode_check;
+            if (system_video_mode_get(&mode_check) == 0)
+            {
+                int was_fullscreen = g_fullscreen_active;
+                g_fullscreen_active = (mode_check.bpp != 32);
+                if (was_fullscreen && !g_fullscreen_active)
+                {
+                    wm_add_dirty_rect(0, 0, (int)g_mode.width, (int)g_mode.height);
+                    g_needs_redraw = 1;
+                    wm_repaint_dirty_region();
+                    wm_draw_cursor();
+                    wm_request_present();
+                }
+            }
+            g_last_mode_check_ms = now_ms;
+        }
+
+        if (g_fullscreen_active)
+        {
+            thread_sleep_ms(50);
+            continue;
+        }
+
         // Block until message arrives or timeout (16ms = ~60Hz input polling)
         int rc = receive_message_timeout(g_mailbox, msg, sizeof(*msg), RECV_TIMEOUT_MS);
 

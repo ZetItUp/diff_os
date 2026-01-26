@@ -422,7 +422,7 @@ static inline int system_video_present_region(const void *argb32, int pitch_byte
 
 static inline int system_video_mode_set(int w, int h, int bpp)
 {
-    return do_sys(SYSTEM_VIDEO_MODE_SET, (w << 16) | (h & 0xFFFF), bpp, 0, 0);
+    return do_sys(SYSTEM_VIDEO_MODE_SET, w, h, bpp, 0);
 }
 
 static inline void* system_brk(void *new_end)

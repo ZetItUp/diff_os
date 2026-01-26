@@ -12,7 +12,7 @@
 static profiler_state_t s_profiler;
 static int s_initialized = 0;
 
-#define PROFILER_DISABLED 1
+#define PROFILER_DISABLED 0
 
 #if PROFILER_DISABLED
 void profiler_init(void)

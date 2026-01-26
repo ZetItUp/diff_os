@@ -47,6 +47,12 @@ static int vbe_ensure_owner(void)
     return (pid == g_video_owner_pid) ? 0 : -1;
 }
 
+static void vbe_take_owner(void)
+{
+    int pid = process_pid(process_current());
+    g_video_owner_pid = pid;
+}
+
 typedef struct
 {
     uint32_t width;
@@ -204,7 +210,7 @@ static int vbe_copy_shared_region(shared_memory_object_t *obj,
 
 int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_wh)
 {
-    if (g_vbe.frame_buffer == NULL || g_vbe.bpp != 32)
+    if (g_vbe.frame_buffer == NULL)
     {
         return -1;
     }
@@ -223,6 +229,20 @@ int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_
         return -1;
     }
 
+    uint32_t bytes_per_pixel = 0;
+    if (g_vbe.bpp == 16)
+    {
+        bytes_per_pixel = 2;
+    }
+    else if (g_vbe.bpp == 32)
+    {
+        bytes_per_pixel = 4;
+    }
+    else
+    {
+        return -1;
+    }
+
     // Clamp against current mode
     uint32_t max_w = (uint32_t)w;
     uint32_t max_h = (uint32_t)h;
@@ -231,7 +251,7 @@ int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_
     if (max_h > g_vbe.height) max_h = g_vbe.height;
 
     // Bytes per row to copy (cap by LFB pitch to avoid overrun)
-    uint32_t row_bytes = max_w * 4u;
+    uint32_t row_bytes = max_w * bytes_per_pixel;
 
     if (row_bytes > g_vbe.pitch)
     {
@@ -276,7 +296,7 @@ int system_video_present_user(const void *user_ptr, int pitch_bytes, int packed_
 int system_video_present_region_user(const void *user_ptr, int pitch_bytes,
                                       int dest_x, int dest_y, int w, int h)
 {
-    if (g_vbe.frame_buffer == NULL || g_vbe.bpp != 32)
+    if (g_vbe.frame_buffer == NULL)
     {
         return -1;
     }
@@ -291,19 +311,33 @@ int system_video_present_region_user(const void *user_ptr, int pitch_bytes,
         return -1;
     }
 
+    uint32_t bytes_per_pixel = 0;
+    if (g_vbe.bpp == 16)
+    {
+        bytes_per_pixel = 2;
+    }
+    else if (g_vbe.bpp == 32)
+    {
+        bytes_per_pixel = 4;
+    }
+    else
+    {
+        return -1;
+    }
+
     // Clamp region to screen bounds
-    if (dest_x < 0) { w += dest_x; user_ptr = (const uint8_t*)user_ptr - dest_x * 4; dest_x = 0; }
+    if (dest_x < 0) { w += dest_x; user_ptr = (const uint8_t*)user_ptr - dest_x * (int)bytes_per_pixel; dest_x = 0; }
     if (dest_y < 0) { h += dest_y; user_ptr = (const uint8_t*)user_ptr - dest_y * pitch_bytes; dest_y = 0; }
     if (dest_x + w > (int)g_vbe.width) w = (int)g_vbe.width - dest_x;
     if (dest_y + h > (int)g_vbe.height) h = (int)g_vbe.height - dest_y;
     if (w <= 0 || h <= 0) return 0;
 
-    uint32_t row_bytes = (uint32_t)w * 4u;
+    uint32_t row_bytes = (uint32_t)w * bytes_per_pixel;
     if (vbe_try_shared_copy(user_ptr, pitch_bytes, (uint32_t)dest_x, (uint32_t)dest_y, (uint32_t)w, (uint32_t)h) == 0)
     {
         return 0;
     }
-    uint8_t *dst_base = (uint8_t*)g_vbe.frame_buffer + (uint32_t)dest_y * g_vbe.pitch + (uint32_t)dest_x * 4;
+    uint8_t *dst_base = (uint8_t*)g_vbe.frame_buffer + (uint32_t)dest_y * g_vbe.pitch + (uint32_t)dest_x * bytes_per_pixel;
     const uint8_t *src_user = (const uint8_t*)user_ptr;
 
     for (int y = 0; y < h; y++)
@@ -569,10 +603,7 @@ static int vbe_apply_mode(uint32_t w, uint32_t h, uint32_t bpp)
 
 int system_video_mode_set(int w, int h, int bpp)
 {
-    if (vbe_ensure_owner() != 0)
-    {
-        return -1;
-    }
+    vbe_take_owner();
 
     return vbe_apply_mode((uint32_t)w, (uint32_t)h, (uint32_t)bpp);
 }
