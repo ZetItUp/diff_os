@@ -206,6 +206,9 @@ uint8_t mouse_get_buttons_clicked(void);
 // Memory helpers
 extern void* kernel_map_physical_addr(uint32_t phys, uint32_t size, uint32_t flags);
 
+// IRQ interface mode (PIC vs APIC)
+void irq_interface_set_apic_mode(int enabled);
+
 // Keyboard
 extern keyboard_exports_t g_keyboard;
 void keyboard_register(int (*read_fn)(uint8_t*), uint8_t (*block_fn)(void));

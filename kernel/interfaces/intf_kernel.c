@@ -2,12 +2,45 @@
 #include "io.h"
 #include "stdio.h"
 #include "pic.h"
+#include "apic.h"
 #include "paging.h"
 #include "string.h"
 #include "system/irqsw.h"
 #include "timer.h"
 
-kernel_exports_t g_exports = 
+// Track if we're using APIC mode
+static int g_using_apic = 0;
+
+void irq_interface_set_apic_mode(int enabled)
+{
+    g_using_apic = enabled;
+}
+
+static void irq_clear_mask(uint8_t irq)
+{
+    if (g_using_apic)
+    {
+        ioapic_unmask_irq(irq);
+    }
+    else
+    {
+        pic_clear_mask(irq);
+    }
+}
+
+static void irq_set_mask(uint8_t irq)
+{
+    if (g_using_apic)
+    {
+        ioapic_mask_irq(irq);
+    }
+    else
+    {
+        pic_set_mask(irq);
+    }
+}
+
+kernel_exports_t g_exports =
 {
     .inw = inw,
     .outw = outw,
@@ -18,8 +51,8 @@ kernel_exports_t g_exports =
     .io_wait = io_wait,
     .printf = printf,
     .vprintf = vprintf,
-    .pic_clear_mask = pic_clear_mask,
-    .pic_set_mask = pic_set_mask,
+    .pic_clear_mask = irq_clear_mask,
+    .pic_set_mask = irq_set_mask,
     .keyboard_register = keyboard_register,
     .map_physical = kernel_map_physical_addr,
     .vbe_register = vbe_register,

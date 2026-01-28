@@ -26,6 +26,7 @@
 #include "shared_kernel_data.h"
 #include "multiboot.h"
 #include "cpu.h"
+#include "interfaces.h"
 
 extern char __heap_start;
 extern char __heap_end;
@@ -108,7 +109,8 @@ void kmain(uint32_t magic, multiboot_info_t* mbi)
         apic_init();            // Initialize Local APIC
         ioapic_init();          // Initialize I/O APIC
         irq_init();             // Setup IDT entries
-        irq_set_use_apic(1);    // Use APIC for EOI
+        irq_set_use_apic(1);            // Use APIC for EOI
+        irq_interface_set_apic_mode(1); // Tell driver interface to use IOAPIC
 
         // Map legacy IRQs through I/O APIC
         // Note: IRQ0 (PIT timer) is not used when APIC timer is active

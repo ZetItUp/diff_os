@@ -255,21 +255,50 @@ static int mouse_hw_init(void)
 
     flush_output_buffer();
 
-    if(wait_input_clear() != 0)
+    if (wait_input_clear() != 0)
     {
-        return -1;
+        goto fail;
     }
 
     // Enable AUX port
     kernel->outb(PS2_COMMAND_PORT, 0xA8);
+    kernel->io_wait();
 
-    if(wait_input_clear() != 0)
+    if (wait_input_clear() != 0)
     {
-        return -1;
+        goto fail;
+    }
+
+    // Test AUX port
+    kernel->outb(PS2_COMMAND_PORT, 0xA9);
+
+    if (wait_output_full() == 0)
+    {
+        uint8_t test_result = kernel->inb(PS2_DATA_PORT);
+
+        if (test_result != 0x00)
+        {
+            kernel->printf("[MOUSE] AUX port test returned %x\n", test_result);
+        }
+    }
+
+    // Re-enable AUX port after test (some controllers disable it)
+    if (wait_input_clear() != 0)
+    {
+        goto fail;
+    }
+
+    kernel->outb(PS2_COMMAND_PORT, 0xA8);
+    kernel->io_wait();
+
+    if (wait_input_clear() != 0)
+    {
+        goto fail;
     }
 
     // Read command byte
     kernel->outb(PS2_COMMAND_PORT, 0x20);
+    kernel->io_wait();
 
     uint8_t cmd_byte = 0;
 
@@ -282,43 +311,60 @@ static int mouse_hw_init(void)
         cmd_byte = kernel->inb(PS2_DATA_PORT);
     }
 
-    // Enable IRQ 12
-    cmd_byte |= 0x02;
-    // Enable mouse clock and disable translation
-    cmd_byte &= (uint8_t)~0x20; // clear disable-mouse/port2 clock bit (enable AUX)
+    // Enable IRQ12, keep IRQ1 if set, enable AUX clock
+    cmd_byte |= 0x02;            // Enable IRQ12
+    cmd_byte &= (uint8_t)~0x20;  // Clear disable-AUX-clock bit (enable AUX)
 
-    if(wait_input_clear() != 0)
+    if (wait_input_clear() != 0)
     {
         goto fail;
     }
 
     kernel->outb(PS2_COMMAND_PORT, 0x60);
+    kernel->io_wait();
 
-    if(wait_input_clear() != 0)
+    if (wait_input_clear() != 0)
     {
         goto fail;
     }
 
     kernel->outb(PS2_DATA_PORT, cmd_byte);
+    kernel->io_wait();
 
+    flush_output_buffer();
+
+    // Reset mouse device
+    if (mouse_send_cmd(0xFF) == 0)
+    {
+        // Wait for BAT completion (0xAA) and device ID (0x00)
+        uint8_t bat_result = 0;
+        uint8_t device_id = 0;
+
+        if (mouse_read_response(&bat_result) == 0 && bat_result == 0xAA)
+        {
+            (void)mouse_read_response(&device_id);
+        }
+    }
 
     flush_output_buffer();
 
     // Set defaults
-    if(mouse_send_cmd(0xF6) != 0)
+    if (mouse_send_cmd(0xF6) != 0)
     {
         goto fail;
     }
 
     // Resolution (4 counts / mm)
     (void)mouse_send_cmd_with_arg(0xE8, 2);
+
     // Sample rate
     (void)mouse_send_cmd_with_arg(0xF3, 100);
+
     // Stream mode
     (void)mouse_send_cmd(0xEA);
 
     // Enable data reporting
-    if(mouse_send_cmd(0xF4) != 0)
+    if (mouse_send_cmd(0xF4) != 0)
     {
         goto fail;
     }
@@ -371,21 +417,24 @@ static void handle_packet_byte(ps2_mouse_device_t *mouse, uint8_t byte)
 
 static void mouse_service(ps2_mouse_device_t *mouse)
 {
-    for(;;)
+    for (;;)
     {
         uint8_t status = kernel->inb(PS2_STATUS_PORT);
+        kernel->io_wait();
 
-        if(!(status & PS2_STATUS_OUT))
+        if (!(status & PS2_STATUS_OUT))
+        {
+            break;
+        }
+
+        // Only read if this is mouse data (AUX bit set)
+        if (!(status & PS2_STATUS_AUX))
         {
             break;
         }
 
         uint8_t data = kernel->inb(PS2_DATA_PORT);
-
-        if(status & PS2_STATUS_AUX)
-        {
-            handle_packet_byte(mouse, data);
-        }
+        handle_packet_byte(mouse, data);
     }
 }
 

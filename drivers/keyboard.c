@@ -98,24 +98,28 @@ static inline uint8_t keyboard_fifo_pop(ps2_keyboard_device_t *kb)
 // Wait until input buffer is clear so we can write a command
 static void wait_input(void)
 {
-    for (int i = 0; i < 10000; i++)
+    for (int i = 0; i < 100000; i++)
     {
         if (!(kernel->inb(KEYBOARD_STATUS) & 0x02)) // Bit1 IBF
         {
             return;
         }
+
+        kernel->io_wait();
     }
 }
 
 // Wait until there is output ready to read
 static void wait_output(void)
 {
-    for (int i = 0; i < 10000; i++)
+    for (int i = 0; i < 100000; i++)
     {
         if (kernel->inb(KEYBOARD_STATUS) & 0x01) // Bit0 OBF
         {
             return;
         }
+
+        kernel->io_wait();
     }
 }
 
@@ -170,8 +174,23 @@ static void kbq_start_next(ps2_keyboard_device_t *kb)
 // Poll controller and move incoming bytes to FIFO or handle acks
 static void i8042_service(ps2_keyboard_device_t *kb)
 {
-    while (kernel->inb(KEYBOARD_STATUS) & 0x01)
+    for (;;)
     {
+        uint8_t status = kernel->inb(KEYBOARD_STATUS);
+        kernel->io_wait();
+
+        // No data available
+        if (!(status & 0x01))
+        {
+            break;
+        }
+
+        // Mouse data - leave it for mouse driver
+        if (status & 0x20)
+        {
+            break;
+        }
+
         uint8_t val = kernel->inb(KEYBOARD_DATA);
 
         if (kb->q_state == KBQ_WAIT_ACK)
@@ -238,36 +257,80 @@ static void i8042_service(ps2_keyboard_device_t *kb)
 // Initialize the controller and enable IRQ and scanning
 static void i8042_init(void)
 {
+    // Disable both ports during init
     wait_input();
     kernel->outb(KEYBOARD_COMMAND, 0xAD); // Disable keyboard port
-
-    while (kernel->inb(KEYBOARD_STATUS) & 0x01) // Drain OBF
-    {
-        (void)kernel->inb(KEYBOARD_DATA);
-    }
+    kernel->io_wait();
 
     wait_input();
-    kernel->outb(KEYBOARD_COMMAND, 0xAA); // Controller self test
-    wait_output();
+    kernel->outb(KEYBOARD_COMMAND, 0xA7); // Disable mouse port (if exists)
+    kernel->io_wait();
+
+    // Drain output buffer
+    while (kernel->inb(KEYBOARD_STATUS) & 0x01)
+    {
+        (void)kernel->inb(KEYBOARD_DATA);
+        kernel->io_wait();
+    }
+
+    // Read command byte and disable IRQs during setup
+    uint8_t cmd_byte = i8042_read_cmdbyte();
+    cmd_byte &= (uint8_t)~0x03; // Disable IRQ1 and IRQ12 during init
+    cmd_byte |= 0x40;           // Enable translation
+    i8042_write_cmdbyte(cmd_byte);
+
+    // Controller self test
+    wait_input();
+    kernel->outb(KEYBOARD_COMMAND, 0xAA);
+
+    // Wait longer for self-test to complete
+    for (int i = 0; i < 100000; i++)
+    {
+        if (kernel->inb(KEYBOARD_STATUS) & 0x01)
+        {
+            break;
+        }
+
+        kernel->io_wait();
+    }
 
     uint8_t res = kernel->inb(KEYBOARD_DATA);
 
     if (res != 0x55)
     {
         kernel->printf("[DRIVER] Keyboard self test failed %x\n", res);
+
+        // Try to continue anyway, some emulators return different values
     }
 
+    // Test keyboard port
     wait_input();
-    kernel->outb(KEYBOARD_COMMAND, 0xAE); // Enable keyboard port
+    kernel->outb(KEYBOARD_COMMAND, 0xAB);
+    wait_output();
+    res = kernel->inb(KEYBOARD_DATA);
 
-    uint8_t cmd_byte = i8042_read_cmdbyte();
-    cmd_byte |= 0x01; // Enable IRQ1
-    cmd_byte &= (uint8_t)~0x10; // Ensure keyboard port is enabled
+    if (res != 0x00)
+    {
+        kernel->printf("[DRIVER] Keyboard port test returned %x\n", res);
+    }
+
+    // Enable keyboard port
+    wait_input();
+    kernel->outb(KEYBOARD_COMMAND, 0xAE);
+    kernel->io_wait();
+
+    // Re-read and set command byte with IRQ1 enabled
+    cmd_byte = i8042_read_cmdbyte();
+    cmd_byte |= 0x01;            // Enable IRQ1
+    cmd_byte |= 0x40;            // Enable translation
+    cmd_byte &= (uint8_t)~0x10;  // Ensure keyboard port is enabled
     i8042_write_cmdbyte(cmd_byte);
 
-    while (kernel->inb(KEYBOARD_STATUS) & 0x01) // Drain any leftovers
+    // Drain any leftovers
+    while (kernel->inb(KEYBOARD_STATUS) & 0x01)
     {
         (void)kernel->inb(KEYBOARD_DATA);
+        kernel->io_wait();
     }
 }
 
@@ -489,8 +552,23 @@ static void ps2_keyboard_irq_handler(unsigned irq, void *context)
         return;
     }
 
-    while (kernel->inb(KEYBOARD_STATUS) & 0x01)
+    for (;;)
     {
+        uint8_t status = kernel->inb(KEYBOARD_STATUS);
+        kernel->io_wait();
+
+        // No data available
+        if (!(status & 0x01))
+        {
+            break;
+        }
+
+        // Mouse data - leave it for mouse driver
+        if (status & 0x20)
+        {
+            break;
+        }
+
         uint8_t val = kernel->inb(KEYBOARD_DATA);
 
         if (kb->q_state == KBQ_WAIT_ACK)
@@ -530,7 +608,6 @@ static void ps2_keyboard_irq_handler(unsigned irq, void *context)
                     kbq_start_next(kb);
                 }
 
-
                 continue;
             }
 
@@ -545,12 +622,14 @@ static void ps2_keyboard_irq_handler(unsigned irq, void *context)
                 kb->q_count--;
                 kb->q_state = KBQ_IDLE;
 
+                // Read device ID bytes, but only if they're keyboard data
                 for (int i = 0; i < 2; i++)
                 {
-                    if (kernel->inb(KEYBOARD_STATUS) & 0x01)
+                    uint8_t id_status = kernel->inb(KEYBOARD_STATUS);
+
+                    if ((id_status & 0x01) && !(id_status & 0x20))
                     {
-                        uint8_t idb = kernel->inb(KEYBOARD_DATA);
-                        (void)idb; // Ignore device ID bytes for now
+                        (void)kernel->inb(KEYBOARD_DATA);
                     }
                 }
 
