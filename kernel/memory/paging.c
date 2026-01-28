@@ -387,6 +387,12 @@ static inline void phys_ref_dec_idx(int idx)
 
 static inline int phys_idx_from_pa(uint32_t pa){ return (int)(pa / PAGE_SIZE_4KB); }
 
+void paging_phys_ref_inc(uint32_t phys_addr)
+{
+    int idx = phys_idx_from_pa(phys_addr);
+    phys_ref_inc_idx(idx);
+}
+
 static int find_free_block(void)
 {
     for (int i = 0; i < MAX_BLOCKS; i++)

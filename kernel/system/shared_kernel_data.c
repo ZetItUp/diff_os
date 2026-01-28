@@ -116,6 +116,9 @@ int shared_kernel_data_map_to_process(uint32_t cr3_phys)
     // Map shared page as read-only to userspace
     pt[table_index] = shared_page_phys | PAGE_PRESENT | PAGE_USER;
 
+    // Bump refcount so process teardown does not free the shared page
+    paging_phys_ref_inc(shared_page_phys);
+
     paging_kunmap_phys(1);
     paging_kunmap_phys(0);
 

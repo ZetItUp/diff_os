@@ -1163,7 +1163,10 @@ const exl_t *load_exl(const FileTable *file_table_ref, const char *exl_name)
     exl_count++;
 
     // Load symbols for profiler
-    profiler_load_symbols(file_buffer, file_size, (uint32_t)image, normalized_name);
+    if (profiler_is_active())
+    {
+        profiler_load_symbols(file_buffer, file_size, (uint32_t)image, normalized_name);
+    }
 
     // Free file buffer
     ufree(file_buffer, file_size);

@@ -1145,8 +1145,11 @@ int dex_run(const FileTable *file_table_ref, const char *path, int argument_coun
     }
 
     // Load symbols for profiler
-    profiler_load_symbols(file_buffer, fe_file_size_bytes(file_entry),
-                          (uint32_t)loaded_executable.image_base, NULL);
+    if (profiler_is_active())
+    {
+        profiler_load_symbols(file_buffer, fe_file_size_bytes(file_entry),
+                              (uint32_t)loaded_executable.image_base, NULL);
+    }
 
     // Jump to user mode
     enter_user_mode((uint32_t)exit_stub, user_stack_pointer);
@@ -1438,8 +1441,11 @@ int dex_spawn_process(const FileTable *file_table_ref, const char *path,
     dex_assign_process_resources(process, &loaded_executable, file_entry, file_buffer, path);
 
     // Load symbols for profiler
-    profiler_load_symbols(file_buffer, fe_file_size_bytes(file_entry),
-                          (uint32_t)loaded_executable.image_base, NULL);
+    if (profiler_is_active())
+    {
+        profiler_load_symbols(file_buffer, fe_file_size_bytes(file_entry),
+                              (uint32_t)loaded_executable.image_base, NULL);
+    }
 
     kfree(file_buffer);
 

@@ -145,3 +145,6 @@ void paging_reserve_phys_range(uint32_t phys_start, uint32_t size);
 
 void* paging_kmap_phys(uint32_t phys, int slot);
 void  paging_kunmap_phys(int slot);
+
+// Increment physical page refcount to prevent premature free
+void paging_phys_ref_inc(uint32_t phys_addr);
