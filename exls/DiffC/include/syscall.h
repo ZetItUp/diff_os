@@ -103,6 +103,7 @@ enum
     SYSTEM_TTY_GET_DEVICE = 91,
     SYSTEM_TTY_ALLOCATE = 92,
     SYSTEM_PROCESS_GET_NAME = 93,
+    SYSTEM_PROCESS_LIST = 94,
 };
 
 static inline __attribute__((always_inline)) uint64_t do_sys64_0(int n)
@@ -381,6 +382,11 @@ static inline int system_process_spawn(const char *path, int argc, char **argv)
 static inline int system_process_get_name(int pid, char *buffer, size_t buffer_len)
 {
     return do_sys(SYSTEM_PROCESS_GET_NAME, pid, (int)(uintptr_t)buffer, (int)buffer_len, 0);
+}
+
+static inline int system_process_list(void *entries, int max_entries)
+{
+    return do_sys(SYSTEM_PROCESS_LIST, (int)(uintptr_t)entries, max_entries, 0, 0);
 }
 
 static inline int system_wait_pid(int pid, int *status)

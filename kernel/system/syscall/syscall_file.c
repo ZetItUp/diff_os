@@ -31,34 +31,24 @@
 #define SEEK_END 2
 #endif
 
-#define KERNEL_FILE_DESCRIPTOR_BASE 3
-#define KERNEL_FILE_DESCRIPTOR_MAX  32
 #define KERNEL_MAX_PATH            256
-#define FILE_READ_CHUNK_BYTES      (16u * 1024u)   // skydda kmalloc och usercopy
+#define FILE_READ_CHUNK_BYTES      (16u * 1024u)   // Limits kernel allocations and usercopy spans
 
-// Kernel-level FD entry that maps to filesystem_* fd.
-typedef struct
-{
-    uint8_t used;
-    int     fs_fd;
-    int     flags;
-} kfile_t;
-
-static kfile_t s_kfd[KERNEL_FILE_DESCRIPTOR_MAX];
-static int     s_kfd_inited = 0;
+#include "system/file.h"
 
 // Ensure filesystem is ready and our table is initialized.
 static int verify_fs_ready(void)
 {
-    if (!s_kfd_inited)
+    process_t *proc = process_current();
+    if (proc && !proc->kernel_file_descriptors_inited)
     {
         for (int i = 0; i < KERNEL_FILE_DESCRIPTOR_MAX; ++i)
         {
-            s_kfd[i].used  = 0;
-            s_kfd[i].fs_fd = -1;
-            s_kfd[i].flags = 0;
+            proc->kernel_file_descriptors[i].used = 0;
+            proc->kernel_file_descriptors[i].filesystem_fd = -1;
+            proc->kernel_file_descriptors[i].flags = 0;
         }
-        s_kfd_inited = 1;
+        proc->kernel_file_descriptors_inited = 1;
     }
 
     if (!file_table)
@@ -93,30 +83,30 @@ int system_file_open(const char *abs_path, int oflags, int mode)
         return -1;
 
     // Try to open the file
-    int fsfd = filesystem_open(norm);
+    int filesystem_fd = filesystem_open(norm);
 
     // If failed and path is relative, try resolving against exec_root as fallback
     // This handles programs that expect data files relative to their executable
-    if (fsfd < 0 && upath[0] != '/' && exec_root && exec_root[0])
+    if (filesystem_fd < 0 && upath[0] != '/' && exec_root && exec_root[0])
     {
         if (path_normalize(exec_root, upath, norm, sizeof(norm)) == 0)
         {
-            fsfd = filesystem_open(norm);
+            filesystem_fd = filesystem_open(norm);
         }
     }
 
     // If file doesn't exist and O_CREAT is set, create it
-    if (fsfd < 0 && (oflags & O_CREAT))
+    if (filesystem_fd < 0 && (oflags & O_CREAT))
     {
         // Create the file with initial size of 4KB
         if (filesystem_create(norm, 4096) == 0)
         {
             // Try to open again after creation
-            fsfd = filesystem_open(norm);
+            filesystem_fd = filesystem_open(norm);
         }
     }
 
-    if (fsfd < 0)
+    if (filesystem_fd < 0)
         return -1;
 
     // Handle O_TRUNC flag - truncate file to 0 bytes
@@ -127,25 +117,28 @@ int system_file_open(const char *abs_path, int oflags, int mode)
         // and optionally free sectors
     }
 
-    // Allokera en kernel-fd och lås den mot underliggande fs_fd
+    // Allocate a kernel file descriptor tied to the filesystem handle
     for (int i = 0; i < KERNEL_FILE_DESCRIPTOR_MAX; i++)
     {
-        if (!s_kfd[i].used)
+        if (!proc || !proc->kernel_file_descriptors[i].used)
         {
-            s_kfd[i].used  = 1;
-            s_kfd[i].fs_fd = fsfd;
-            s_kfd[i].flags = oflags;
+            if (proc)
+            {
+                proc->kernel_file_descriptors[i].used = 1;
+                proc->kernel_file_descriptors[i].filesystem_fd = filesystem_fd;
+                proc->kernel_file_descriptors[i].flags = oflags;
+            }
 
             // O_APPEND - seek to end of file
             if (oflags & O_APPEND)
-                (void)filesystem_lseek(fsfd, 0, SEEK_END);
+                (void)filesystem_lseek(filesystem_fd, 0, SEEK_END);
 
             return KERNEL_FILE_DESCRIPTOR_BASE + i;
         }
     }
 
-    // Slut på kfd-platser
-    filesystem_close(fsfd);
+    // No free kernel file descriptor slots
+    filesystem_close(filesystem_fd);
     return -1;
 }
 
@@ -153,19 +146,20 @@ int system_file_open(const char *abs_path, int oflags, int mode)
 int system_file_close(int file_descriptor)
 {
     if (file_descriptor < KERNEL_FILE_DESCRIPTOR_BASE)
-        return 0; // stäng inte stdio
+        return 0; // Do not close stdio
 
     int i = file_descriptor - KERNEL_FILE_DESCRIPTOR_BASE;
-    if (i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !s_kfd[i].used)
+    process_t *proc = process_current();
+    if (!proc || i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !proc->kernel_file_descriptors[i].used)
         return -1;
 
-    int fsfd = s_kfd[i].fs_fd;
+    int filesystem_fd = proc->kernel_file_descriptors[i].filesystem_fd;
 
-    s_kfd[i].used  = 0;
-    s_kfd[i].fs_fd = -1;
-    s_kfd[i].flags = 0;
+    proc->kernel_file_descriptors[i].used = 0;
+    proc->kernel_file_descriptors[i].filesystem_fd = -1;
+    proc->kernel_file_descriptors[i].flags = 0;
 
-    if (fsfd >= 0 && filesystem_close(fsfd) != 0)
+    if (filesystem_fd >= 0 && filesystem_close(filesystem_fd) != 0)
         return -1;
 
     return 0;
@@ -194,22 +188,22 @@ long system_file_read(int file, void *buf, unsigned long count)
         return (long)n;
     }
 
-    // stdout/stderr inte läsbara
+    // stdout/stderr are not readable
     if (file == 1 || file == 2)
         return -1;
 
     int i = file - KERNEL_FILE_DESCRIPTOR_BASE;
-    if (i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !s_kfd[i].used)
+    process_t *proc = process_current();
+    if (!proc || i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !proc->kernel_file_descriptors[i].used)
         return -1;
 
     if (count == 0)
         return 0;
 
-    // Läs i hanterliga chunkar för att undvika stora allokeringar och
-    // för att bättre hantera delvis mappade user-buffertar.
+    // Read in chunks to avoid large allocations and partial user buffers
     unsigned long total = 0;
 
-    // Allokera en engångs-bounce för kopiering till user
+    // Allocate a bounce buffer for user copies
     size_t bounce_sz = (count < FILE_READ_CHUNK_BYTES) ? (size_t)count : (size_t)FILE_READ_CHUNK_BYTES;
     if (bounce_sz == 0)
         bounce_sz = 1;
@@ -224,30 +218,30 @@ long system_file_read(int file, void *buf, unsigned long count)
         if (want > FILE_READ_CHUNK_BYTES)
             want = FILE_READ_CHUNK_BYTES;
 
-        int r = filesystem_read(s_kfd[i].fs_fd, kbuf, (uint32_t)want);
-        if (r <= 0)
+        int read_bytes = filesystem_read(proc->kernel_file_descriptors[i].filesystem_fd, kbuf, (uint32_t)want);
+        if (read_bytes <= 0)
         {
-            // EOF (0) eller fel (<0)
+            // EOF (0) or error (<0)
             if (total == 0)
             {
-                // inga bytes levererade – returnera felkoden eller 0
+                // No bytes delivered, return error code or 0
                 kfree(kbuf);
-                return (long)r;
+                return (long)read_bytes;
             }
-            break; // returnera det vi faktiskt hann leverera
+            break; // Return what we already delivered
         }
 
-        if (copy_to_user((uint8_t*)buf + total, kbuf, (size_t)r) != 0)
+        if (copy_to_user((uint8_t*)buf + total, kbuf, (size_t)read_bytes) != 0)
         {
-            // kunde inte kopiera allt till user – returnera det som faktiskt skrevs hittills
+            // User copy failed, return what we already delivered
             kfree(kbuf);
             return (long)total;
         }
 
-        total += (unsigned long)r;
+        total += (unsigned long)read_bytes;
 
-        // Om vi läste mindre än vi bad om → sannolikt EOF, bryt
-        if ((unsigned long)r < want)
+        // Short read means likely EOF
+        if ((unsigned long)read_bytes < want)
             break;
     }
 
@@ -260,21 +254,22 @@ long system_file_seek(int file, long offset, int whence)
 {
     if (file < KERNEL_FILE_DESCRIPTOR_BASE)
     {
-        // tillåt ftell på std-streams
+        // Allow ftell on std streams
         if (whence == SEEK_CUR && offset == 0)
             return 0;
         return -1;
     }
 
     int i = file - KERNEL_FILE_DESCRIPTOR_BASE;
-    if (i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !s_kfd[i].used)
+    process_t *proc = process_current();
+    if (!proc || i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !proc->kernel_file_descriptors[i].used)
         return -1;
 
-    int32_t np = filesystem_lseek(s_kfd[i].fs_fd, (int32_t)offset, whence);
-    if (np < 0)
+    int32_t new_position = filesystem_lseek(proc->kernel_file_descriptors[i].filesystem_fd, (int32_t)offset, whence);
+    if (new_position < 0)
         return -1;
 
-    return (long)np;
+    return (long)new_position;
 }
 
 // Write to file or stdout/stderr.
@@ -326,11 +321,12 @@ long system_file_write(int file, const void *buf, unsigned long count)
 
     // File write
     int i = file - KERNEL_FILE_DESCRIPTOR_BASE;
-    if (i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !s_kfd[i].used)
+    process_t *proc = process_current();
+    if (!proc || i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !proc->kernel_file_descriptors[i].used)
         return -1;
 
     // Check if file was opened with write permissions
-    int flags = s_kfd[i].flags;
+    int flags = proc->kernel_file_descriptors[i].flags;
     if ((flags & O_WRONLY) == 0 && (flags & O_RDWR) == 0)
         return -1; // File not opened for writing
 
@@ -363,22 +359,22 @@ long system_file_write(int file, const void *buf, unsigned long count)
         }
 
         // Write to filesystem
-        int r = filesystem_write(s_kfd[i].fs_fd, kbuf, (uint32_t)want);
-        if (r <= 0)
+        int written_bytes = filesystem_write(proc->kernel_file_descriptors[i].filesystem_fd, kbuf, (uint32_t)want);
+        if (written_bytes <= 0)
         {
             // Error or no space
             if (total == 0)
             {
                 kfree(kbuf);
-                return (long)r;
+                return (long)written_bytes;
             }
             break; // Return what we managed to write
         }
 
-        total += (unsigned long)r;
+        total += (unsigned long)written_bytes;
 
         // If we wrote less than we asked for, stop
-        if ((unsigned long)r < want)
+        if ((unsigned long)written_bytes < want)
             break;
     }
 
@@ -405,22 +401,22 @@ int system_file_stat(const char *abs_path, filesystem_stat_t *user_st)
     if (path_normalize(cwd, upath, norm, sizeof(norm)) != 0)
         return -1;
 
-    filesystem_stat_t st;
-    int result = filesystem_stat(norm, &st);
+    filesystem_stat_t stat;
+    int result = filesystem_stat(norm, &stat);
 
     // If failed and path is relative, try resolving against exec_root
     if (result != 0 && upath[0] != '/' && exec_root && exec_root[0])
     {
         if (path_normalize(exec_root, upath, norm, sizeof(norm)) == 0)
         {
-            result = filesystem_stat(norm, &st);
+            result = filesystem_stat(norm, &stat);
         }
     }
 
     if (result != 0)
         return -1;
 
-    if (copy_to_user(user_st, &st, sizeof(st)) != 0)
+    if (copy_to_user(user_st, &stat, sizeof(stat)) != 0)
         return -1;
 
     return 0;
@@ -431,22 +427,23 @@ int system_file_fstat(int file, filesystem_stat_t *user_st)
 {
     if (file < KERNEL_FILE_DESCRIPTOR_BASE)
     {
-        filesystem_stat_t st;
-        st.size = 0;
-        if (copy_to_user(user_st, &st, sizeof(st)) != 0)
+        filesystem_stat_t stat;
+        stat.size = 0;
+        if (copy_to_user(user_st, &stat, sizeof(stat)) != 0)
             return -1;
         return 0;
     }
 
     int i = file - KERNEL_FILE_DESCRIPTOR_BASE;
-    if (i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !s_kfd[i].used)
+    process_t *proc = process_current();
+    if (!proc || i < 0 || i >= KERNEL_FILE_DESCRIPTOR_MAX || !proc->kernel_file_descriptors[i].used)
         return -1;
 
-    filesystem_stat_t st;
-    if (filesystem_fstat(s_kfd[i].fs_fd, &st) != 0)
+    filesystem_stat_t stat;
+    if (filesystem_fstat(proc->kernel_file_descriptors[i].filesystem_fd, &stat) != 0)
         return -1;
 
-    if (copy_to_user(user_st, &st, sizeof(st)) != 0)
+    if (copy_to_user(user_st, &stat, sizeof(stat)) != 0)
         return -1;
 
     return 0;
@@ -530,4 +527,35 @@ int system_file_readlink(const char *abs_path, char *buf, size_t bufsize)
         return -1;
 
     return len;
+}
+
+void system_file_close_all_for_process(struct process *process)
+{
+    if (!process)
+    {
+        return;
+    }
+
+    if (!process->kernel_file_descriptors_inited)
+    {
+        return;
+    }
+
+    for (int i = 0; i < KERNEL_FILE_DESCRIPTOR_MAX; ++i)
+    {
+        if (!process->kernel_file_descriptors[i].used)
+        {
+            continue;
+        }
+
+        int filesystem_fd = process->kernel_file_descriptors[i].filesystem_fd;
+        process->kernel_file_descriptors[i].used = 0;
+        process->kernel_file_descriptors[i].filesystem_fd = -1;
+        process->kernel_file_descriptors[i].flags = 0;
+
+        if (filesystem_fd >= 0)
+        {
+            (void)filesystem_close(filesystem_fd);
+        }
+    }
 }

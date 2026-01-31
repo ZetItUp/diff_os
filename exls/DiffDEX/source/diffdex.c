@@ -6,7 +6,7 @@
 #include <dex/dex.h>
 #include <diffdex/diffdex.h>
 
-/* Resource blob layout produced by tools/rsbuild.py */
+// Resource blob layout produced by tools/rsbuild.py
 #define RS_MAGIC      0x53525845u /* 'DEXRS' truncated */
 #define RS_VERSION    1
 
@@ -122,11 +122,26 @@ static int parse_resource_blob(const uint8_t *blob, size_t sz, const rs_header_t
     const rs_header_t *hdr = (const rs_header_t *)blob;
     if (hdr->magic != RS_MAGIC || hdr->version != RS_VERSION)
         return -1;
-    /* basic bounds checks */
+    // basic bounds checks
     if (hdr->strtab_off >= sz || hdr->data_off >= sz)
         return -1;
     *out_hdr = hdr;
     return 0;
+}
+
+static char *strip_surrounding_quotes(char *text)
+{
+    if (!text)
+        return NULL;
+
+    size_t text_length = strlen(text);
+    if (text_length >= 2 && text[0] == '"' && text[text_length - 1] == '"')
+    {
+        text[text_length - 1] = '\0';
+        memmove(text, text + 1, text_length - 1);
+    }
+
+    return text;
 }
 
 static char *get_string_resource(const char *dex_path, const char *key)
@@ -149,6 +164,7 @@ static char *get_string_resource(const char *dex_path, const char *key)
             if (e && e->type == RS_TYPE_STRING && e->data_off + e->data_size <= rs_sz)
             {
                 result = dup_string(rs_buf + e->data_off, e->data_size);
+                strip_surrounding_quotes(result);
             }
         }
     }

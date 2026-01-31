@@ -12,6 +12,7 @@
 #include "system/scheduler.h"
 #include "system/path.h"
 #include "system/spinlock.h"
+#include "system/file.h"
 #include "debug.h"
 #include "dex/dex.h"
 #include "dex/exl.h"
@@ -102,6 +103,23 @@ static const rs_entry_t *process_find_resource_entry(const process_t *p, uint32_
     return NULL;
 }
 
+static void process_strip_surrounding_quotes(char *text)
+{
+    if (!text)
+    {
+        return;
+    }
+
+    size_t text_length = strlen(text);
+    if (text_length < 2 || text[0] != '"' || text[text_length - 1] != '"')
+    {
+        return;
+    }
+
+    text[text_length - 1] = '\0';
+    memmove(text, text + 1, text_length - 1);
+}
+
 static void process_copy_resource_entry(process_t *p, const rs_entry_t *entry)
 {
     if (!p || !entry)
@@ -124,6 +142,7 @@ static void process_copy_resource_entry(process_t *p, const rs_entry_t *entry)
     }
 
     p->name[copy_len] = '\0';
+    process_strip_surrounding_quotes(p->name);
 }
 
 static void process_set_default_name(process_t *p, const char *path)
@@ -324,6 +343,25 @@ static void process_inherit_cwd_from_parent(process_t *p, process_t *parent)
     }
 }
 
+static int process_open_file_descriptor_count(const process_t *process)
+{
+    if (!process || !process->kernel_file_descriptors_inited)
+    {
+        return 0;
+    }
+
+    int count = 0;
+    for (int index = 0; index < KERNEL_FILE_DESCRIPTOR_MAX; ++index)
+    {
+        if (process->kernel_file_descriptors[index].used)
+        {
+            count++;
+        }
+    }
+
+    return count;
+}
+
 void process_set_exec_root(process_t *p, const char *abs_dir)
 {
     if (!p)
@@ -379,6 +417,7 @@ static void process_cleanup_resources(process_t *p)
         return;
     }
 
+    system_file_close_all_for_process(p);
     tty_release_for_process(p);
 
     p->resources_cleaned = 1;
@@ -910,6 +949,56 @@ uint32_t process_cr3(const process_t *p)
     }
 
     return p->cr3;
+}
+
+int system_process_list(process_list_entry_t *user_entries, int max_entries)
+{
+    if (!user_entries || max_entries <= 0)
+    {
+        return -1;
+    }
+
+    size_t buffer_bytes = (size_t)max_entries * sizeof(process_list_entry_t);
+    process_list_entry_t *kernel_entries = (process_list_entry_t *)kmalloc(buffer_bytes);
+    if (!kernel_entries)
+    {
+        return -1;
+    }
+
+    int count = 0;
+    uint32_t flags;
+    proc_list_lock(&flags);
+
+    for (process_t *process = g_all_head; process; process = process->next)
+    {
+        if (process->state == PROCESS_DEAD)
+        {
+            continue;
+        }
+
+        if (count >= max_entries)
+        {
+            break;
+        }
+
+        kernel_entries[count].pid = process->pid;
+        kernel_entries[count].state = (int)process->state;
+        kernel_entries[count].open_file_descriptor_count = process_open_file_descriptor_count(process);
+        count++;
+    }
+
+    proc_list_unlock(flags);
+
+    if (copy_to_user(user_entries, kernel_entries, (size_t)count * sizeof(process_list_entry_t)) != 0)
+    {
+        kfree(kernel_entries);
+
+        return -1;
+    }
+
+    kfree(kernel_entries);
+
+    return count;
 }
 
 // Find process by pid

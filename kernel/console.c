@@ -272,7 +272,7 @@ static inline void render_raw(unsigned char attrib, char c)
 
 static inline void log_append(unsigned char attrib, char c)
 {
-    if (s_replaying)
+    if (s_console_disabled || s_replaying)
     {
         return;
     }
@@ -351,6 +351,11 @@ void console_use_vbe(int active)
 
 void putch(char c)
 {
+    if (s_console_disabled)
+    {
+        return;
+    }
+
     unsigned long eflags;
 
     asm volatile("pushf; pop %0" : "=r"(eflags));
@@ -380,6 +385,11 @@ void putch(char c)
 
 void putch_color(unsigned char attrib, char c)
 {
+    if (s_console_disabled)
+    {
+        return;
+    }
+
     if (s_vbe_console_active)
     {
         if (attrib != current_attrib)
@@ -540,6 +550,11 @@ void putch_color(unsigned char attrib, char c)
 
 void console_flush_log(void)
 {
+    if (s_console_disabled)
+    {
+        return;
+    }
+
     int saved_floor_enabled = floor_enabled;
     int saved_floor_x = floor_x;
     int saved_floor_y = floor_y;
@@ -571,6 +586,11 @@ void console_flush_log(void)
 
 int console_puts(const char* str)
 {
+    if (s_console_disabled)
+    {
+        return 0;
+    }
+
     if (!str)
     {
         return -1;
@@ -586,6 +606,11 @@ int console_puts(const char* str)
 
 void set_color(unsigned char attrib)
 {
+    if (s_console_disabled)
+    {
+        return;
+    }
+
     current_attrib = attrib;
 
     if (s_vbe_console_active)
@@ -596,6 +621,11 @@ void set_color(unsigned char attrib)
 
 void set_x(int x)
 {
+    if (s_console_disabled)
+    {
+        return;
+    }
+
     if (x >= 0 && x < SCREEN_WIDTH)
     {
         cursor_x = x;
@@ -606,6 +636,11 @@ void set_x(int x)
 
 void set_y(int y)
 {
+    if (s_console_disabled)
+    {
+        return;
+    }
+
     if (y >= 0 && y < SCREEN_HEIGHT)
     {
         cursor_y = y;
@@ -616,6 +651,11 @@ void set_y(int y)
 
 void set_pos(int x, int y)
 {
+    if (s_console_disabled)
+    {
+        return;
+    }
+
     set_x(x);
     set_y(y);
 }
@@ -662,6 +702,11 @@ unsigned short get_col(void)
 
 void clear(void)
 {
+    if (s_console_disabled)
+    {
+        return;
+    }
+
     if (s_vbe_console_active)
     {
         vbe_text_clear(0xFF000000);
@@ -685,6 +730,11 @@ void clear(void)
 
 void puthex(int value)
 {
+    if (s_console_disabled)
+    {
+        return;
+    }
+
     for (int i = 7; i >= 0; i--)
     {
         int nibble = (value >> (i * 4)) & 0xF;
@@ -696,6 +746,11 @@ void puthex(int value)
 
 void set_input_floor(int x, int y)
 {
+    if (s_console_disabled)
+    {
+        return;
+    }
+
     if (x < 0)
     {
         x = 0;

@@ -104,6 +104,7 @@ enum
     SYSTEM_TTY_GET_DEVICE = 91,
     SYSTEM_TTY_ALLOCATE = 92,
     SYSTEM_PROCESS_GET_NAME = 93,
+    SYSTEM_PROCESS_LIST = 94,
 };
 
 struct syscall_frame 

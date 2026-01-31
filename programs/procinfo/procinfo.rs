@@ -1,0 +1,5 @@
+APPLICATION_TITLE "Process Information"
+APPLICATION_VERSION_MAJOR 0
+APPLICATION_VERSION_MINOR 1
+APPLICATION_ICON $APP_ICON_NAME PATH /system/graphics/icons/default_application.tga
+WINDOW_TITLE "Process Information"

@@ -164,8 +164,12 @@ static size_t g_backbuffer_bytes = 0;
 static wm_window_t *g_prev_focus = NULL;
 static volatile int g_focus_dirty = 0;
 static uint64_t g_last_present_ms = 0;
-static uint64_t g_last_mode_check_ms = 0;
+static uint64_t g_last_present_ok_ms = 0;
 static int g_fullscreen_active = 0;
+static int g_video_lost = 0;
+static uint32_t g_init_width = 0;
+static uint32_t g_init_height = 0;
+static uint32_t g_init_bpp = 0;
 
 // Cursor theme and state
 static cursor_theme_t g_cursor_theme;
@@ -719,7 +723,25 @@ static void wm_request_present(void)
 
     // Use syscall with offset pointer and adjusted dimensions
     // The pitch stays the same (full row width), but we start from offset
-    system_video_present_region(src, (int)g_mode.pitch, min_x, min_y, w, h);
+    int present_result = system_video_present_region(src, (int)g_mode.pitch, min_x, min_y, w, h);
+
+    if (present_result < 0)
+    {
+        // Another process owns the framebuffer
+        g_video_lost = 1;
+    }
+    else
+    {
+        // Detect returning from fullscreen: if we haven't presented
+        // successfully in a while, another process likely had the
+        // framebuffer and we need a full desktop repaint
+        uint64_t now = monotonic_ms();
+        if (g_last_present_ok_ms > 0 && now - g_last_present_ok_ms > 200)
+        {
+            g_video_lost = 1;
+        }
+        g_last_present_ok_ms = now;
+    }
 
     g_dirty_count = 0;
     g_needs_redraw = 0;
@@ -2178,6 +2200,10 @@ int main(void)
         return -1;
     }
 
+    g_init_width = g_mode.width;
+    g_init_height = g_mode.height;
+    g_init_bpp = g_mode.bpp;
+
     g_backbuffer_stride = (uint32_t)(g_mode.pitch / 4);
     if (g_backbuffer_stride < g_mode.width) g_backbuffer_stride = g_mode.width;
     g_backbuffer_bytes = (size_t)g_backbuffer_stride * g_mode.height * sizeof(uint32_t);
@@ -2266,6 +2292,7 @@ int main(void)
     // Initial full-screen present
     system_video_present(g_backbuffer, (int)g_mode.pitch, (int)g_mode.width, (int)g_mode.height);
     g_last_present_ms = monotonic_ms();
+    g_last_present_ok_ms = g_last_present_ms;
 
     const char *client_path = "/programs/gdterm/gdterm.dex";
     int initial_pid = spawn_process(client_path, 0, NULL);
@@ -2289,29 +2316,57 @@ int main(void)
     for(;;)
     {
         uint64_t now_ms = monotonic_ms();
-        if (g_last_mode_check_ms == 0 || (now_ms - g_last_mode_check_ms) >= 200)
+        // Recover from fullscreen ownership loss
+        if (g_video_lost)
         {
-            video_mode_info_t mode_check;
-            if (system_video_mode_get(&mode_check) == 0)
+            // Restore the video mode if another process changed it
+            video_mode_info_t check_mode;
+            if (system_video_mode_get(&check_mode) == 0)
             {
-                int was_fullscreen = g_fullscreen_active;
-                g_fullscreen_active = (mode_check.bpp != 32);
-                if (was_fullscreen && !g_fullscreen_active)
+                if (check_mode.width != g_init_width ||
+                    check_mode.height != g_init_height ||
+                    check_mode.bpp != g_init_bpp)
                 {
-                    wm_add_dirty_rect(0, 0, (int)g_mode.width, (int)g_mode.height);
-                    g_needs_redraw = 1;
-                    wm_repaint_dirty_region();
-                    wm_draw_cursor();
-                    wm_request_present();
+                    system_video_mode_set((int)g_init_width,
+                                          (int)g_init_height,
+                                          (int)g_init_bpp);
                 }
             }
-            g_last_mode_check_ms = now_ms;
-        }
 
-        if (g_fullscreen_active)
-        {
-            thread_sleep_ms(50);
-            continue;
+            system_video_mode_get(&g_mode);
+
+            // Rebuild the entire backbuffer from scratch
+            wm_fill_bg_region(0, 0, (int)g_mode.width, (int)g_mode.height);
+            wm_draw_desktop_icons(0, 0, (int)g_mode.width, (int)g_mode.height);
+
+            for (wm_window_t *win = g_windows; win; win = win->next)
+            {
+                wm_schedule_full_redraw(win);
+            }
+
+            wm_add_dirty_rect(0, 0, (int)g_mode.width, (int)g_mode.height);
+            g_needs_redraw = 1;
+            wm_repaint_dirty_region();
+            wm_draw_cursor();
+
+            int present_result = system_video_present(g_backbuffer, (int)g_mode.pitch,
+                                                     (int)g_mode.width, (int)g_mode.height);
+
+            if (present_result == 0)
+            {
+                g_video_lost = 0;
+                g_last_present_ok_ms = monotonic_ms();
+                g_dirty_count = 0;
+                g_needs_redraw = 0;
+            }
+            else
+            {
+                g_dirty_count = 0;
+                g_needs_redraw = 0;
+                thread_sleep_ms(50);
+
+                continue;
+            }
         }
 
         // Block until message arrives or timeout (16ms = ~60Hz input polling)

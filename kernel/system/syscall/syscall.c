@@ -1234,6 +1234,11 @@ int system_call_dispatch(struct syscall_frame *f)
             ret = system_process_get_name(arg0, (char*)(uintptr_t)arg1, (size_t)arg2);
             break;
         }
+        case SYSTEM_PROCESS_LIST:
+        {
+            ret = system_process_list((process_list_entry_t *)(uintptr_t)arg0, arg1);
+            break;
+        }
         case SYSTEM_MOUSE_GET_POS:
         {
             // Returns packed x,y: x in high 16 bits, y in low 16 bits

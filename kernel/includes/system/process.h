@@ -7,6 +7,7 @@
 #include "system/signal.h"
 #include "system/signal.h"
 #include "dirent.h"
+#include "system/file.h"
 
 typedef enum process_state
 {
@@ -76,7 +77,17 @@ typedef struct process
 
     uint8_t tty_output_enabled;
     int tty_id;
+
+    uint8_t kernel_file_descriptors_inited;
+    kernel_file_desc_t kernel_file_descriptors[KERNEL_FILE_DESCRIPTOR_MAX];
 } process_t;
+
+typedef struct process_list_entry
+{
+    int pid;
+    int state;
+    int open_file_descriptor_count;
+} process_list_entry_t;
 
 typedef struct user_boot_args
 {
@@ -128,4 +139,5 @@ void process_set_kernel_stack(process_t *p, uintptr_t base, uintptr_t top, size_
 int system_thread_create_user(uintptr_t user_eip, uintptr_t user_esp, size_t kstack_bytes);
 int system_process_get_resources(int pid, void *user_buf, uint32_t buf_len);
 int system_process_get_name(int pid, char *user_buf, size_t buf_len);
+int system_process_list(process_list_entry_t *user_entries, int max_entries);
 void process_reap_orphan_zombies(void);

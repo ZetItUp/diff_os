@@ -25,6 +25,10 @@
     "tga_load_mem",
     "tga_free"
   ],
+  "diffdex.exl": [
+    "diffdex_get_window_title",
+    "diffdex_get_application_title"
+  ],
   "difffonts.exl": [
     "font_load_bdf",
     "font_destroy",
@@ -42,6 +46,8 @@
     "rt_set_path",
     "rt_append_path",
     "rt_prepend_path",
-    "rt_file_exists"
+    "rt_file_exists",
+    "rt_process_list",
+    "rt_process_get_name"
   ]
 }

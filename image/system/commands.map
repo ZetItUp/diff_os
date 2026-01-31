@@ -7,6 +7,7 @@ gdterm=/programs/gdterm/gdterm.dex
 launcher=/programs/launcher/launcher.dex
 devmgr=/programs/devmgr/devmgr.dex
 prof=/programs/profiler/profiler.dex
+procinfo=/programs/procinfo/procinfo.dex
 
 # Test Programs
 floattest=/programs/floattest/floattest.dex

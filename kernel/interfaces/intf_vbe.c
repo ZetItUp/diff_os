@@ -34,6 +34,7 @@
 
 vbe_exports_t g_vbe = {0};
 static int g_video_owner_pid = 0;
+static int g_video_prev_owner_pid = 0;
 
 static int vbe_ensure_owner(void)
 {
@@ -50,6 +51,12 @@ static int vbe_ensure_owner(void)
 static void vbe_take_owner(void)
 {
     int pid = process_pid(process_current());
+
+    if (g_video_owner_pid != 0 && g_video_owner_pid != pid)
+    {
+        g_video_prev_owner_pid = g_video_owner_pid;
+    }
+
     g_video_owner_pid = pid;
 }
 
@@ -408,7 +415,13 @@ void vbe_release_owner(int pid)
 {
     if (g_video_owner_pid == pid)
     {
-        g_video_owner_pid = 0;
+        g_video_owner_pid = g_video_prev_owner_pid;
+        g_video_prev_owner_pid = 0;
+    }
+
+    if (g_video_prev_owner_pid == pid)
+    {
+        g_video_prev_owner_pid = 0;
     }
 }
 
@@ -597,6 +610,7 @@ static int vbe_apply_mode(uint32_t w, uint32_t h, uint32_t bpp)
     uint32_t pitch_bytes = (uint32_t)vwid * bpp_bytes;
 
     vbe_register(g_vbe.phys_base, rx, ry, rbpp, pitch_bytes);
+    mouse_set_bounds((int)rx, (int)ry);
 
     return 0;
 }

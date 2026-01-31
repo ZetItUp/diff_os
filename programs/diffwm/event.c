@@ -16,7 +16,10 @@ static int g_screen_height = 0;
 
 void event_init(event_context_t *ctx)
 {
-    if (!ctx) return;
+    if (!ctx)
+    {
+        return;
+    }
 
     g_screen_width = ctx->screen_width;
     g_screen_height = ctx->screen_height;
@@ -44,26 +47,43 @@ void event_init(event_context_t *ctx)
 
 int event_button_index(uint8_t button)
 {
-    if (button == MOUSE_BTN_LEFT) return 0;
-    if (button == MOUSE_BTN_RIGHT) return 1;
-    if (button == MOUSE_BTN_MIDDLE) return 2;
+    if (button == MOUSE_BTN_LEFT)
+    {
+        return 0;
+    }
+
+    if (button == MOUSE_BTN_RIGHT)
+    {
+        return 1;
+    }
+
+    if (button == MOUSE_BTN_MIDDLE)
+    {
+        return 2;
+    }
+
     return -1;
 }
 
 wm_window_t *event_find_window_at(event_context_t *ctx, int x, int y)
 {
-    if (!ctx) return NULL;
+    if (!ctx)
+    {
+        return NULL;
+    }
 
-    // Iterate windows front-to-back (g_windows is ordered front first)
-    // First window that contains the point wins - no propagation to windows behind
+    // Try to find the first window that contains the point
     for (wm_window_t *win = ctx->windows; win; win = win->next)
     {
-        int wx, wy, ww, wh;
+        int wx = 0;
+        int wy = 0;
+        int ww = 0;
+        int wh = 0;
         wm_get_decor_bounds(win, &wx, &wy, &ww, &wh);
 
         if (x >= wx && x < wx + ww && y >= wy && y < wy + wh)
         {
-            return win;  // Found topmost window at this point
+            return win;
         }
     }
 
@@ -81,30 +101,46 @@ int event_point_in_titlebar(wm_window_t *win, int x, int y)
     int title_y = 0;
     int title_w = 0;
     int title_h = 0;
-    if (!titlebar_get_title_rect(win, g_screen_width, g_screen_height,
-                                 &title_x, &title_y, &title_w, &title_h))
+
+    if (!titlebar_get_title_rect(win, g_screen_width, g_screen_height, &title_x, &title_y, &title_w, &title_h))
     {
         return 0;
     }
 
-    return (x >= title_x && x < title_x + title_w &&
-            y >= title_y && y < title_y + title_h);
+    return (x >= title_x && x < title_x + title_w && y >= title_y && y < title_y + title_h);
 }
 
-void event_send_mouse(wm_window_t *window, int x, int y,
-                      uint8_t buttons, uint8_t action, uint8_t button)
+void event_send_mouse(wm_window_t *window, int x, int y, uint8_t buttons, uint8_t action, uint8_t button)
 {
-    if (!window) return;
+    if (!window)
+    {
+        return;
+    }
 
     // Convert to window-local coordinates
     int rel_x = x - window->x;
     int rel_y = y - window->y;
 
     // Clamp to int16_t range
-    if (rel_x < -32768) rel_x = -32768;
-    if (rel_x > 32767) rel_x = 32767;
-    if (rel_y < -32768) rel_y = -32768;
-    if (rel_y > 32767) rel_y = 32767;
+    if (rel_x < -32768)
+    {
+        rel_x = -32768;
+    }
+
+    if (rel_x > 32767)
+    {
+        rel_x = 32767;
+    }
+
+    if (rel_y < -32768)
+    {
+        rel_y = -32768;
+    }
+
+    if (rel_y > 32767)
+    {
+        rel_y = 32767;
+    }
 
     dwm_msg_t ev_msg = {0};
     ev_msg.type = DWM_MSG_EVENT;
@@ -121,7 +157,10 @@ void event_send_mouse(wm_window_t *window, int x, int y,
 
 void event_send_key(wm_window_t *window, uint8_t key, int pressed, uint8_t modifiers)
 {
-    if (!window) return;
+    if (!window)
+    {
+        return;
+    }
 
     dwm_msg_t ev_msg = {0};
     ev_msg.type = DWM_MSG_EVENT;
@@ -136,7 +175,10 @@ void event_send_key(wm_window_t *window, uint8_t key, int pressed, uint8_t modif
 
 void event_send_focus(wm_window_t *window, int gained)
 {
-    if (!window) return;
+    if (!window)
+    {
+        return;
+    }
 
     dwm_msg_t ev_msg = {0};
     ev_msg.type = DWM_MSG_EVENT;
@@ -150,7 +192,10 @@ void event_send_focus(wm_window_t *window, int gained)
 // Returns EVENT_CONSUMED if handled
 static int handle_button_press(event_context_t *ctx, wm_window_t *target, uint8_t button)
 {
-    if (!target) return EVENT_IGNORED;
+    if (!target)
+    {
+        return EVENT_IGNORED;
+    }
 
     mouse_state_t *m = ctx->mouse;
 
@@ -167,7 +212,10 @@ static void event_mark_window_dirty(wm_window_t *window)
         return;
     }
 
-    int dx, dy, dw, dh;
+    int dx = 0;
+    int dy = 0;
+    int dw = 0;
+    int dh = 0;
     wm_get_decor_bounds(window, &dx, &dy, &dw, &dh);
     wm_add_dirty_rect(dx, dy, dw, dh);
     wm_mark_needs_redraw();
@@ -205,7 +253,10 @@ static void event_set_titlebar_pressed_button(wm_window_t *window, int button)
 // Returns EVENT_CONSUMED if handled
 static int handle_button_release(event_context_t *ctx, wm_window_t *target, uint8_t button)
 {
-    if (!target) return EVENT_IGNORED;
+    if (!target)
+    {
+        return EVENT_IGNORED;
+    }
 
     mouse_state_t *m = ctx->mouse;
     click_state_t *c = ctx->clicks;
@@ -242,7 +293,10 @@ static int handle_button_release(event_context_t *ctx, wm_window_t *target, uint
 
 int event_process_mouse(event_context_t *ctx, int mouse_moved)
 {
-    if (!ctx || !ctx->mouse) return EVENT_IGNORED;
+    if (!ctx || !ctx->mouse)
+    {
+        return EVENT_IGNORED;
+    }
 
     mouse_state_t *m = ctx->mouse;
     int consumed = EVENT_IGNORED;
@@ -257,6 +311,7 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
     if (!mouse_moved && pressed == 0 && released == 0)
     {
         m->prev_buttons_down = m->buttons_down;
+
         return EVENT_IGNORED;
     }
 
@@ -289,15 +344,33 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
             int new_y = m->y - m->drag_offset_y;
 
             // Clamp to screen bounds
-            if (new_x < 0) new_x = 0;
-            if (new_y < 0) new_y = 0;
-            if (new_x >= g_screen_width) new_x = g_screen_width - 1;
-            if (new_y >= g_screen_height) new_y = g_screen_height - 1;
+            if (new_x < 0)
+            {
+                new_x = 0;
+            }
+
+            if (new_y < 0)
+            {
+                new_y = 0;
+            }
+
+            if (new_x >= g_screen_width)
+            {
+                new_x = g_screen_width - 1;
+            }
+
+            if (new_y >= g_screen_height)
+            {
+                new_y = g_screen_height - 1;
+            }
 
             if (new_x != m->drag_window->x || new_y != m->drag_window->y)
             {
                 // Clear old position
-                int old_x, old_y, old_w, old_h;
+                int old_x = 0;
+                int old_y = 0;
+                int old_w = 0;
+                int old_h = 0;
                 wm_get_decor_bounds(m->drag_window, &old_x, &old_y, &old_w, &old_h);
                 wm_clear_region(old_x, old_y, old_w, old_h);
 
@@ -306,7 +379,10 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
                 m->drag_window->y = new_y;
 
                 // Mark new position dirty
-                int new_dx, new_dy, new_dw, new_dh;
+                int new_dx = 0;
+                int new_dy = 0;
+                int new_dw = 0;
+                int new_dh = 0;
                 wm_get_decor_bounds(m->drag_window, &new_dx, &new_dy, &new_dw, &new_dh);
                 wm_add_dirty_rect(new_dx, new_dy, new_dw, new_dh);
                 wm_mark_needs_redraw();
@@ -367,19 +443,30 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
         {
             if (pressed_title_button == TITLEBAR_BUTTON_NONE &&
                 handle_button_press(ctx, target, MOUSE_BTN_LEFT) == EVENT_CONSUMED)
+            {
                 consumed = EVENT_CONSUMED;
+            }
+
             if (pressed_title_button != TITLEBAR_BUTTON_NONE)
+            {
                 consumed = EVENT_CONSUMED;
+            }
         }
+
         if (pressed & MOUSE_BTN_RIGHT)
         {
             if (handle_button_press(ctx, target, MOUSE_BTN_RIGHT) == EVENT_CONSUMED)
+            {
                 consumed = EVENT_CONSUMED;
+            }
         }
+
         if (pressed & MOUSE_BTN_MIDDLE)
         {
             if (handle_button_press(ctx, target, MOUSE_BTN_MIDDLE) == EVENT_CONSUMED)
+            {
                 consumed = EVENT_CONSUMED;
+            }
         }
     }
 
@@ -400,11 +487,24 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
                 {
                     if (pressed_button == TITLEBAR_BUTTON_CLOSE)
                     {
-                        if (m->capture == target) m->capture = NULL;
-                        if (m->drag_window == target) m->drag_window = NULL;
-                        if (m->hover_window == target) m->hover_window = NULL;
+                        if (m->capture == target)
+                        {
+                            m->capture = NULL;
+                        }
+
+                        if (m->drag_window == target)
+                        {
+                            m->drag_window = NULL;
+                        }
+
+                        if (m->hover_window == target)
+                        {
+                            m->hover_window = NULL;
+                        }
+
                         wm_request_close(target);
                         m->prev_buttons_down = m->buttons_down;
+
                         return EVENT_CONSUMED;
                     }
                 }
@@ -415,7 +515,10 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
             if (!handled_title_button)
             {
                 if (handle_button_release(ctx, target, MOUSE_BTN_LEFT) == EVENT_CONSUMED)
+                {
                     consumed = EVENT_CONSUMED;
+                }
+
                 if (!target)
                 {
                     click_state_t *c = ctx->clicks;
@@ -424,9 +527,9 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
                     {
                         uint64_t now = monotonic_ms();
                         int is_dbl = (now - c->last_click_ms[idx] <= DWM_DBLCLICK_MS &&
-                                      c->last_click_window_id[idx] == 0 &&
-                                      abs(m->x - c->last_click_x[idx]) <= DWM_DBLCLICK_DIST &&
-                                      abs(m->y - c->last_click_y[idx]) <= DWM_DBLCLICK_DIST);
+                            c->last_click_window_id[idx] == 0 &&
+                            abs(m->x - c->last_click_x[idx]) <= DWM_DBLCLICK_DIST &&
+                            abs(m->y - c->last_click_y[idx]) <= DWM_DBLCLICK_DIST);
 
                         c->last_click_ms[idx] = now;
                         c->last_click_x[idx] = m->x;
@@ -446,15 +549,21 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
                 }
             }
         }
+
         if (released & MOUSE_BTN_RIGHT)
         {
             if (handle_button_release(ctx, target, MOUSE_BTN_RIGHT) == EVENT_CONSUMED)
+            {
                 consumed = EVENT_CONSUMED;
+            }
         }
+
         if (released & MOUSE_BTN_MIDDLE)
         {
             if (handle_button_release(ctx, target, MOUSE_BTN_MIDDLE) == EVENT_CONSUMED)
+            {
                 consumed = EVENT_CONSUMED;
+            }
         }
 
         // Release capture and drag when all buttons are up
@@ -466,12 +575,16 @@ int event_process_mouse(event_context_t *ctx, int mouse_moved)
     }
 
     m->prev_buttons_down = m->buttons_down;
+
     return consumed;
 }
 
 int event_process_keyboard(event_context_t *ctx)
 {
-    if (!ctx) return EVENT_IGNORED;
+    if (!ctx)
+    {
+        return EVENT_IGNORED;
+    }
 
     int consumed = EVENT_IGNORED;
     system_key_event_t kev;
@@ -490,7 +603,6 @@ int event_process_keyboard(event_context_t *ctx)
             event_send_key(ctx->focused, kev.key, kev.pressed, kev.modifiers);
             consumed = EVENT_CONSUMED;
         }
-
     }
 
     return consumed;
